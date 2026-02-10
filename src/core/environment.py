@@ -43,6 +43,13 @@ class PlaywrightError(EnvironmentError):
         super().__init__(message)
 
 
+class DatabaseError(EnvironmentError):
+    """Raised when database connection or configuration fails."""
+    
+    def __init__(self, message: str = "Database check failed"):
+        super().__init__(message)
+
+
 class DirectoryError(EnvironmentError):
     """Raised when required directories cannot be created."""
     
@@ -247,6 +254,77 @@ def _ensure_directories() -> None:
     logger.info("✓ Directory structure verified")
 
 
+def _check_database() -> None:
+    """
+    Check database connectivity and configuration.
+    
+    Verifies:
+    1. sqlmodel and aiosqlite are importable
+    2. SQLite database file path is writable
+    3. Connection can be established and executing SELECT 1 works
+    
+    Raises:
+        DatabaseError: If database check fails
+    """
+    logger.info("Checking database connection...")
+    
+    # 1. Check imports
+    try:
+        import aiosqlite
+        from sqlmodel import create_engine, text, Session
+    except ImportError as e:
+        # Check if we are running in the virtual environment
+        is_venv = (hasattr(sys, 'real_prefix') or
+                  (hasattr(sys, 'base_prefix') and sys.base_prefix != sys.prefix))
+        
+        error_msg = f"Database dependencies missing: {e}"
+        if not is_venv:
+            error_msg += (
+                "\n\n⚠️  It seems you are not running in the virtual environment."
+                "\n   Please run with: uv run src/main.py check"
+            )
+        raise DatabaseError(error_msg)
+
+    # 2. Check path permissions
+    db_path = PROJECT_ROOT / "data" / "database" / "admission.db"
+    # Ensure parent dir exists (should be handled by _ensure_directories)
+    if not db_path.parent.exists():
+        try:
+            db_path.parent.mkdir(parents=True, exist_ok=True)
+        except Exception as e:
+            raise DatabaseError(f"Cannot create database directory: {e}")
+            
+    # 3. Connection Test
+    # Using sync engine for quick check, though app might use async
+    db_url = f"sqlite:///{db_path}"
+    try:
+        engine = create_engine(db_url)
+        with Session(engine) as session:
+            session.connection().execute(text("SELECT 1"))
+        logger.info("✓ Database connection established")
+    except Exception as e:
+        raise DatabaseError(f"Failed to connect to database: {e}")
+
+
+def _check_alembic() -> None:
+    """
+    Check Alembic migrations status if configured.
+    
+    Checks if migrations directory exists and attempts to report status.
+    """
+    migrations_dir = PROJECT_ROOT / "migrations"
+    
+    if migrations_dir.exists():
+        logger.info("Checking Alembic migrations...")
+        # We just verify the directory exists for now as a basic check.
+        # Running 'alembic current' might require more config setup which 
+        # could be fragile in a simple environment check.
+        # Future improvement: integrate actual alembic CLI check.
+        logger.info("✓ Migrations directory found")
+    else:
+        logger.debug("No migrations directory found (skipping check)")
+
+
 # ============================================================================
 # Public API
 # ============================================================================
@@ -271,6 +349,7 @@ def ensure_ready(verbose: bool = False) -> bool:
         UVError: If uv package manager is not available
         DependencyError: If dependencies are out of sync
         PlaywrightError: If Playwright is not properly set up
+        DatabaseError: If database connection fails
         DirectoryError: If directories cannot be created
         
     Example:
@@ -293,6 +372,8 @@ def ensure_ready(verbose: bool = False) -> bool:
         _check_uv_sync()
         _check_playwright()
         _ensure_directories()
+        _check_database()
+        _check_alembic()
         
         logger.info("=" * 60)
         logger.info("✅ All environment checks passed!")

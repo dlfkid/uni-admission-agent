@@ -7,13 +7,43 @@ Provides CLI interface for the uni-admission-agent project.
 
 import argparse
 import logging
+import os
 import sys
 from pathlib import Path
 
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from src.core.environment import ensure_ready, EnvironmentError, UVError, DependencyError, PlaywrightError
+
+def _ensure_venv():
+    """
+    Automatically switch to .venv interpreter if running with system python.
+    This ensures dependencies are found without requiring explicit 'uv run'.
+    """
+    # Check if we are running in a virtual environment
+    is_venv = (hasattr(sys, 'real_prefix') or
+              (hasattr(sys, 'base_prefix') and sys.base_prefix != sys.prefix))
+    
+    if is_venv:
+        return
+
+    # Check if .venv exists in project root
+    project_root = Path(__file__).resolve().parent.parent
+    venv_python = project_root / ".venv" / "bin" / "python"
+    
+    if venv_python.exists():
+        # Re-execute the script with the venv python interpreter
+        # We use os.execv to replace the current process
+        print(f"🔄 Auto-switching to virtual environment: {venv_python}")
+        try:
+            os.execv(str(venv_python), [str(venv_python)] + sys.argv)
+        except OSError as e:
+            print(f"⚠️ Failed to switch to virtual environment: {e}")
+
+# Try to switch to venv before importing project modules
+_ensure_venv()
+
+from src.core.environment import ensure_ready, EnvironmentError, UVError, DependencyError, PlaywrightError, DatabaseError
 
 
 logger = logging.getLogger(__name__)
@@ -39,6 +69,9 @@ def cmd_check(args: argparse.Namespace) -> int:
         logger.error(f"\n❌ {e}")
         return 1
     except PlaywrightError as e:
+        logger.error(f"\n❌ {e}")
+        return 1
+    except DatabaseError as e:
         logger.error(f"\n❌ {e}")
         return 1
     except EnvironmentError as e:
