@@ -13,7 +13,7 @@ from pathlib import Path
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from src.core.environment import ensure_ready, EnvironmentError, DependencyError, PlaywrightError
+from src.core.environment import ensure_ready, EnvironmentError, UVError, DependencyError, PlaywrightError
 
 
 logger = logging.getLogger(__name__)
@@ -32,12 +32,11 @@ def cmd_check(args: argparse.Namespace) -> int:
     try:
         ensure_ready(verbose=args.verbose)
         return 0
+    except UVError as e:
+        logger.error(f"\n❌ {e}")
+        return 1
     except DependencyError as e:
-        logger.error("\n❌ Missing Python packages:")
-        for pkg in e.missing_packages:
-            logger.error(f"  - {pkg}")
-        logger.info("\nInstall missing packages with:")
-        logger.info("  pip install -r requirement.txt")
+        logger.error(f"\n❌ {e}")
         return 1
     except PlaywrightError as e:
         logger.error(f"\n❌ {e}")

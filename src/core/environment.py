@@ -6,11 +6,11 @@ check dependencies, and ensure all required resources are available
 before starting the application.
 """
 
-import importlib.util
 import logging
+import shutil
 import subprocess
+import sys
 from pathlib import Path
-from typing import List
 
 
 # ============================================================================
@@ -22,15 +22,18 @@ class EnvironmentError(Exception):
     pass
 
 
-class DependencyError(EnvironmentError):
-    """Raised when required Python packages are missing."""
+class UVError(EnvironmentError):
+    """Raised when uv package manager is not available or errors occur."""
     
-    def __init__(self, missing_packages: List[str]):
-        self.missing_packages = missing_packages
-        package_list = '\n  - '.join(missing_packages)
-        super().__init__(
-            f"Missing {len(missing_packages)} required package(s):\n  - {package_list}"
-        )
+    def __init__(self, message: str = "UV package manager is not available"):
+        super().__init__(message)
+
+
+class DependencyError(EnvironmentError):
+    """Raised when dependencies are out of sync with uv.lock."""
+    
+    def __init__(self, message: str = "Dependencies are not synced"):
+        super().__init__(message)
 
 
 class PlaywrightError(EnvironmentError):
@@ -59,7 +62,6 @@ logger = logging.getLogger(__name__)
 
 # Project paths
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
-REQUIREMENTS_FILE = PROJECT_ROOT / "requirement.txt"
 DATA_DIRS = [
     PROJECT_ROOT / "data" / "raw_markdown",
     PROJECT_ROOT / "data" / "processed",
@@ -94,112 +96,133 @@ def setup_logging(verbose: bool = False) -> None:
 # Private Helper Functions
 # ============================================================================
 
-def _check_package_installed(package_name: str) -> bool:
+def _check_uv_command() -> None:
     """
-    Check if a Python package is installed.
-    
-    Args:
-        package_name: Name of the package to check
-        
-    Returns:
-        True if package is installed, False otherwise
-    """
-    # Map package names to their import names
-    import_name_map = {
-        'python-dotenv': 'dotenv',
-        'playwright-extra': 'playwright_extra'
-    }
-    
-    import_name = import_name_map.get(package_name, package_name)
-    spec = importlib.util.find_spec(import_name)
-    return spec is not None
-
-
-def _check_dependencies() -> None:
-    """
-    Check if all required dependencies are installed.
+    Check if uv package manager is installed and accessible.
     
     Raises:
-        DependencyError: If any required packages are missing
-        FileNotFoundError: If requirements.txt is not found
+        UVError: If uv is not installed or not accessible
     """
-    logger.info("Checking Python dependencies...")
-    
-    if not REQUIREMENTS_FILE.exists():
-        raise FileNotFoundError(f"Requirements file not found: {REQUIREMENTS_FILE}")
-    
-    missing_packages = []
-    
-    with open(REQUIREMENTS_FILE, 'r') as f:
-        for line in f:
-            line = line.strip()
-            # Skip empty lines and comments
-            if not line or line.startswith('#'):
-                continue
-            
-            # Extract package name (handle version specifiers)
-            package_name = line.split('==')[0].split('>=')[0].split('<=')[0].strip()
-            
-            if not _check_package_installed(package_name):
-                missing_packages.append(package_name)
-                logger.warning(f"Missing package: {package_name}")
-            else:
-                logger.debug(f"Package installed: {package_name}")
-    
-    if missing_packages:
-        logger.error(f"Found {len(missing_packages)} missing package(s)")
-        raise DependencyError(missing_packages)
-    
-    logger.info("✓ All Python dependencies are installed")
-
-
-def _check_playwright() -> None:
-    """
-    Check if Playwright browser binaries are installed.
-    
-    Raises:
-        PlaywrightError: If Playwright browsers are not properly installed
-    """
-    logger.info("Checking Playwright browser binaries...")
+    logger.info("Checking uv package manager...")
     
     try:
-        # Check if playwright CLI is accessible
         result = subprocess.run(
-            ['playwright', '--version'],
+            ['uv', '--version'],
             capture_output=True,
             text=True,
             timeout=5
         )
         
         if result.returncode == 0:
-            logger.debug(f"Playwright version: {result.stdout.strip()}")
+            logger.debug(f"UV version: {result.stdout.strip()}")
+            logger.info("✓ UV package manager is available")
         else:
-            raise PlaywrightError("Playwright CLI not accessible")
-        
-        # Check if browsers are installed
-        result = subprocess.run(
-            ['playwright', 'install', '--dry-run'],
-            capture_output=True,
-            text=True,
-            timeout=10
-        )
-        
-        # If dry-run shows installations needed, browsers might not be installed
-        if "chromium" in result.stdout.lower() or "firefox" in result.stdout.lower():
-            raise PlaywrightError(
-                "Playwright browsers not fully installed. "
-                "Run: playwright install"
+            raise UVError(
+                "UV command failed. "
+                "Install with: pip install uv"
             )
-        
-        logger.info("✓ Playwright browsers are installed")
-        
     except FileNotFoundError:
-        raise PlaywrightError(
-            "Playwright CLI not found. "
-            "Install with: pip install playwright && playwright install"
+        raise UVError(
+            "UV package manager not found. "
+            "Install with: pip install uv"
         )
     except subprocess.TimeoutExpired:
-        raise PlaywrightError("Playwright check timed out")
+        raise UVError("UV command check timed out")
+
+
+def _check_uv_sync() -> None:
+    """
+    Check if the environment is synced with uv.lock.
+    
+    Uses 'uv sync --check' to verify dependencies are up to date.
+    
+    Raises:
+        DependencyError: If dependencies are out of sync with uv.lock
+    """
+    logger.info("Checking dependency sync status...")
+    
+    try:
+        result = subprocess.run(
+            ['uv', 'sync', '--check'],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            cwd=PROJECT_ROOT
+        )
+        
+        if result.returncode == 0:
+            logger.info("✓ Dependencies are synced with uv.lock")
+        else:
+            # uv sync --check failed, environment is out of sync
+            logger.error("Dependencies are not synced with uv.lock")
+            logger.debug(f"UV sync check output: {result.stderr}")
+            raise DependencyError(
+                "Dependencies are out of sync. "
+                "Run: uv sync"
+            )
+    except subprocess.TimeoutExpired:
+        raise DependencyError("Dependency sync check timed out")
+    except FileNotFoundError:
+        # This shouldn't happen if _check_uv_command passed, but just in case
+        raise UVError("UV command not found")
+
+
+def _check_playwright() -> None:
+    """
+    Check if Playwright is installed via verifying browser installation.
+    
+    Tries these methods in order:
+    1. python -m playwright (Preferred, uses installed package)
+    2. playwright binary
+    3. playwright-cli binary
+    
+    Raises:
+        PlaywrightError: If Playwright usage fails
+    """
+    logger.info("Checking Playwright installation...")
+    
+    # 1. Try Python module execution (Recommended for Python projects)
+    try:
+        result = subprocess.run(
+            [sys.executable, '-m', 'playwright', '--version'],
+            capture_output=True,
+            text=True,
+            timeout=5
+        )
+        if result.returncode == 0:
+            logger.debug(f"Playwright (via python module): {result.stdout.strip()}")
+            logger.info("✓ Playwright python module found")
+            return
+    except Exception as e:
+        logger.debug(f"Failed to check python module: {e}")
+
+    # 2. Try identifying binary in PATH
+    commands = ['playwright', 'playwright-cli']
+    
+    for cmd in commands:
+        if shutil.which(cmd):
+            try:
+                result = subprocess.run(
+                    [cmd, '--version'],
+                    capture_output=True,
+                    text=True,
+                    timeout=5
+                )
+                if result.returncode == 0:
+                    logger.debug(f"Playwright binary ({cmd}): {result.stdout.strip()}")
+                    logger.info(f"✓ Playwright binary found: {cmd}")
+                    return
+            except Exception as e:
+                logger.debug(f"Failed to check binary {cmd}: {e}")
+
+    # If all failed
+    raise PlaywrightError(
+        "Playwright not found via python module or CLI.\n"
+        "Ensure it is installed in your python environment:\n"
+        "  uv pip install playwright && uv run playwright install\n"
+        "Or via npm for CLI:\n"
+        "  npm install -g @playwright/cli"
+    )
 
 
 def _ensure_directories() -> None:
@@ -233,7 +256,8 @@ def ensure_ready(verbose: bool = False) -> bool:
     Ensure the environment is ready to run the application.
     
     This function performs comprehensive environment validation:
-    - Checks all Python dependencies are installed
+    - Checks uv package manager is installed
+    - Verifies dependencies are synced with uv.lock
     - Verifies Playwright browsers are available
     - Creates required directory structure
     
@@ -244,7 +268,8 @@ def ensure_ready(verbose: bool = False) -> bool:
         True if all checks pass
         
     Raises:
-        DependencyError: If required Python packages are missing
+        UVError: If uv package manager is not available
+        DependencyError: If dependencies are out of sync
         PlaywrightError: If Playwright is not properly set up
         DirectoryError: If directories cannot be created
         
@@ -264,7 +289,8 @@ def ensure_ready(verbose: bool = False) -> bool:
     
     try:
         # Run all validation checks
-        _check_dependencies()
+        _check_uv_command()
+        _check_uv_sync()
         _check_playwright()
         _ensure_directories()
         
