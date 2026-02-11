@@ -89,3 +89,7 @@ Pydantic 驱动:
 * 所有的异步函数必须明确标注 await。
 
 * Self-Correction: 如果代码在静态检查中报错（如 Pyright 报红），AI 必须在输出前自行修正，不应将带红线的代码交付给用户。
+
+11. README.md更新
+* 所有涉及对main.py的输入命令进行改动的操作，都要同步更新最新使用方法到README.md。
+示例: 增加新的命令，如import, export。增加新的参数，如--name，--file, --year。

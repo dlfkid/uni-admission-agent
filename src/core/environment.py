@@ -64,6 +64,13 @@ class AIServiceError(EnvironmentError):
         super().__init__(message)
 
 
+class ScraperError(Exception):
+    """Raised when scraping operations fail (network, parsing, etc.)."""
+
+    def __init__(self, message: str = "Scraping operation failed"):
+        super().__init__(message)
+
+
 class DirectoryError(EnvironmentError):
     """Raised when required directories cannot be created."""
     
