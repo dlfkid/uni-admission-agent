@@ -30,6 +30,9 @@ dependencies = [
     "psycopg2-binary>=2.9.11",
     "pandas>=3.0.0",
     "openpyxl>=3.1.5",
+    "sqlalchemy-utils>=0.42.1",
+    "python-dateutil>=2.9.0.post0",
+    "google-genai>=1.62.0",
 ]
 
 [project.optional-dependencies]

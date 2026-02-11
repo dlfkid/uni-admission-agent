@@ -18,6 +18,24 @@ This project automates the collection of admission criteria from world-renowned 
 2. `python -m venv venv && source venv/bin/activate`
 3. `pip install -e .`
 4. Copy `.env.example` to `.env` and add your API keys.
+4. Copy `.env.example` to `.env` and add your API keys.
+
+## 📖 Usage
+Run the main CLI to interact with the engine:
+
+```bash
+# General environment check
+uv run src/main.py check
+
+# Import Excel data (Strict Regex only by default)
+uv run src/main.py import example/hku-26-27.xlsx
+
+# Import Excel data with LLM Fallback (Analyzes complex fields)
+uv run src/main.py import example/hku-26-27.xlsx --llm
+
+# Check database status
+uv run src/main.py status
+```
 
 ## 🤖 Agentic Principles
 - **Stealth First:** Never trigger bot detection; emulate human behavior.

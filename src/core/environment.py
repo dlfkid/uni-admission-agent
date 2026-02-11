@@ -57,6 +57,13 @@ class DataProcessingError(EnvironmentError):
         super().__init__(message)
 
 
+class AIServiceError(EnvironmentError):
+    """Raised when AI service libraries (e.g., Google GenAI) are missing."""
+    
+    def __init__(self, message: str = "AI service check failed"):
+        super().__init__(message)
+
+
 class DirectoryError(EnvironmentError):
     """Raised when required directories cannot be created."""
     
@@ -278,6 +285,7 @@ def _check_database() -> None:
     # 1. Check imports
     try:
         import aiosqlite
+        import sqlalchemy_utils
         from sqlmodel import create_engine, text, Session
     except ImportError as e:
         # Check if we are running in the virtual environment
@@ -321,6 +329,7 @@ def _check_alembic() -> None:
     """
     migrations_dir = PROJECT_ROOT / "migrations"
     
+    
     if migrations_dir.exists():
         logger.info("Checking Alembic migrations...")
         # We just verify the directory exists for now as a basic check.
@@ -339,11 +348,13 @@ def _check_data_processing() -> None:
     Verifies:
     1. pandas is importable
     2. openpyxl is importable
+    3. dateutil is importable
     """
     logger.info("Checking data processing libraries...")
     try:
         import pandas
         import openpyxl
+        import dateutil
         logger.info("✓ Data processing libraries found")
     except ImportError as e:
         # Check if we are running in the virtual environment
@@ -357,6 +368,30 @@ def _check_data_processing() -> None:
                 "\n   Please run with: uv run src/main.py check"
             )
         raise DataProcessingError(error_msg)
+
+
+def _check_ai_services() -> None:
+    """
+    Check availability of AI service libraries.
+    
+    Verifies:
+    1. google-genai (google.genai) is importable
+    """
+    logger.info("Checking AI service libraries...")
+    try:
+        from google import genai
+        logger.info("✓ AI service libraries found")
+    except ImportError as e:
+        is_venv = (hasattr(sys, 'real_prefix') or
+                  (hasattr(sys, 'base_prefix') and sys.base_prefix != sys.prefix))
+        
+        error_msg = f"AI service dependencies missing: {e}"
+        if not is_venv:
+            error_msg += (
+                "\n\n⚠️  It seems you are not running in the virtual environment."
+                "\n   Please run with: uv run src/main.py check"
+            )
+        raise AIServiceError(error_msg)
 
 
 # ============================================================================
@@ -411,6 +446,7 @@ def ensure_ready(verbose: bool = False) -> bool:
         _check_database()
         _check_alembic()
         _check_data_processing()
+        _check_ai_services()
         
         logger.info("=" * 60)
         logger.info("✅ All environment checks passed!")

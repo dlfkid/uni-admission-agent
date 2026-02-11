@@ -44,6 +44,10 @@ def _ensure_venv():
 _ensure_venv()
 
 from src.core.environment import ensure_ready, EnvironmentError, UVError, DependencyError, PlaywrightError, DatabaseError, DataProcessingError
+from src.storage.db_manager import DatabaseManager
+from src.storage.importer import ExcelImporter
+from src.models.admission import University, Program
+from sqlmodel import select, func
 
 
 logger = logging.getLogger(__name__)
@@ -62,23 +66,52 @@ def cmd_check(args: argparse.Namespace) -> int:
     try:
         ensure_ready(verbose=args.verbose)
         return 0
-    except UVError as e:
-        logger.error(f"\n❌ {e}")
-        return 1
-    except DependencyError as e:
-        logger.error(f"\n❌ {e}")
-        return 1
-    except PlaywrightError as e:
-        logger.error(f"\n❌ {e}")
-        return 1
-    except DatabaseError as e:
-        logger.error(f"\n❌ {e}")
-        return 1
-    except DataProcessingError as e:
+    except (UVError, DependencyError, PlaywrightError, DatabaseError, DataProcessingError) as e:
         logger.error(f"\n❌ {e}")
         return 1
     except EnvironmentError as e:
         logger.error(f"\n❌ Environment error: {e}")
+        return 1
+
+
+def cmd_import(args: argparse.Namespace) -> int:
+    """
+    Handle the 'import' command - import data from Excel.
+    """
+    logger.info(f"Starting import from: {args.file} (LLM: {'Enabled' if args.llm else 'Disabled'})")
+    try:
+        importer = ExcelImporter(args.file, use_llm=args.llm)
+        importer.run(univ_name=args.univ)
+        return 0
+    except Exception as e:
+        logger.exception(f"Import failed: {e}")
+        return 1
+
+
+def cmd_status(args: argparse.Namespace) -> int:
+    """
+    Handle the 'status' command - show database statistics.
+    """
+    try:
+        db = DatabaseManager()
+        with db.get_session() as session:
+            # Count queries
+            print("\nDatabase Status:")
+            univ_count = session.exec(select(func.count()).select_from(University)).one()
+            prog_count = session.exec(select(func.count()).select_from(Program)).one()
+            print(f"  Universities: {univ_count}")
+            print(f"  Programs:     {prog_count}")
+            
+            # Detailed breakdown
+            univs = session.exec(select(University)).all()
+            if univs:
+                print("\nBreakdown by University:")
+                for u in univs:
+                    p_count = session.exec(select(func.count()).select_from(Program).where(Program.university_id == u.id)).one()
+                    print(f"  - {u.name}: {p_count} programs")
+        return 0
+    except Exception as e:
+        logger.error(f"Failed to get status: {e}")
         return 1
 
 
@@ -108,15 +141,11 @@ def cmd_run(args: argparse.Namespace) -> int:
     
     # TODO: Implement actual crawling logic
     logger.info("Crawling functionality will be implemented here.")
-    logger.info("\nPlanned workflow:")
-    logger.info("  1. Load target university URLs")
-    logger.info("  2. Initialize Playwright with stealth mode")
-    logger.info("  3. Scrape admission data")
-    logger.info("  4. Extract structured information using LLM")
-    logger.info("  5. Store data in SQLite database")
     
     return 0
 
+
+from src.core.token_tracker import tracker
 
 def main() -> int:
     """
@@ -125,6 +154,18 @@ def main() -> int:
     Returns:
         Exit code
     """
+    # Initialize basic logging
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    )
+
+    # Initialize Database (Auto-heal)
+    try:
+        pass 
+    except Exception:
+        pass
+
     parser = argparse.ArgumentParser(
         description="UniAdmission Agent - Automated university admission data scraper",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -132,7 +173,8 @@ def main() -> int:
 Examples:
   %(prog)s check              Run environment checks only
   %(prog)s run                Start the crawling task
-  %(prog)s run --verbose      Start crawling with verbose output
+  %(prog)s import data.xlsx   Import data from Excel file
+  %(prog)s status             Show database statistics
         """
     )
     
@@ -150,25 +192,42 @@ Examples:
     )
     
     # Check command
-    parser_check = subparsers.add_parser(
-        'check',
-        help='Run environment and dependency checks'
-    )
+    parser_check = subparsers.add_parser('check', help='Run environment and dependency checks')
     parser_check.set_defaults(func=cmd_check)
     
     # Run command
-    parser_run = subparsers.add_parser(
-        'run',
-        help='Start the crawling task'
-    )
+    parser_run = subparsers.add_parser('run', help='Start the crawling task')
     parser_run.set_defaults(func=cmd_run)
+    
+    # Import command
+    parser_import = subparsers.add_parser('import', help='Import university data from Excel')
+    parser_import.add_argument('file', help='Path to XLSX file')
+    parser_import.add_argument('--univ', default='HKU', help='University name (default: HKU)')
+    parser_import.add_argument('--llm', action='store_true', help='Enable LLM analysis for missing data')
+    parser_import.set_defaults(func=cmd_import)
+    
+    # Status command
+    parser_status = subparsers.add_parser('status', help='Show database status')
+    parser_status.set_defaults(func=cmd_status)
     
     # Parse arguments
     args = parser.parse_args()
     
+    # Global Init logic (Requirement: Ensure DB init)
+    if args.command in ['import', 'status', 'run']:
+        try:
+             DatabaseManager().init_db()
+        except Exception as e:
+             if args.verbose:
+                 logger.warning(f"Database auto-init warning: {e}")
+    
     # Execute the selected command
     try:
-        return args.func(args)
+        result = args.func(args)
+        # Log token usage summary if any
+        if args.command in ['import', 'run']:
+             tracker.log_summary()
+        return result
     except KeyboardInterrupt:
         logger.info("\n\nOperation cancelled by user")
         return 130
