@@ -75,3 +75,17 @@ Pydantic 驱动:
 9. APIKey成本控制 (LLM API Key Token control)
 * 调用LLM的逻辑必须接入token_tracker.py, 执行LLM逻辑必须监控并输出token的消耗
 * 除非prompt明确说明，否则在调用LLM逻辑之前，必须先分析是否可以通过非LLM代码逻辑输出结果，只有对模糊内容进行分析输出的时候才能够调用LLM进行语义分析。
+
+10.Rule: Static Analysis & Type Integrity
+
+* Zero Redlines: 所有生成的代码必须通过 pyright 的 Basic 或 Strict 模式检查。禁止出现类型推断导致的 Any 或未处理的 Optional（即 Python 中的 NPE 风险）。
+
+* Linter Compliance: 代码必须符合 ruff 的默认规则集。所有未使用的导入（Unused Imports）必须自动清理。
+
+* Validation before Output:
+
+* 所有的 SQLModel 必须带有明确的类型注解（Type Hints）。
+
+* 所有的异步函数必须明确标注 await。
+
+* Self-Correction: 如果代码在静态检查中报错（如 Pyright 报红），AI 必须在输出前自行修正，不应将带红线的代码交付给用户。

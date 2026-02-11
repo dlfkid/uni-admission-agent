@@ -26,10 +26,10 @@ class ParsedStudyOption(BaseModel):
 
 class ParsedDeadline(BaseModel):
     round: RoundType = Field(..., description="Round type: Early, Main, Extended. Infer if not explicit.")
-    cutoff_date: Optional[datetime] = Field(None, description="ISO 8601 date string. If missing, return null.")
+    cutoff_date: Optional[datetime] = Field(default=None, description="ISO 8601 date string. If missing, return null.")
 
 class ParsedProgramData(BaseModel):
-    tuition: Optional[ParsedTuition] = Field(None, description="Tuition fee structure")
+    tuition: Optional[ParsedTuition] = Field(default=None, description="Tuition fee structure")
     study_options: List[ParsedStudyOption] = Field(default_factory=list, description="List of study options")
     deadlines: List[ParsedDeadline] = Field(default_factory=list, description="List of application deadlines")
 
