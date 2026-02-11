@@ -50,6 +50,13 @@ class DatabaseError(EnvironmentError):
         super().__init__(message)
 
 
+class DataProcessingError(EnvironmentError):
+    """Raised when data processing libraries are missing or misconfigured."""
+    
+    def __init__(self, message: str = "Data processing check failed"):
+        super().__init__(message)
+
+
 class DirectoryError(EnvironmentError):
     """Raised when required directories cannot be created."""
     
@@ -325,6 +332,33 @@ def _check_alembic() -> None:
         logger.debug("No migrations directory found (skipping check)")
 
 
+def _check_data_processing() -> None:
+    """
+    Check availability of data processing libraries.
+    
+    Verifies:
+    1. pandas is importable
+    2. openpyxl is importable
+    """
+    logger.info("Checking data processing libraries...")
+    try:
+        import pandas
+        import openpyxl
+        logger.info("✓ Data processing libraries found")
+    except ImportError as e:
+        # Check if we are running in the virtual environment
+        is_venv = (hasattr(sys, 'real_prefix') or
+                  (hasattr(sys, 'base_prefix') and sys.base_prefix != sys.prefix))
+        
+        error_msg = f"Data processing dependencies missing: {e}"
+        if not is_venv:
+            error_msg += (
+                "\n\n⚠️  It seems you are not running in the virtual environment."
+                "\n   Please run with: uv run src/main.py check"
+            )
+        raise DataProcessingError(error_msg)
+
+
 # ============================================================================
 # Public API
 # ============================================================================
@@ -349,7 +383,9 @@ def ensure_ready(verbose: bool = False) -> bool:
         UVError: If uv package manager is not available
         DependencyError: If dependencies are out of sync
         PlaywrightError: If Playwright is not properly set up
+        PlaywrightError: If Playwright is not properly set up
         DatabaseError: If database connection fails
+        DataProcessingError: If data libraries are missing
         DirectoryError: If directories cannot be created
         
     Example:
@@ -374,6 +410,7 @@ def ensure_ready(verbose: bool = False) -> bool:
         _ensure_directories()
         _check_database()
         _check_alembic()
+        _check_data_processing()
         
         logger.info("=" * 60)
         logger.info("✅ All environment checks passed!")

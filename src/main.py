@@ -43,7 +43,7 @@ def _ensure_venv():
 # Try to switch to venv before importing project modules
 _ensure_venv()
 
-from src.core.environment import ensure_ready, EnvironmentError, UVError, DependencyError, PlaywrightError, DatabaseError
+from src.core.environment import ensure_ready, EnvironmentError, UVError, DependencyError, PlaywrightError, DatabaseError, DataProcessingError
 
 
 logger = logging.getLogger(__name__)
@@ -72,6 +72,9 @@ def cmd_check(args: argparse.Namespace) -> int:
         logger.error(f"\n❌ {e}")
         return 1
     except DatabaseError as e:
+        logger.error(f"\n❌ {e}")
+        return 1
+    except DataProcessingError as e:
         logger.error(f"\n❌ {e}")
         return 1
     except EnvironmentError as e:
