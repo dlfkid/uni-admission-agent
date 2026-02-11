@@ -3,7 +3,7 @@ from datetime import datetime
 from decimal import Decimal
 from enum import Enum
 from sqlmodel import SQLModel, Field, Relationship, Column
-from sqlalchemy import Numeric
+from sqlalchemy import Numeric, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB
 
 # --- Enums ---
@@ -34,13 +34,18 @@ class RoundType(str, Enum):
 class University(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     name: str = Field(index=True, unique=True)
+    slug: str = Field(index=True, unique=True)
     
     # Relationships
     programs: List["Program"] = Relationship(back_populates="university")
 
 
 class Program(SQLModel, table=True):
+    __table_args__ = (
+        UniqueConstraint("university_id", "academic_year", "name_en", name="uq_program_univ_year_name"),
+    )
     id: Optional[int] = Field(default=None, primary_key=True)
+    academic_year: int = Field(index=True)
     name_zh: str = Field(index=True)
     name_en: str = Field(index=True)
     

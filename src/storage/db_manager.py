@@ -1,6 +1,6 @@
 import os
 import logging
-from typing import Optional
+from typing import Optional, Tuple
 from sqlmodel import create_engine, Session, select, SQLModel
 from sqlalchemy_utils import database_exists, create_database
 from src.models.admission import University, Program
@@ -50,28 +50,37 @@ class DatabaseManager:
             self.init_db()
         return Session(self.engine)
 
-    def upsert_program(self, program_data: dict, univ_name: str) -> Program:
+    def upsert_program(self, program_data: dict, univ_slug: str) -> Tuple[Program, bool]:
         """
         Upsert a program record.
-        Logic: Update if (university_id + name_en) exists, else insert.
+        Logic: Update if (university_id + academic_year + name_en) exists, else insert.
+        Requires 'academic_year' in program_data.
+        Returns: (Program, created: bool)
         """
         with self.get_session() as session:
-            # 1. Ensure University exists
-            univ = session.exec(select(University).where(University.name == univ_name)).first()
+            # 1. Ensure University exists (Lookup by Slug)
+            univ = session.exec(select(University).where(University.slug == univ_slug)).first()
             if not univ:
-                univ = University(name=univ_name)
+                # Fallback: create with name=slug if not exists
+                # In strict mode we might want to fail, but "not exist create" is requested.
+                # using slug as name initially.
+                univ = University(name=univ_slug, slug=univ_slug)
                 session.add(univ)
                 session.commit()
                 session.refresh(univ)
             
-            # 2. Check strict unique constraint: univ_id + name_en
-            # Use name_en as the unique identifier within a university
+            # 2. Check Composite Unique Constraint: univ_id + academic_year + name_en
             name_en = program_data.get("name_en")
+            academic_year = program_data.get("academic_year")
+            
             if not name_en:
                 raise ValueError("Program data must contain 'name_en'")
+            if not academic_year:
+                raise ValueError("Program data must contain 'academic_year'")
 
             statement = select(Program).where(
                 Program.university_id == univ.id,
+                Program.academic_year == academic_year,
                 Program.name_en == name_en
             )
             existing_program = session.exec(statement).first()
@@ -85,8 +94,8 @@ class DatabaseManager:
                 session.add(existing_program)
                 session.commit()
                 session.refresh(existing_program)
-                logger.debug(f"Updated program: {name_en}")
-                return existing_program
+                logger.debug(f"Updated program: {name_en} ({academic_year})")
+                return existing_program, False
             else:
                 # Insert new
                 new_program = Program(**program_data)
@@ -94,5 +103,5 @@ class DatabaseManager:
                 session.add(new_program)
                 session.commit()
                 session.refresh(new_program)
-                logger.debug(f"Inserted program: {name_en}")
-                return new_program
+                logger.debug(f"Inserted program: {name_en} ({academic_year})")
+                return new_program, True

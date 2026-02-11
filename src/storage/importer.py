@@ -1,7 +1,7 @@
 import asyncio
 import logging
 from pathlib import Path
-from typing import Optional, Dict, List, Any
+from typing import Optional, Dict, List, Any, Tuple
 import pandas as pd
 from src.storage.db_manager import DatabaseManager
 from src.core.parser import DataCleaner
@@ -38,33 +38,47 @@ class ExcelImporter:
         self.use_llm = use_llm
         self.llm_agent = LLMCleanerAgent() if use_llm else None
 
-    def run(self, univ_name: str = "HKU") -> None:
+    def import_data(self, univ_slug: str, year: int) -> None:
         """
-        Main entry point to process the Excel file.
+        Main entry point to process the Excel file for a specific university and year.
         """
         if not self.file_path.exists():
             logger.error(f"File not found: {self.file_path}")
             return
 
         xls = pd.ExcelFile(self.file_path)
-        logger.info(f"Found {len(xls.sheet_names)} sheets in {self.file_path.name}")
-
+        logger.info(f"Fround {len(xls.sheet_names)} sheets in {self.file_path.name}")
+        
+        # Track stats
+        total_sheets = len(xls.sheet_names)
+        total_inserted = 0
+        total_updated = 0
+        
         for sheet_name in xls.sheet_names:
             logger.info(f"Processing sheet: {sheet_name}")
             try:
-                self._process_sheet(xls, sheet_name, univ_name)
+                inserted, updated = self._process_sheet(xls, sheet_name, univ_slug, year)
+                total_inserted += inserted
+                total_updated += updated
             except Exception as e:
                 logger.error(f"Error processing sheet '{sheet_name}': {e}")
-            
+        
+        # Final Summary
+        logger.info("\n" + "="*40)
+        logger.info(f"Import Complete: {univ_slug.upper()} {year}")
+        logger.info(f"Sheets Processed: {total_sheets}")
+        logger.info(f"New Records:      {total_inserted}")
+        logger.info(f"Updated Records:  {total_updated}")
+        logger.info("="*40)
 
-
-    def _process_sheet(self, xls: pd.ExcelFile, sheet_name: str, univ_name: str) -> None:
+    def _process_sheet(self, xls: pd.ExcelFile, sheet_name: str, univ_slug: str, year: int) -> Tuple[int, int]:
         """
         Synchronous wrapper for async processing.
+        Returns (inserted_count, updated_count)
         """
-        asyncio.run(self._process_sheet_async(xls, sheet_name, univ_name))
+        return asyncio.run(self._process_sheet_async(xls, sheet_name, univ_slug, year))
 
-    async def _process_sheet_async(self, xls: pd.ExcelFile, sheet_name: str, univ_name: str) -> None:
+    async def _process_sheet_async(self, xls: pd.ExcelFile, sheet_name: str, univ_slug: str, year: int) -> Tuple[int, int]:
         # 1. Read roughly to find header
         try:
             # Read first 20 rows to scan for header
@@ -73,7 +87,7 @@ class ExcelImporter:
             
             if header_idx is None:
                 logger.warning(f"Skipping sheet '{sheet_name}': No recognized header found.")
-                return
+                return 0, 0
 
             logger.info(f"Header found at index {header_idx}")
 
@@ -88,6 +102,9 @@ class ExcelImporter:
                 program_data = self._parse_row(row)
                 if not program_data:
                     continue
+                
+                # Inject academic year
+                program_data["academic_year"] = year
                 
                 # Check if LLM is needed
                 needs_llm = self._check_needs_llm(program_data)
@@ -106,18 +123,26 @@ class ExcelImporter:
                 await self._batch_process_llm(rows_needing_llm)
                 
             # 5. Upsert All
+            inserted_count = 0
+            updated_count = 0
             valid_count = 0
             for program_data in all_programs:
                 try:
-                    self.db_manager.upsert_program(program_data, univ_name)
+                    _, created = self.db_manager.upsert_program(program_data, univ_slug)
+                    if created:
+                        inserted_count += 1
+                    else:
+                        updated_count += 1
                     valid_count += 1
                 except Exception as e:
                     logger.error(f"DB Error upserting {program_data.get('name_en')}: {e}")
             
-            logger.info(f"Imported {valid_count} programs from '{sheet_name}'")
+            logger.info(f"Imported {valid_count} programs from '{sheet_name}' (New: {inserted_count}, Updated: {updated_count})")
+            return inserted_count, updated_count
 
         except Exception as e:
             logger.error(f"Error processing sheet '{sheet_name}': {e}")
+            return 0, 0
 
     def _check_needs_llm(self, data: Dict[str, Any]) -> bool:
         """Check if row needs LLM cleaning."""

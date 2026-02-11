@@ -11,8 +11,28 @@ import os
 import sys
 from pathlib import Path
 
+import re
+
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+
+def validate_slug(value: str) -> str:
+    """Validate university slug (lowercase, numbers, hyphens only)."""
+    if not re.match(r'^[a-z0-9-]+$', value):
+        raise argparse.ArgumentTypeError(f"Invalid name '{value}'. Must contain only lowercase letters, numbers, and hyphens.")
+    return value
+
+
+def validate_year(value: str) -> int:
+    """Validate academic year (positive integer)."""
+    try:
+        year = int(value)
+        if year <= 0:
+            raise ValueError
+        return year
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"Invalid year '{value}'. Must be a positive integer.")
 
 
 def _ensure_venv():
@@ -46,8 +66,9 @@ _ensure_venv()
 from src.core.environment import ensure_ready, EnvironmentError, UVError, DependencyError, PlaywrightError, DatabaseError, DataProcessingError
 from src.storage.db_manager import DatabaseManager
 from src.storage.importer import ExcelImporter
+from src.storage.exporter import ExcelExporter
 from src.models.admission import University, Program
-from sqlmodel import select, func
+from sqlmodel import select, func, col, desc
 
 
 logger = logging.getLogger(__name__)
@@ -81,10 +102,24 @@ def cmd_import(args: argparse.Namespace) -> int:
     logger.info(f"Starting import from: {args.file} (LLM: {'Enabled' if args.llm else 'Disabled'})")
     try:
         importer = ExcelImporter(args.file, use_llm=args.llm)
-        importer.run(univ_name=args.univ)
+        importer.import_data(univ_slug=args.name, year=args.year)
         return 0
     except Exception as e:
         logger.exception(f"Import failed: {e}")
+        return 1
+
+
+def cmd_export(args: argparse.Namespace) -> int:
+    """
+    Handle the 'export' command - export data to Excel.
+    """
+    logger.info(f"Exporting data for {args.name} (Year: {args.year or 'All'}) to {args.output}")
+    try:
+        exporter = ExcelExporter(args.output)
+        exporter.export_data(univ_slug=args.name, year=args.year)
+        return 0
+    except Exception as e:
+        logger.exception(f"Export failed: {e}")
         return 1
 
 
@@ -107,8 +142,17 @@ def cmd_status(args: argparse.Namespace) -> int:
             if univs:
                 print("\nBreakdown by University:")
                 for u in univs:
-                    p_count = session.exec(select(func.count()).select_from(Program).where(Program.university_id == u.id)).one()
-                    print(f"  - {u.name}: {p_count} programs")
+                    print(f"  - {u.name} ({u.slug}):")
+                    # Group by year
+                    # Use col() to help type checkers understand Program.academic_year is a Column
+                    stmt = select(Program.academic_year, func.count()).where(Program.university_id == u.id).group_by(col(Program.academic_year)).order_by(desc(col(Program.academic_year)))
+                    stats = session.exec(stmt).all()
+                    
+                    if not stats:
+                        print("      (No programs)")
+                    
+                    for year, count in stats:
+                        print(f"      {year}: {count} programs")
         return 0
     except Exception as e:
         logger.error(f"Failed to get status: {e}")
@@ -166,16 +210,18 @@ def main() -> int:
     except Exception:
         pass
 
-    parser = argparse.ArgumentParser(
-        description="UniAdmission Agent - Automated university admission data scraper",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
+    epilog_text = """
 Examples:
   %(prog)s check              Run environment checks only
   %(prog)s run                Start the crawling task
   %(prog)s import data.xlsx   Import data from Excel file
   %(prog)s status             Show database statistics
-        """
+    """
+
+    parser = argparse.ArgumentParser(
+        description="UniAdmission Agent - Automated university admission data scraper",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=epilog_text
     )
     
     parser.add_argument(
@@ -201,10 +247,18 @@ Examples:
     
     # Import command
     parser_import = subparsers.add_parser('import', help='Import university data from Excel')
-    parser_import.add_argument('file', help='Path to XLSX file')
-    parser_import.add_argument('--univ', default='HKU', help='University name (default: HKU)')
+    parser_import.add_argument('--name', required=True, type=validate_slug, help='University Slug (a-z0-9-)')
+    parser_import.add_argument('--year', required=True, type=validate_year, help='Academic Year (e.g., 2026)')
+    parser_import.add_argument('--file', required=True, help='Path to XLSX file')
     parser_import.add_argument('--llm', action='store_true', help='Enable LLM analysis for missing data')
     parser_import.set_defaults(func=cmd_import)
+
+    # Export command
+    parser_export = subparsers.add_parser('export', help='Export university data to Excel')
+    parser_export.add_argument('--name', required=True, type=validate_slug, help='University Slug (a-z0-9-)')
+    parser_export.add_argument('--year', type=validate_year, help='Academic Year (Optional, default all)')
+    parser_export.add_argument('--output', required=True, help='Output XLSX file path')
+    parser_export.set_defaults(func=cmd_export)
     
     # Status command
     parser_status = subparsers.add_parser('status', help='Show database status')
@@ -214,7 +268,7 @@ Examples:
     args = parser.parse_args()
     
     # Global Init logic (Requirement: Ensure DB init)
-    if args.command in ['import', 'status', 'run']:
+    if args.command in ['import', 'status', 'run', 'export']:
         try:
              DatabaseManager().init_db()
         except Exception as e:
