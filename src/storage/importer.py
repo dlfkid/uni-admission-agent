@@ -5,7 +5,8 @@ from typing import Optional, Dict, List, Any, Tuple
 import pandas as pd
 from src.storage.db_manager import DatabaseManager
 from src.core.parser import DataCleaner
-from src.agents.cleaner_agent import LLMCleanerAgent
+from src.agents.cleaner_agent import LLMCleanerAgent, ParsedProgramData
+from src.utils.pdf_processor import PDFProcessor
 
 logger = logging.getLogger(__name__)
 
@@ -40,14 +41,22 @@ class ExcelImporter:
 
     def import_data(self, univ_slug: str, year: int) -> None:
         """
-        Main entry point to process the Excel file for a specific university and year.
+        Main entry point to process a file for a specific university and year.
+        Supports both Excel (.xlsx/.xls) and PDF (.pdf) files.
         """
         if not self.file_path.exists():
             logger.error(f"File not found: {self.file_path}")
             return
 
+        # Route based on file type
+        suffix = self.file_path.suffix.lower()
+        if suffix == ".pdf":
+            self._import_pdf(univ_slug, year)
+            return
+
+        # Default: Excel import
         xls = pd.ExcelFile(self.file_path)
-        logger.info(f"Fround {len(xls.sheet_names)} sheets in {self.file_path.name}")
+        logger.info(f"Found {len(xls.sheet_names)} sheets in {self.file_path.name}")
         
         # Track stats
         total_sheets = len(xls.sheet_names)
@@ -70,6 +79,65 @@ class ExcelImporter:
         logger.info(f"New Records:      {total_inserted}")
         logger.info(f"Updated Records:  {total_updated}")
         logger.info("="*40)
+
+    def _import_pdf(self, univ_slug: str, year: int) -> None:
+        """
+        Import admission data from a PDF file.
+        Converts PDF → Markdown → LLMCleanerAgent → DB.
+        """
+        if not self.llm_agent:
+            logger.error("PDF import requires --llm flag. Aborting.")
+            return
+
+        processor = PDFProcessor()
+        try:
+            result = processor.convert_to_markdown(self.file_path)
+        except Exception as e:
+            logger.error(f"PDF conversion failed: {e}")
+            return
+
+        logger.info(
+            f"PDF converted: {result.page_count} pages, "
+            f"{result.char_count:,} chars"
+        )
+
+        # Pass Markdown content to LLM for structured extraction
+        raw_row: Dict[str, str] = {
+            "source_file": str(self.file_path),
+            "raw_content": result.markdown[:8000],  # Limit tokens
+        }
+
+        try:
+            parsed: Optional[ParsedProgramData] = self.llm_agent.clean_row(raw_row)
+            if parsed is None:
+                logger.warning("No structured data extracted from PDF")
+                return
+
+            program_data: Dict[str, Any] = {"academic_year": year}
+
+            if parsed.tuition:
+                program_data["tuition_amount"] = parsed.tuition.amount
+                program_data["currency"] = parsed.tuition.currency
+            if parsed.study_options:
+                program_data["study_options"] = [
+                    opt.model_dump(mode="json") for opt in parsed.study_options
+                ]
+            if parsed.deadlines:
+                program_data["deadlines"] = [
+                    d.model_dump(mode="json") for d in parsed.deadlines
+                ]
+
+            program_data["extra_metadata"] = {
+                "source_file": str(self.file_path),
+                "pdf_pages": result.page_count,
+            }
+
+            _, created = self.db_manager.upsert_program(program_data, univ_slug)
+            action = "Inserted" if created else "Updated"
+            logger.info(f"{action} program from PDF: {self.file_path.name}")
+
+        except Exception as e:
+            logger.error(f"Failed to parse PDF content: {e}")
 
     def _process_sheet(self, xls: pd.ExcelFile, sheet_name: str, univ_slug: str, year: int) -> Tuple[int, int]:
         """

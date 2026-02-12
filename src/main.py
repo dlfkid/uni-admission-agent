@@ -131,7 +131,8 @@ def cmd_crawl(args: argparse.Namespace) -> int:
     """
     logger.info(
         f"Starting crawl: {args.url} "
-        f"(University: {args.name}, Year: {args.year})"
+        f"(University: {args.name}, Year: {args.year}, "
+        f"Continue Depth: {args.continue_depth})"
     )
     try:
         scraper = AdmissionScraper()
@@ -140,6 +141,7 @@ def cmd_crawl(args: argparse.Namespace) -> int:
                 url=args.url,
                 univ_slug=args.name,
                 year=args.year,
+                continue_depth=args.continue_depth,
             )
         )
         logger.info(f"Crawl complete: {imported} programs imported")
@@ -292,6 +294,10 @@ Examples:
     parser_crawl.add_argument('--name', required=True, type=validate_slug, help='University Slug (a-z0-9-)')
     parser_crawl.add_argument('--year', required=True, type=validate_year, help='Academic Year (e.g., 2026)')
     parser_crawl.add_argument('--url', required=True, help='Starting URL to crawl')
+    parser_crawl.add_argument(
+        '--continue', dest='continue_depth', type=int, default=0,
+        help='Extra depth levels for LLM-driven scouting (default: 0)',
+    )
     parser_crawl.set_defaults(func=cmd_crawl)
 
     # Status command

@@ -71,6 +71,20 @@ class ScraperError(Exception):
         super().__init__(message)
 
 
+class LLMProviderError(Exception):
+    """Raised when all LLM providers fail (rate limit, unavailable, etc.)."""
+
+    def __init__(self, message: str = "All LLM providers failed"):
+        super().__init__(message)
+
+
+class PDFProcessingError(Exception):
+    """Raised when PDF conversion or processing fails."""
+
+    def __init__(self, message: str = "PDF processing failed"):
+        super().__init__(message)
+
+
 class DirectoryError(EnvironmentError):
     """Raised when required directories cannot be created."""
     

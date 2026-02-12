@@ -53,11 +53,13 @@ uv run src/main.py export --name hku --output hku_export.xlsx --year 2026
 
 # Crawl a URL and import admission data
 # Arguments:
-#   --name: University slug (lowercase, numbers, hyphens only)
-#   --year: Academic year (e.g., 2026)
-#   --url:  Starting URL to crawl
-# Example:
+#   --name:      University slug (lowercase, numbers, hyphens only)
+#   --year:      Academic year (e.g., 2026)
+#   --url:       Starting URL to crawl
+#   --continue:  Extra depth for LLM-driven scouting (default: 0)
+# Examples:
 uv run src/main.py crawl --name hku --year 2026 --url https://admissions.hku.hk/programmes
+uv run src/main.py crawl --name hku --year 2026 --url https://admissions.hku.hk/programmes --continue 2
 
 # Check database status
 uv run src/main.py status

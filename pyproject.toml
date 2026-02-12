@@ -33,6 +33,8 @@ dependencies = [
     "sqlalchemy-utils>=0.42.1",
     "python-dateutil>=2.9.0.post0",
     "google-genai>=1.62.0",
+    "openai>=2.18.0",
+    "pymupdf4llm>=0.2.9",
 ]
 
 [project.optional-dependencies]

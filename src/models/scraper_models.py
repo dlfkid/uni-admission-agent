@@ -24,3 +24,33 @@ class ExtractedLinks(BaseModel):
         default_factory=list,
         description="List of URLs that are likely admission program detail pages",
     )
+
+
+class ScoutedLink(BaseModel):
+    """A single link evaluated by the Heuristic Scout LLM."""
+
+    url: str = Field(..., description="URL identified as potentially valuable")
+    reason: str = Field(..., description="Why this link is considered high-value")
+    confidence: str = Field(
+        ...,
+        description="Confidence level: high, medium, or low",
+    )
+
+
+class ScoutedLinks(BaseModel):
+    """Structured LLM output for heuristic scout evaluation."""
+
+    links: List[ScoutedLink] = Field(
+        default_factory=list,
+        description="Top-3 high-potential links identified by heuristic analysis",
+    )
+
+
+class ScoutReport(BaseModel):
+    """Terminal report summarizing crawl results for human review."""
+
+    explored_urls: List[str] = Field(default_factory=list)
+    failed_urls: List[str] = Field(default_factory=list)
+    scouted_links: List[ScoutedLink] = Field(default_factory=list)
+    depth_reached: int = Field(default=0)
+    programs_imported: int = Field(default=0)

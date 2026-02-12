@@ -2,29 +2,38 @@
 Smart Scraping Engine for university admission pages.
 
 Uses crawl4ai with stealth browsing to fetch pages, converts to Markdown,
-and integrates with LLMCleanerAgent for structured data extraction.
+and integrates with RouterAgent/LLMCleanerAgent for structured data extraction.
+Supports dynamic crawl depth with LLM-driven heuristic scouting.
 """
 
 import asyncio
 import logging
-import os
 import random
 from pathlib import Path
-from typing import Any, Dict, List, Optional, cast
+from typing import Dict, List, Optional, Set, cast
 from urllib.parse import urljoin
 
 from crawl4ai import AsyncWebCrawler, BrowserConfig, CrawlerRunConfig, CacheMode, CrawlResult
-from google import genai
-from google.genai import types
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 from src.agents.cleaner_agent import LLMCleanerAgent, ParsedProgramData
+from src.agents.factory import RouterAgent, create_router
 from src.core.environment import ScraperError
-from src.core.token_tracker import tracker
-from src.models.scraper_models import CrawlPageResult, ExtractedLinks
+from src.models.scraper_models import (
+    CrawlPageResult,
+    ExtractedLinks,
+    ScoutedLink,
+    ScoutedLinks,
+    ScoutReport,
+)
 from src.storage.db_manager import DatabaseManager
+from src.utils.pdf_processor import PDFProcessor, PDFProcessingError
 
 logger = logging.getLogger(__name__)
+
+# --- Constants ---
+
+MAX_SCOUT_CALLS = 5  # Hard cap on LLM scout calls per crawl session
 
 # --- Prompt Loading ---
 
@@ -47,34 +56,19 @@ class AdmissionScraper:
     Intelligent scraper for university admission pages.
 
     Uses crawl4ai + playwright stealth to fetch pages and convert to Markdown.
-    Integrates with Gemini Flash for link extraction and LLMCleanerAgent
-    for structured data parsing.
+    Integrates with RouterAgent for link extraction and LLMCleanerAgent
+    for structured data parsing. Supports dynamic crawl depth with
+    LLM-driven heuristic scouting via --continue.
     """
 
     def __init__(
         self,
-        api_key: Optional[str] = None,
-        model_id: Optional[str] = None,
+        router: Optional[RouterAgent] = None,
     ) -> None:
-        self.api_key = (
-            api_key
-            or os.environ.get("GOOGLE_API_KEY")
-            or os.environ.get("GEMINI_API_KEY")
-        )
-        if not self.api_key:
-            logger.warning(
-                "GOOGLE_API_KEY/GEMINI_API_KEY not found. "
-                "Link extraction will be disabled."
-            )
-            self.genai_client: Optional[genai.Client] = None
+        if router is not None:
+            self.router = router
         else:
-            self.genai_client = genai.Client(api_key=self.api_key)
-
-        self.model_id = (
-            model_id
-            or os.environ.get("GEMINI_MODEL_NAME")
-            or "gemini-2.0-flash-exp"
-        )
+            self.router = create_router()
 
         # Browser configuration: stealth + headless
         self.browser_config = BrowserConfig(
@@ -91,6 +85,12 @@ class AdmissionScraper:
             page_timeout=60000,
             verbose=False,
         )
+
+        # Session state for depth-aware crawling
+        self._visited_urls: Set[str] = set()
+        self._scout_call_count: int = 0
+        self._all_scouted_links: List[ScoutedLink] = []
+        self._failed_urls: List[str] = []
 
     # ------------------------------------------------------------------
     # Public API
@@ -116,7 +116,7 @@ class AdmissionScraper:
         Raises:
             ScraperError: If the page cannot be fetched after retries.
         """
-        logger.info(f"Crawling: {url}")
+        logger.info("Crawling: %s", url)
 
         # Human-like delay before request
         delay = random.uniform(0.5, 2.0)
@@ -135,7 +135,7 @@ class AdmissionScraper:
 
             if not result.success:
                 error_msg = result.error_message or "Unknown crawl error"
-                logger.error(f"Crawl failed for {url}: {error_msg}")
+                logger.error("Crawl failed for %s: %s", url, error_msg)
                 raise ScraperError(f"Failed to crawl {url}: {error_msg}")
 
             # Extract Markdown (strips scripts/CSS automatically)
@@ -156,8 +156,8 @@ class AdmissionScraper:
 
             char_count = len(raw_markdown)
             logger.info(
-                f"Crawled {url}: {char_count:,} chars, "
-                f"{len(page_links)} links found"
+                "Crawled %s: %s chars, %d links found",
+                url, f"{char_count:,}", len(page_links),
             )
 
             return CrawlPageResult(
@@ -168,15 +168,9 @@ class AdmissionScraper:
                 status_code=result.status_code,
             )
 
-    @retry(
-        stop=stop_after_attempt(3),
-        wait=wait_exponential(multiplier=2, min=4, max=60),
-    )
-    async def extract_links(
-        self, markdown: str, base_url: str
-    ) -> List[str]:
+    def extract_links(self, markdown: str, base_url: str) -> List[str]:
         """
-        Use Gemini Flash to extract program detail page URLs from Markdown.
+        Use LLM to extract program detail page URLs from Markdown.
 
         Args:
             markdown: Markdown content of the page.
@@ -185,40 +179,21 @@ class AdmissionScraper:
         Returns:
             List of absolute URLs for program detail pages.
         """
-        if not self.genai_client:
-            logger.warning("GenAI client unavailable. Skipping link extraction.")
-            return []
-
         # Load and format prompt
         prompt_template = _load_prompt("extract_links.txt")
         prompt = prompt_template.format(base_url=base_url, markdown=markdown)
 
-        # Track input characters fed to LLM
         logger.info(
-            f"Extracting links via LLM: {len(markdown):,} chars of Markdown"
+            "Extracting links via LLM: %s chars of Markdown",
+            f"{len(markdown):,}",
         )
 
         try:
-            response = self.genai_client.models.generate_content(
-                model=self.model_id,
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    response_mime_type="application/json",
-                    response_schema=ExtractedLinks,
-                ),
-            )
+            response = self.router.generate(prompt, ExtractedLinks)
 
             if not response.text:
-                logger.warning("Empty response from GenAI for link extraction")
+                logger.warning("Empty response from LLM for link extraction")
                 return []
-
-            # Track token usage
-            if response.usage_metadata:
-                tracker.track_usage(
-                    input_tokens=response.usage_metadata.prompt_token_count or 0,
-                    output_tokens=response.usage_metadata.candidates_token_count or 0,
-                    model=self.model_id,
-                )
 
             # Parse structured output
             extracted = ExtractedLinks.model_validate_json(response.text)
@@ -231,132 +206,417 @@ class AdmissionScraper:
                 else:
                     resolved.append(urljoin(base_url, link))
 
-            logger.info(f"Extracted {len(resolved)} program links via LLM")
+            logger.info("Extracted %d program links via LLM", len(resolved))
             return resolved
 
         except Exception as e:
-            logger.error(f"Link extraction failed: {e}")
+            logger.error("Link extraction failed: %s", e)
             raise
+
+    def scout_links(
+        self, markdown: str, links: List[str], base_url: str,
+    ) -> List[ScoutedLink]:
+        """
+        Use LLM to evaluate links for high-value admission content.
+
+        Called when a detail page yields no structured data, to identify
+        links worth exploring at a deeper level.
+
+        Args:
+            markdown: Markdown content of the page (truncated).
+            links: All links found on the page.
+            base_url: Base URL for resolution context.
+
+        Returns:
+            Top-3 ScoutedLink candidates sorted by confidence.
+        """
+        if self._scout_call_count >= MAX_SCOUT_CALLS:
+            logger.warning(
+                "Scout call limit reached (%d/%d). Skipping.",
+                self._scout_call_count, MAX_SCOUT_CALLS,
+            )
+            return []
+
+        self._scout_call_count += 1
+
+        # Build link list text for prompt
+        link_list_text = "\n".join(
+            f"- {link}" for link in links[:50]  # Cap at 50 links
+        )
+        markdown_summary = markdown[:3000]  # Limit to save tokens
+
+        prompt_template = _load_prompt("scout_links.txt")
+        prompt = prompt_template.format(
+            base_url=base_url,
+            markdown_summary=markdown_summary,
+            link_list=link_list_text,
+        )
+
+        logger.info(
+            "Scout evaluation (%d/%d): analyzing %d links from %s",
+            self._scout_call_count, MAX_SCOUT_CALLS,
+            len(links), base_url,
+        )
+
+        try:
+            response = self.router.generate(prompt, ScoutedLinks)
+
+            if not response.text:
+                return []
+
+            scouted = ScoutedLinks.model_validate_json(response.text)
+
+            # Resolve relative URLs in scouted links
+            for link in scouted.links:
+                if not link.url.startswith(("http://", "https://")):
+                    link.url = urljoin(base_url, link.url)
+
+            logger.info(
+                "Scout found %d potential links", len(scouted.links),
+            )
+            for sl in scouted.links:
+                logger.info(
+                    "  [%s] %s — %s",
+                    sl.confidence.upper(), sl.url, sl.reason,
+                )
+
+            return scouted.links
+
+        except Exception as e:
+            logger.error("Scout evaluation failed: %s", e)
+            return []
 
     async def crawl_and_clean(
         self,
         url: str,
         univ_slug: str,
         year: int,
+        continue_depth: int = 0,
     ) -> int:
         """
         Full pipeline: crawl page → extract links → crawl detail pages →
         parse with LLMCleanerAgent → upsert to database.
 
+        Supports dynamic depth via --continue flag. When a detail page
+        yields no data and continue_depth > 0, the Heuristic Scout
+        evaluates links for deeper exploration.
+
         Args:
             url: Starting URL (e.g., a program listing page).
             univ_slug: University slug for DB association.
             year: Academic year.
+            continue_depth: Extra depth levels allowed (default 0).
 
         Returns:
             Number of programs successfully imported.
         """
-        logger.info(f"Starting crawl pipeline for {univ_slug} ({year})")
+        # Reset session state
+        self._visited_urls = set()
+        self._scout_call_count = 0
+        self._all_scouted_links = []
+        self._failed_urls = []
 
-        # Step 1: Crawl the starting page
-        page_result = await self.crawl_page(url)
-
-        if not page_result.markdown:
-            logger.warning(f"No Markdown content from {url}")
-            return 0
-
-        # Step 2: Extract program detail links via LLM
-        detail_links = await self.extract_links(
-            markdown=page_result.markdown,
-            base_url=url,
+        logger.info(
+            "Starting crawl pipeline for %s (%d), max depth: %d",
+            univ_slug, year, 2 + continue_depth,
         )
 
-        if not detail_links:
-            logger.info(
-                "No detail links extracted. "
-                "Treating starting page as single program page."
+        imported = await self._crawl_depth(
+            urls=[url],
+            univ_slug=univ_slug,
+            year=year,
+            current_depth=0,
+            max_continue=continue_depth,
+            is_index_layer=True,
+        )
+
+        # --- Scout Report (Human-in-the-loop) ---
+        if imported == 0 and self._all_scouted_links:
+            self._print_scout_report(
+                univ_slug=univ_slug,
+                year=year,
+                depth_reached=2 + continue_depth,
+                imported=imported,
             )
-            detail_links = [url]
 
-        # Step 3: Crawl each detail page and collect Markdown
-        logger.info(f"Crawling {len(detail_links)} detail pages...")
-        detail_results: List[CrawlPageResult] = []
+        logger.info(
+            "Crawl pipeline complete: %d programs imported for %s",
+            imported, univ_slug,
+        )
+        return imported
 
-        for link in detail_links:
-            try:
-                detail = await self.crawl_page(link)
-                detail_results.append(detail)
-            except ScraperError as e:
-                logger.warning(f"Skipping {link}: {e}")
+    # ------------------------------------------------------------------
+    # Internal — Depth-Aware Crawl
+    # ------------------------------------------------------------------
 
-        # Step 4: Parse each detail page with LLMCleanerAgent
-        cleaner = LLMCleanerAgent(api_key=self.api_key, model_id=self.model_id)
+    async def _crawl_depth(
+        self,
+        urls: List[str],
+        univ_slug: str,
+        year: int,
+        current_depth: int,
+        max_continue: int,
+        is_index_layer: bool,
+    ) -> int:
+        """
+        Recursively crawl and parse pages with depth tracking.
+
+        Args:
+            urls: URLs to crawl at this depth.
+            univ_slug: University slug.
+            year: Academic year.
+            current_depth: Current recursion depth (0 = index page).
+            max_continue: Remaining continue depth budget.
+            is_index_layer: True if this is the index (L1) layer.
+
+        Returns:
+            Total programs imported across this depth and deeper.
+        """
+        pdf_processor = PDFProcessor()
+        cleaner = LLMCleanerAgent(router=self.router)
         db_manager = DatabaseManager()
-        imported_count = 0
+        total_imported = 0
 
-        for detail in detail_results:
-            if not detail.markdown:
+        # Dedup URLs
+        urls_to_crawl = [
+            u for u in urls if u not in self._visited_urls
+        ]
+        if not urls_to_crawl:
+            return 0
+
+        # Mark as visited
+        for u in urls_to_crawl:
+            self._visited_urls.add(u)
+
+        logger.info(
+            "[Depth %d] Crawling %d pages...",
+            current_depth, len(urls_to_crawl),
+        )
+
+        # --- Crawl pages ---
+        page_results: List[CrawlPageResult] = []
+        for link in urls_to_crawl:
+            try:
+                if link.lower().endswith(".pdf"):
+                    logger.info("Detected PDF link: %s", link)
+                    pdf_result = pdf_processor.convert_to_markdown(link)
+                    page_results.append(
+                        CrawlPageResult(
+                            url=link,
+                            markdown=pdf_result.markdown,
+                            char_count=pdf_result.char_count,
+                        )
+                    )
+                else:
+                    detail = await self.crawl_page(link)
+                    page_results.append(detail)
+            except (ScraperError, PDFProcessingError) as e:
+                logger.warning("Skipping %s: %s", link, e)
+
+        # --- Index layer: extract detail links ---
+        if is_index_layer:
+            all_detail_links: List[str] = []
+            for page in page_results:
+                if not page.markdown:
+                    continue
+                detail_links = self.extract_links(
+                    markdown=page.markdown,
+                    base_url=page.url,
+                )
+                all_detail_links.extend(detail_links)
+
+            if not all_detail_links:
+                logger.info(
+                    "No detail links extracted. "
+                    "Treating starting page as single program page."
+                )
+                # Fall through to parse the index page itself
+            else:
+                # Recurse into detail pages
+                return await self._crawl_depth(
+                    urls=all_detail_links,
+                    univ_slug=univ_slug,
+                    year=year,
+                    current_depth=current_depth + 1,
+                    max_continue=max_continue,
+                    is_index_layer=False,
+                )
+
+        # --- Detail layer: parse each page ---
+        scout_candidates: List[CrawlPageResult] = []
+
+        for page in page_results:
+            if not page.markdown:
                 continue
 
-            # Build raw data dict for cleaner agent
-            raw_row: Dict[str, Any] = {
-                "source_url": detail.url,
-                "raw_content": detail.markdown[:5000],  # Limit to save tokens
+            raw_row: Dict[str, str] = {
+                "source_url": page.url,
+                "raw_content": page.markdown[:5000],
             }
 
             try:
-                parsed: Optional[ParsedProgramData] = cleaner.clean_row(raw_row)
+                parsed: Optional[ParsedProgramData] = cleaner.clean_row(
+                    raw_row,
+                )
                 if parsed is None:
-                    logger.warning(f"No structured data from {detail.url}")
+                    logger.warning(
+                        "No structured data from %s", page.url,
+                    )
+                    self._failed_urls.append(page.url)
+                    scout_candidates.append(page)
                     continue
 
                 # Build program data for DB
-                program_data: Dict[str, Any] = {
+                program_data: Dict[str, object] = {
                     "academic_year": year,
-                    "name_en": _extract_program_name(detail.markdown),
+                    "name_en": _extract_program_name(page.markdown),
                     "name_zh": "",
                 }
 
-                # Merge parsed fields
                 if parsed.tuition:
                     program_data["tuition_amount"] = parsed.tuition.amount
                     program_data["currency"] = parsed.tuition.currency
 
                 if parsed.study_options:
                     program_data["study_options"] = [
-                        opt.model_dump(mode="json") for opt in parsed.study_options
+                        opt.model_dump(mode="json")
+                        for opt in parsed.study_options
                     ]
 
                 if parsed.deadlines:
                     program_data["deadlines"] = [
-                        d.model_dump(mode="json") for d in parsed.deadlines
+                        d.model_dump(mode="json")
+                        for d in parsed.deadlines
                     ]
 
-                program_data["extra_metadata"] = {"source_url": detail.url}
+                program_data["extra_metadata"] = {
+                    "source_url": page.url,
+                    "crawl_depth": current_depth,
+                }
 
-                # Skip if no program name could be extracted
-                if not program_data["name_en"]:
+                name_en = program_data.get("name_en")
+                if not name_en:
                     logger.warning(
-                        f"Could not extract program name from {detail.url}"
+                        "Could not extract program name from %s",
+                        page.url,
                     )
+                    self._failed_urls.append(page.url)
+                    scout_candidates.append(page)
                     continue
 
-                # Upsert to DB
-                _, created = db_manager.upsert_program(program_data, univ_slug)
-                imported_count += 1
+                _, created = db_manager.upsert_program(
+                    program_data,  # type: ignore[arg-type]
+                    univ_slug,
+                )
+                total_imported += 1
                 action = "Inserted" if created else "Updated"
                 logger.info(
                     f"{action}: {program_data['name_en']} ({year})"
                 )
 
             except Exception as e:
-                logger.error(f"Failed to process {detail.url}: {e}")
+                logger.error("Failed to process %s: %s", page.url, e)
+                self._failed_urls.append(page.url)
+                scout_candidates.append(page)
 
-        logger.info(
-            f"Crawl pipeline complete: {imported_count}/{len(detail_results)} "
-            f"programs imported for {univ_slug}"
+        # --- Heuristic Scout: deeper exploration ---
+        if max_continue > 0 and scout_candidates:
+            deeper_urls = self._run_scout(scout_candidates)
+            if deeper_urls:
+                logger.info(
+                    "[Scout] Diving deeper with %d links "
+                    "(continue budget: %d → %d)",
+                    len(deeper_urls), max_continue, max_continue - 1,
+                )
+                deeper_imported = await self._crawl_depth(
+                    urls=deeper_urls,
+                    univ_slug=univ_slug,
+                    year=year,
+                    current_depth=current_depth + 1,
+                    max_continue=max_continue - 1,
+                    is_index_layer=False,
+                )
+                total_imported += deeper_imported
+
+        return total_imported
+
+    def _run_scout(
+        self, candidates: List[CrawlPageResult],
+    ) -> List[str]:
+        """Run Heuristic Scout on failed pages and collect deeper URLs."""
+        deeper_urls: List[str] = []
+
+        for page in candidates:
+            if self._scout_call_count >= MAX_SCOUT_CALLS:
+                break
+
+            scouted = self.scout_links(
+                markdown=page.markdown,
+                links=page.links,
+                base_url=page.url,
+            )
+
+            self._all_scouted_links.extend(scouted)
+
+            for sl in scouted:
+                if sl.url not in self._visited_urls:
+                    deeper_urls.append(sl.url)
+
+        return deeper_urls
+
+    def _print_scout_report(
+        self,
+        univ_slug: str,
+        year: int,
+        depth_reached: int,
+        imported: int,
+    ) -> None:
+        """Print a terminal Scout Report for human review."""
+        report = ScoutReport(
+            explored_urls=sorted(self._visited_urls),
+            failed_urls=self._failed_urls,
+            scouted_links=self._all_scouted_links,
+            depth_reached=depth_reached,
+            programs_imported=imported,
         )
-        return imported_count
+
+        separator = "=" * 60
+        print(f"\n{separator}")
+        print("📋 SCOUT REPORT — Human Decision Required")
+        print(separator)
+        print(f"University:       {univ_slug}")
+        print(f"Year:             {year}")
+        print(f"Depth Reached:    {report.depth_reached}")
+        print(f"Programs Found:   {report.programs_imported}")
+        print(f"Pages Explored:   {len(report.explored_urls)}")
+        print(f"Pages Failed:     {len(report.failed_urls)}")
+
+        if report.scouted_links:
+            unexplored = [
+                sl for sl in report.scouted_links
+                if sl.url not in self._visited_urls
+            ]
+            if unexplored:
+                print(f"\n🔍 Unexplored High-Potential Links ({len(unexplored)}):")
+                for i, sl in enumerate(unexplored, 1):
+                    print(f"  {i}. [{sl.confidence.upper()}] {sl.url}")
+                    print(f"     Reason: {sl.reason}")
+            else:
+                print("\n✅ All scouted links were explored.")
+        else:
+            print("\n⚠️  No high-potential links were identified by scout.")
+
+        if report.failed_urls:
+            print(f"\n❌ Failed Pages ({len(report.failed_urls)}):")
+            for url in report.failed_urls:
+                print(f"  - {url}")
+
+        print(separator)
+        print(
+            "💡 Tip: Try running with a deeper --continue value, "
+            "or manually visit the links above."
+        )
+        print(f"{separator}\n")
 
 
 # --- Helpers ---
