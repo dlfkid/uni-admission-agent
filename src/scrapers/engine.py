@@ -9,6 +9,7 @@ Supports dynamic crawl depth with LLM-driven heuristic scouting.
 import asyncio
 import logging
 import random
+import re
 from pathlib import Path
 from typing import Dict, List, Optional, Set, cast
 from urllib.parse import urljoin
@@ -34,6 +35,7 @@ logger = logging.getLogger(__name__)
 # --- Constants ---
 
 MAX_SCOUT_CALLS = 5  # Hard cap on LLM scout calls per crawl session
+MAX_MARKDOWN_CHARS = 30000  # Truncate Markdown before sending to LLM
 
 # --- Prompt Loading ---
 
@@ -172,6 +174,9 @@ class AdmissionScraper:
         """
         Use LLM to extract program detail page URLs from Markdown.
 
+        For large pages, splits the content into safe chunks and processes
+        each chunk separately, then aggregates and deduplicates results.
+
         Args:
             markdown: Markdown content of the page.
             base_url: Base URL for resolving relative links.
@@ -179,39 +184,63 @@ class AdmissionScraper:
         Returns:
             List of absolute URLs for program detail pages.
         """
-        # Load and format prompt
-        prompt_template = _load_prompt("extract_links.txt")
-        prompt = prompt_template.format(base_url=base_url, markdown=markdown)
-
+        # Split into chunks if content exceeds limit
+        chunks = _split_markdown_chunks(markdown, MAX_MARKDOWN_CHARS)
         logger.info(
-            "Extracting links via LLM: %s chars of Markdown",
-            f"{len(markdown):,}",
+            "Extracting links via LLM: %s chars of Markdown (%d chunk%s)",
+            f"{len(markdown):,}", len(chunks),
+            "" if len(chunks) == 1 else "s",
         )
 
-        try:
-            response = self.router.generate(prompt, ExtractedLinks)
+        prompt_template = _load_prompt("extract_links.txt")
+        all_links: List[str] = []
 
-            if not response.text:
-                logger.warning("Empty response from LLM for link extraction")
-                return []
+        for i, chunk in enumerate(chunks):
+            logger.info(
+                "Processing chunk %d/%d (%s chars)...",
+                i + 1, len(chunks), f"{len(chunk):,}",
+            )
+            prompt = prompt_template.format(
+                base_url=base_url, markdown=chunk,
+            )
 
-            # Parse structured output
-            extracted = ExtractedLinks.model_validate_json(response.text)
+            try:
+                response = self.router.generate(prompt, ExtractedLinks)
 
-            # Resolve relative URLs
-            resolved: List[str] = []
-            for link in extracted.links:
-                if link.startswith(("http://", "https://")):
-                    resolved.append(link)
-                else:
-                    resolved.append(urljoin(base_url, link))
+                if not response.text:
+                    logger.warning(
+                        "Empty response from LLM for chunk %d", i + 1,
+                    )
+                    continue
 
-            logger.info("Extracted %d program links via LLM", len(resolved))
-            return resolved
+                extracted = _parse_extracted_links(response.text)
+                all_links.extend(extracted.links)
 
-        except Exception as e:
-            logger.error("Link extraction failed: %s", e)
-            raise
+            except Exception as e:
+                logger.error(
+                    "Link extraction failed for chunk %d: %s", i + 1, e,
+                )
+                # Continue with remaining chunks rather than failing
+                continue
+
+        # Resolve relative URLs + deduplicate
+        seen: set[str] = set()
+        resolved: List[str] = []
+        for link in all_links:
+            absolute = (
+                link if link.startswith(("http://", "https://"))
+                else urljoin(base_url, link)
+            )
+            if absolute not in seen:
+                seen.add(absolute)
+                resolved.append(absolute)
+
+        logger.info(
+            "Extracted %d unique program links via LLM "
+            "(%d total from %d chunks)",
+            len(resolved), len(all_links), len(chunks),
+        )
+        return resolved
 
     def scout_links(
         self, markdown: str, links: List[str], base_url: str,
@@ -620,6 +649,95 @@ class AdmissionScraper:
 
 
 # --- Helpers ---
+
+
+def _split_markdown_chunks(
+    markdown: str, max_chars: int,
+) -> List[str]:
+    """Split Markdown into chunks that fit within the LLM context window.
+
+    Splits on double-newline (paragraph) boundaries to avoid cutting
+    mid-link or mid-sentence. Falls back to hard split if no paragraph
+    break is found within the chunk.
+
+    Args:
+        markdown: Full Markdown content.
+        max_chars: Maximum characters per chunk.
+
+    Returns:
+        List of Markdown chunks, each ≤ max_chars.
+    """
+    if len(markdown) <= max_chars:
+        return [markdown]
+
+    chunks: List[str] = []
+    remaining = markdown
+
+    while remaining:
+        if len(remaining) <= max_chars:
+            chunks.append(remaining)
+            break
+
+        # Find a paragraph break near the end of the chunk
+        slice_end = remaining[:max_chars]
+        split_pos = slice_end.rfind("\n\n")
+
+        if split_pos < max_chars // 2:
+            # No good paragraph break found — try single newline
+            split_pos = slice_end.rfind("\n")
+
+        if split_pos < max_chars // 2:
+            # No newline at all — hard split
+            split_pos = max_chars
+
+        chunks.append(remaining[:split_pos])
+        remaining = remaining[split_pos:].lstrip("\n")
+
+    logger.info(
+        "Split %s chars into %d chunks",
+        f"{len(markdown):,}", len(chunks),
+    )
+    return chunks
+
+
+def _parse_extracted_links(raw_text: str) -> ExtractedLinks:
+    """Parse LLM JSON output with fallback repair for truncated responses.
+
+    When the LLM output token limit is exceeded, the JSON may be cut off
+    mid-string (e.g., ``"https://www.ucl.ac``). This function first tries
+    strict parsing, then falls back to extracting valid URLs via regex.
+    """
+    # 1. Try strict JSON parse
+    try:
+        return ExtractedLinks.model_validate_json(raw_text)
+    except Exception:
+        pass
+
+    # 2. Try to extract JSON block from markdown fences
+    json_match = re.search(r"```(?:json)?\s*(\{.*?)```", raw_text, re.DOTALL)
+    if json_match:
+        try:
+            return ExtractedLinks.model_validate_json(json_match.group(1))
+        except Exception:
+            pass
+
+    # 3. Fallback: extract all valid URLs via regex
+    logger.warning(
+        "JSON parse failed, falling back to regex URL extraction"
+    )
+    url_pattern = re.compile(r'https?://[^\s"\',\]\)]+[a-zA-Z0-9/]')
+    found_urls = url_pattern.findall(raw_text)
+
+    # Deduplicate while preserving order
+    seen: set[str] = set()
+    unique_urls: list[str] = []
+    for url in found_urls:
+        if url not in seen:
+            seen.add(url)
+            unique_urls.append(url)
+
+    logger.info("Regex fallback recovered %d URLs", len(unique_urls))
+    return ExtractedLinks(links=unique_urls)
 
 
 def _extract_program_name(markdown: str) -> str:
