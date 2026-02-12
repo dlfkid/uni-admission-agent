@@ -16,6 +16,9 @@ COST_TABLE: dict[str, dict[str, float]] = {
     "gemini-2.0-flash": {"input": 0.10, "output": 0.40},
     "gemini-2.0-flash-exp": {"input": 0.10, "output": 0.40},
     "deepseek-chat": {"input": 0.27, "output": 1.10},
+    # 火山豆包模型 (USD per 1M tokens, 实际价格以方舟控制台为准)
+    "doubao-pro-32k": {"input": 0.80, "output": 2.00},
+    "doubao-lite-32k": {"input": 0.30, "output": 0.60},
 }
 
 # Fallback rate for unknown models

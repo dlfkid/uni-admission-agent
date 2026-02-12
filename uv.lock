@@ -2877,7 +2877,7 @@ dependencies = [
     { name = "python-dotenv" },
     { name = "sqlalchemy-utils" },
     { name = "sqlmodel" },
-    { name = "volcengine-python-sdk" },
+    { name = "volcengine-python-sdk", extra = ["ark"] },
 ]
 
 [package.optional-dependencies]
@@ -2914,7 +2914,7 @@ requires-dist = [
     { name = "python-dotenv", specifier = ">=1.0.0" },
     { name = "sqlalchemy-utils", specifier = ">=0.42.1" },
     { name = "sqlmodel", specifier = ">=0.0.14" },
-    { name = "volcengine-python-sdk", specifier = ">=5.0.9" },
+    { name = "volcengine-python-sdk", extras = ["ark"], specifier = ">=5.0.9" },
 ]
 provides-extras = ["dev"]
 
@@ -2946,6 +2946,14 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/75/a6/2b064e4e843d0438c29b676d29b1f439d79a3405bb1e7f6838a73c061d97/volcengine_python_sdk-5.0.9.tar.gz", hash = "sha256:0cb49610e9049d4f79d80ae325c40e997cf5d0497762ad7bb3b85f250078529e", size = 7686425, upload-time = "2026-02-05T12:06:30.377Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/86/79/3b798a2cddcf90d3c3539d905658498b7b64a97f0b33de586f5d6e8a728b/volcengine_python_sdk-5.0.9-py2.py3-none-any.whl", hash = "sha256:48c100b143051297c9765c6c0b5a2803130d3c66dd54a26966d83043f52b71d2", size = 30235493, upload-time = "2026-02-05T12:06:25.921Z" },
+]
+
+[package.optional-dependencies]
+ark = [
+    { name = "anyio" },
+    { name = "cryptography" },
+    { name = "httpx" },
+    { name = "pydantic" },
 ]
 
 [[package]]

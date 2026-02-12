@@ -8,7 +8,7 @@ Build a trusted, self-updating database of university admission requirements.
 **Key Features**:
 - Intelligent crawl depth with LLM-driven heuristic scouting
 - Rolling window sequential chunking for context preservation
-- Multi-provider LLM routing (Google Gemini, DeepSeek, OpenAI)
+- Multi-provider LLM routing (Google Gemini, DeepSeek, OpenAI, VolcEngine)
 - Stealth browsing with anti-detection mechanisms
 
 ---
@@ -18,7 +18,7 @@ Build a trusted, self-updating database of university admission requirements.
 | Layer | Technology |
 |:------|:-----------|
 | **Crawling** | `crawl4ai` + `playwright` + `playwright-stealth` |
-| **LLM** | Multi-provider routing: Gemini, DeepSeek, OpenAI |
+| **LLM** | Multi-provider routing: Gemini, DeepSeek, OpenAI, VolcEngine (豆包) |
 | **Data Validation** | `pydantic` (v2) with strict schema enforcement |
 | **Database** | `sqlmodel` (SQLite for dev, PostgreSQL ready) |
 | **Migration** | `alembic` |
@@ -67,7 +67,7 @@ Chunk N + summaryₙ₋₁  → dataₙ
 ### 3.3 LLM Multi-Provider Routing
 
 **RouterAgent** (`src/agents/factory.py`):
-- Supports: Google Gemini, DeepSeek, OpenAI
+- Supports: Google Gemini, DeepSeek, OpenAI, VolcEngine (豆包)
 - Configuration via environment variables
 - Automatic fallback on provider failure
 
@@ -194,9 +194,14 @@ Required in `.env`:
 GOOGLE_GENAI_API_KEY=...
 DEEPSEEK_API_KEY=...
 OPENAI_API_KEY=...
+VOLC_API_AK=...          # 火山方舟 Access Key
+VOLC_API_SK=...          # 火山方舟 Secret Key
+VOLC_ENDPOINT_ID=ark     # 推理终端ID (默认: ark)
+VOLC_MODEL_NAME=doubao-pro-32k # 用于计费的模型名称 (doubao-pro-32k / doubao-lite-32k)
+VOLC_REGION=cn-beijing   # 服务区域 (默认: cn-beijing)
 
 # LLM Routing Priority (comma-separated)
-LLM_PROVIDER_PRIORITY=deepseek,google,openai
+LLM_PROVIDER_PRIORITY=deepseek,google,openai,volcengine
 
 # Database URL (optional, defaults to SQLite)
 DATABASE_URL=sqlite:///./admission.db

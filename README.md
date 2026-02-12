@@ -7,7 +7,7 @@ This project automates the collection of admission criteria from world-renowned 
 
 ## 🛠 Tech Stack
 - **Engine:** Python 3.12+ (managed by `pyenv`)
-- **Intelligence:** Gemini 2.0 Flash / Claude 3.5 Sonnet
+- **Intelligence:** Gemini 2.0 Flash / DeepSeek / VolcEngine (豆包)
 - **Automation:** Playwright with Stealth Plugin
 - **Extraction:** Crawl4AI / Firecrawl (Markdown-first approach)
 - **Validation:** Pydantic (Strongly typed schemas)

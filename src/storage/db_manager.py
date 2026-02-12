@@ -71,10 +71,32 @@ class DatabaseManager:
             
             # 2. Check Composite Unique Constraint: univ_id + academic_year + name_en
             name_en = program_data.get("name_en")
+            name_zh = program_data.get("name_zh")
             academic_year = program_data.get("academic_year")
             
+            # --- Auto-Translation Logic ---
+            if (not name_en and name_zh) or (not name_zh and name_en):
+                try:
+                    # Lazy import to avoid circular dependency
+                    from src.agents.translation_agent import TranslationAgent
+                    translator = TranslationAgent()
+                    
+                    if not name_en and name_zh:
+                        logger.info(f"Translating program name to EN: {name_zh}")
+                        name_en = translator.translate_program_name(name_zh, to_lang="en")
+                        program_data["name_en"] = name_en
+                        
+                    elif not name_zh and name_en:
+                        logger.info(f"Translating program name to ZH: {name_en}")
+                        name_zh = translator.translate_program_name(name_en, to_lang="zh")
+                        program_data["name_zh"] = name_zh
+                        
+                except Exception as e:
+                    logger.error(f"Auto-translation failed: {e}")
+                    # Continue without translation, might fail validation below if name_en is still missing
+            
             if not name_en:
-                raise ValueError("Program data must contain 'name_en'")
+                raise ValueError("Program data must contain 'name_en' (Auto-translation failed or no source name)")
             if not academic_year:
                 raise ValueError("Program data must contain 'academic_year'")
 
