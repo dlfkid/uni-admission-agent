@@ -23,6 +23,8 @@ from src.core.environment import ScraperError
 from src.models.scraper_models import (
     CrawlPageResult,
     ExtractedLinks,
+    PageType,
+    PageTypeResult,
     ScoutedLink,
     ScoutedLinks,
     ScoutReport,
@@ -315,6 +317,45 @@ class AdmissionScraper:
             logger.error("Scout evaluation failed: %s", e)
             return []
 
+    def detect_page_type(
+        self, markdown: str, link_count: int,
+    ) -> PageType:
+        """Use LLM to detect if a page is an index (course list) or detail (single program).
+
+        Args:
+            markdown: Page content in Markdown.
+            link_count: Number of links found on the page.
+
+        Returns:
+            PageType.INDEX or PageType.DETAIL (defaults to DETAIL on error).
+        """
+        content_preview = markdown[:3000]  # First 3K chars for efficiency
+        prompt_template = _load_prompt("detect_page_type.txt")
+        prompt = prompt_template.format(
+            content_preview=content_preview,
+            link_count=link_count,
+        )
+
+        try:
+            response = self.router.generate(prompt, PageTypeResult)
+
+            if not response.text:
+                logger.warning("Empty LLM response for page type detection")
+                return PageType.DETAIL  # Default to detail on failure
+
+            result = PageTypeResult.model_validate_json(response.text)
+            logger.info(
+                "Page type: %s (confidence: %.2f) — %s",
+                result.page_type.value.upper(),
+                result.confidence,
+                result.reasoning,
+            )
+            return result.page_type
+
+        except Exception as e:
+            logger.error("Page type detection failed: %s", e)
+            return PageType.DETAIL  # Safe default
+
     async def crawl_and_clean(
         self,
         url: str,
@@ -478,14 +519,10 @@ class AdmissionScraper:
             if not page.markdown:
                 continue
 
-            raw_row: Dict[str, str] = {
-                "source_url": page.url,
-                "raw_content": page.markdown[:5000],
-            }
-
             try:
-                parsed: Optional[ParsedProgramData] = cleaner.clean_row(
-                    raw_row,
+                parsed: Optional[ParsedProgramData] = cleaner.clean_markdown(
+                    markdown=page.markdown,
+                    source_url=page.url,
                 )
                 if parsed is None:
                     logger.warning(
@@ -552,10 +589,20 @@ class AdmissionScraper:
         if max_continue > 0 and scout_candidates:
             deeper_urls = self._run_scout(scout_candidates)
             if deeper_urls:
+                # Detect if scouted pages are index or detail
+                first_candidate = scout_candidates[0]
+                detected_type = self.detect_page_type(
+                    markdown=first_candidate.markdown,
+                    link_count=len(first_candidate.links),
+                )
+                is_deeper_index = (detected_type == PageType.INDEX)
+
                 logger.info(
-                    "[Scout] Diving deeper with %d links "
+                    "[Scout] Diving deeper with %d links as %s layer "
                     "(continue budget: %d → %d)",
-                    len(deeper_urls), max_continue, max_continue - 1,
+                    len(deeper_urls),
+                    "INDEX" if is_deeper_index else "DETAIL",
+                    max_continue, max_continue - 1,
                 )
                 deeper_imported = await self._crawl_depth(
                     urls=deeper_urls,
@@ -563,7 +610,7 @@ class AdmissionScraper:
                     year=year,
                     current_depth=current_depth + 1,
                     max_continue=max_continue - 1,
-                    is_index_layer=False,
+                    is_index_layer=is_deeper_index,
                 )
                 total_imported += deeper_imported
 

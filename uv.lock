@@ -2026,6 +2026,7 @@ wheels = [
 name = "pymupdf"
 version = "1.27.1"
 source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/1b/0c/40dda0cc4bd2220a2ef75f8c53dd7d8ed1e29681fcb3df75db6ee9677a7e/pymupdf-1.27.1.tar.gz", hash = "sha256:4afbde0769c336717a149ab0de3330dcb75378f795c1a8c5af55c1a628b17d55", size = 85303479, upload-time = "2026-02-12T08:29:17.682Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/13/19/fde6ea4712a904b65e8f41124a0e4233879b87a770fe6a8ce857964de6d5/pymupdf-1.27.1-cp310-abi3-macosx_10_9_x86_64.whl", hash = "sha256:bee9f95512f9556dbf2cacfd1413c61b29a55baa07fa7f8fc83d221d8419888a", size = 23986707, upload-time = "2026-02-11T15:03:24.025Z" },
     { url = "https://files.pythonhosted.org/packages/75/c2/070dff91ad3f1bc16fd6c6ceff23495601fcce4c92d28be534417596418a/pymupdf-1.27.1-cp310-abi3-macosx_11_0_arm64.whl", hash = "sha256:3de95a0889395b0966fafd11b94980b7543a816e89dd1c218597a08543ac3415", size = 23263493, upload-time = "2026-02-11T15:03:45.528Z" },
@@ -2876,6 +2877,7 @@ dependencies = [
     { name = "python-dotenv" },
     { name = "sqlalchemy-utils" },
     { name = "sqlmodel" },
+    { name = "volcengine-python-sdk" },
 ]
 
 [package.optional-dependencies]
@@ -2912,6 +2914,7 @@ requires-dist = [
     { name = "python-dotenv", specifier = ">=1.0.0" },
     { name = "sqlalchemy-utils", specifier = ">=0.42.1" },
     { name = "sqlmodel", specifier = ">=0.0.14" },
+    { name = "volcengine-python-sdk", specifier = ">=5.0.9" },
 ]
 provides-extras = ["dev"]
 
@@ -2928,6 +2931,21 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/c7/24/5f1b3bdffd70275f6661c76461e25f024d5a38a46f04aaca912426a2b1d3/urllib3-2.6.3.tar.gz", hash = "sha256:1b62b6884944a57dbe321509ab94fd4d3b307075e0c2eae991ac71ee15ad38ed", size = 435556, upload-time = "2026-01-07T16:24:43.925Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/39/08/aaaad47bc4e9dc8c725e68f9d04865dbcb2052843ff09c97b08904852d84/urllib3-2.6.3-py3-none-any.whl", hash = "sha256:bf272323e553dfb2e87d9bfd225ca7b0f467b919d7bbd355436d3fd37cb0acd4", size = 131584, upload-time = "2026-01-07T16:24:42.685Z" },
+]
+
+[[package]]
+name = "volcengine-python-sdk"
+version = "5.0.9"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "certifi" },
+    { name = "python-dateutil" },
+    { name = "six" },
+    { name = "urllib3" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/75/a6/2b064e4e843d0438c29b676d29b1f439d79a3405bb1e7f6838a73c061d97/volcengine_python_sdk-5.0.9.tar.gz", hash = "sha256:0cb49610e9049d4f79d80ae325c40e997cf5d0497762ad7bb3b85f250078529e", size = 7686425, upload-time = "2026-02-05T12:06:30.377Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/86/79/3b798a2cddcf90d3c3539d905658498b7b64a97f0b33de586f5d6e8a728b/volcengine_python_sdk-5.0.9-py2.py3-none-any.whl", hash = "sha256:48c100b143051297c9765c6c0b5a2803130d3c66dd54a26966d83043f52b71d2", size = 30235493, upload-time = "2026-02-05T12:06:25.921Z" },
 ]
 
 [[package]]

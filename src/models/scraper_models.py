@@ -2,6 +2,7 @@
 Pydantic models for the scraping engine output.
 """
 
+from enum import Enum
 from typing import List, Optional
 
 from pydantic import BaseModel, Field
@@ -54,3 +55,19 @@ class ScoutReport(BaseModel):
     scouted_links: List[ScoutedLink] = Field(default_factory=list)
     depth_reached: int = Field(default=0)
     programs_imported: int = Field(default=0)
+
+
+class PageType(str, Enum):
+    """Page classification for intelligent crawling."""
+
+    INDEX = "index"  # Course listing page
+    DETAIL = "detail"  # Single program detail page
+
+
+class PageTypeResult(BaseModel):
+    """LLM output for page type detection."""
+
+    page_type: PageType = Field(..., description="Detected page type: index or detail")
+    confidence: float = Field(..., ge=0.0, le=1.0, description="Confidence score 0.0-1.0")
+    reasoning: str = Field(..., max_length=100, description="Brief explanation")
+

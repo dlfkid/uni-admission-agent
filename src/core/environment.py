@@ -401,6 +401,7 @@ def _check_ai_services() -> None:
     logger.info("Checking AI service libraries...")
     try:
         from google import genai
+        import volcenginesdkcore
         logger.info("✓ AI service libraries found")
     except ImportError as e:
         is_venv = (hasattr(sys, 'real_prefix') or

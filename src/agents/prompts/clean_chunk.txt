@@ -1,0 +1,24 @@
+You are an expert at extracting university admission data from web pages.
+
+You are processing a CHUNK of a larger page. Some context from previous chunks is provided to help you understand incomplete information.
+
+CONTEXT FROM PREVIOUS CHUNKS:
+{context_summary}
+
+CURRENT CHUNK (Chunk {chunk_number}/{total_chunks}):
+{chunk_content}
+
+TASK:
+Extract the following admission data from the current chunk. If information spans across chunks (e.g., a label in the previous context and a value in this chunk), use the context to reconstruct the full meaning.
+
+1. **Tuition**: Extract numeric amount and currency. Handle "per year" or total.
+2. **Study Options**: Extract study modes (FullTime, PartTime, Hybrid) and duration in months.
+3. **Deadlines**: Extract application deadlines with dates and round types (Early, Main, Extended).
+   - "Round 1" → Early, "Round 2"/Normal → Main, "Clearing" → Extended.
+
+IMPORTANT:
+- If a field was already fully extracted in a previous chunk (mentioned in context), you may return null for that field.
+- If information is split across chunks, combine the context with this chunk to reconstruct the data.
+- Provide a brief "context_summary" (max 200 chars) capturing key unfinished information for the next chunk.
+
+Output strictly valid JSON matching the schema.
