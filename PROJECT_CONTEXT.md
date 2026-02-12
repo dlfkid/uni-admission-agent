@@ -194,10 +194,8 @@ Required in `.env`:
 GOOGLE_GENAI_API_KEY=...
 DEEPSEEK_API_KEY=...
 OPENAI_API_KEY=...
-VOLC_API_AK=...          # 火山方舟 Access Key
-VOLC_API_SK=...          # 火山方舟 Secret Key
-VOLC_ENDPOINT_ID=ark     # 推理终端ID (默认: ark)
-VOLC_MODEL_NAME=doubao-pro-32k # 用于计费的模型名称 (doubao-pro-32k / doubao-lite-32k)
+VOLC_API_KEY=...          # 火山方舟 API Key
+VOLC_MODEL_ID=doubao-pro-32k # 用于计费的模型id
 VOLC_REGION=cn-beijing   # 服务区域 (默认: cn-beijing)
 
 # LLM Routing Priority (comma-separated)

@@ -8,6 +8,7 @@ from src.core.parser import DataCleaner
 from src.agents.cleaner_agent import LLMCleanerAgent, ParsedProgramData
 from src.utils.pdf_processor import PDFProcessor
 
+from datetime import datetime
 logger = logging.getLogger(__name__)
 
 class ExcelImporter:
@@ -63,10 +64,25 @@ class ExcelImporter:
         total_inserted = 0
         total_updated = 0
         
+        # Fetch existing programs map for evolution context
+        univ = self.db_manager.get_university_by_slug(univ_slug)
+        program_map = {}
+        if univ:
+             # Need to cast or strict check since get_program_group_map expects int
+             # Verified db_manager has get_university_by_slug returning University model which has id
+             program_map = self.db_manager.get_program_group_map(univ.id) # type: ignore
+        
+        # Convert map to context string for LLM (JSON format is usually good/token efficient)
+        import json
+        existing_programs_context = json.dumps(program_map, ensure_ascii=False) if program_map else None
+
         for sheet_name in xls.sheet_names:
             logger.info(f"Processing sheet: {sheet_name}")
             try:
-                inserted, updated = self._process_sheet(xls, sheet_name, univ_slug, year)
+                inserted, updated = self._process_sheet(
+                    xls, sheet_name, univ_slug, year, 
+                    program_map, existing_programs_context
+                )
                 total_inserted += inserted
                 total_updated += updated
             except Exception as e:
@@ -123,9 +139,16 @@ class ExcelImporter:
                     opt.model_dump(mode="json") for opt in parsed.study_options
                 ]
             if parsed.deadlines:
-                program_data["deadlines"] = [
-                    d.model_dump(mode="json") for d in parsed.deadlines
-                ]
+                # Sort by date
+                sorted_deadlines = sorted(
+                    parsed.deadlines, 
+                    key=lambda x: x.cutoff_date or datetime.max
+                )
+                program_data["deadlines"] = []
+                for i, d in enumerate(sorted_deadlines, 1):
+                    d_dict = d.model_dump(mode="json")
+                    d_dict["round"] = i
+                    program_data["deadlines"].append(d_dict)
 
             program_data["extra_metadata"] = {
                 "source_file": str(self.file_path),
@@ -139,14 +162,22 @@ class ExcelImporter:
         except Exception as e:
             logger.error(f"Failed to parse PDF content: {e}")
 
-    def _process_sheet(self, xls: pd.ExcelFile, sheet_name: str, univ_slug: str, year: int) -> Tuple[int, int]:
+    def _process_sheet(
+        self, xls: pd.ExcelFile, sheet_name: str, univ_slug: str, year: int,
+        program_map: Dict[str, str], existing_schema_context: Optional[str]
+    ) -> Tuple[int, int]:
         """
         Synchronous wrapper for async processing.
         Returns (inserted_count, updated_count)
         """
-        return asyncio.run(self._process_sheet_async(xls, sheet_name, univ_slug, year))
+        return asyncio.run(self._process_sheet_async(
+            xls, sheet_name, univ_slug, year, program_map, existing_schema_context
+        ))
 
-    async def _process_sheet_async(self, xls: pd.ExcelFile, sheet_name: str, univ_slug: str, year: int) -> Tuple[int, int]:
+    async def _process_sheet_async(
+        self, xls: pd.ExcelFile, sheet_name: str, univ_slug: str, year: int,
+        program_map: Dict[str, str], existing_schema_context: Optional[str]
+    ) -> Tuple[int, int]:
         # 1. Read roughly to find header
         try:
             # Read first 20 rows to scan for header
@@ -171,8 +202,15 @@ class ExcelImporter:
                 if not program_data:
                     continue
                 
-                # Inject academic year
+                # Inject academic year and faculty
                 program_data["academic_year"] = year
+                program_data["faculty"] = sheet_name
+                
+                # Check for existing program link (Exact Match)
+                # If name_en exists in map, we can pre-fill program_group_code
+                name_en = program_data.get("name_en")
+                if name_en and name_en in program_map:
+                    program_data["program_group_code"] = program_map[name_en]
                 
                 # Check if LLM is needed
                 needs_llm = self._check_needs_llm(program_data)
@@ -188,7 +226,23 @@ class ExcelImporter:
             
             # 4. Batch Process Rows Needing LLM
             if rows_needing_llm:
-                await self._batch_process_llm(rows_needing_llm)
+                await self._batch_process_llm(rows_needing_llm, existing_schema_context)
+                
+            # 4b. Final Pass: Ensure program_group_code exists for ALL rows
+            # If it wasn't assigned by map (exact match) or LLM (fuzzy match),
+            # generate a default one deterministically.
+            import re
+            def simple_slugify(text: str) -> str:
+                text = text.lower().strip()
+                text = re.sub(r'[^\w\s-]', '', text)
+                text = re.sub(r'[-\s]+', '-', text)
+                return text
+
+            for data in all_programs:
+                if not data.get("program_group_code"):
+                    p_name = data.get("name_en", "unknown")
+                    slug = simple_slugify(p_name)
+                    data["program_group_code"] = f"{univ_slug}-{slug}"
                 
             # 5. Upsert All
             inserted_count = 0
@@ -225,7 +279,9 @@ class ExcelImporter:
             return True
         return False
 
-    async def _batch_process_llm(self, rows: List[Dict[str, Any]]):
+    async def _batch_process_llm(
+        self, rows: List[Dict[str, Any]], existing_programs_context: Optional[str]
+    ):
         """
         Process rows in batches of 5 with concurrency limit of 3.
         Updates the dictionaries in-place.
@@ -266,7 +322,12 @@ class ExcelImporter:
                     
                     # NOTE: clean_batch is synchronous. We must run it in executor.
                     loop = asyncio.get_event_loop()
-                    results = await loop.run_in_executor(None, self.llm_agent.clean_batch, llm_inputs)
+                    results = await loop.run_in_executor(
+                        None, 
+                        self.llm_agent.clean_batch, 
+                        llm_inputs,
+                        existing_programs_context
+                    )
                     
                     # Merge results back
                     if results and len(results) == len(chunk):
@@ -282,7 +343,24 @@ class ExcelImporter:
                             
                             # Deadlines
                             if "deadlines" not in data and res.deadlines:
-                                data["deadlines"] = [d.model_dump(mode='json') for d in res.deadlines]
+                                # Sort by date
+                                sorted_deadlines = sorted(
+                                    res.deadlines, 
+                                    key=lambda x: x.cutoff_date or datetime.max
+                                )
+                                data["deadlines"] = []
+                                for i, d in enumerate(sorted_deadlines, 1):
+                                    d_dict = d.model_dump(mode="json")
+                                    d_dict["round"] = i
+                                    data["deadlines"].append(d_dict)
+
+                            # Program Evolution (LLM detected)
+                            if res.program_group_code:
+                                data["program_group_code"] = res.program_group_code
+                            if res.original_name:
+                                if "extra_metadata" not in data:
+                                    data["extra_metadata"] = {}
+                                data["extra_metadata"]["original_name"] = res.original_name
                     
                 except Exception as e:
                     logger.error(f"Batch processing failed: {e}")

@@ -3,7 +3,7 @@ from decimal import Decimal
 from typing import Optional, Tuple, List, Dict, Any, Pattern
 from datetime import datetime
 import logging
-from src.models.admission import CurrencyCode, StudyMode, RoundType
+from src.models.admission import CurrencyCode, StudyMode
 from dateutil import parser as date_parser
 
 logger = logging.getLogger(__name__)
@@ -118,16 +118,14 @@ class DataCleaner:
     def parse_deadlines(text: Optional[str]) -> List[Dict[str, Any]]:
         """
         Parses deadline string.
-        Returns list of dicts: [{"round": "Main", "cutoff_date": datetime}]
+        Returns list of dicts: [{"round": 1, "cutoff_date": datetime, "description": ...}]
+        Result is sorted chronologically.
         """
         if not text:
             return []
             
         text = str(text).strip()
-        deadlines = []
-        
-        # Simple split by newline or comma if multiple dates
-        # Heuristic: verify if it contains keywords like "Round 1", "Main", etc.
+        found_deadlines = []
         
         lines = re.split(r'[\n;]', text)
         for line in lines:
@@ -135,28 +133,27 @@ class DataCleaner:
             if not line:
                 continue
                 
-            # Try to parse date using dateutil (fuzzy)
             try:
-                # Extract date portion? "Round 1: Dec 01, 2025"
-                # dateutil fuzzy=True is powerful
                 dt = date_parser.parse(line, fuzzy=True)
-                
-                # Infer round type
-                round_type = RoundType.MAIN
-                l_lower = line.lower()
-                if 'early' in l_lower or 'round 1' in l_lower:
-                    round_type = RoundType.EARLY
-                elif 'clearing' in l_lower or 'rolling' in l_lower:
-                    round_type = RoundType.EXTENDED
-                elif 'extended' in l_lower:
-                    round_type = RoundType.EXTENDED
-                
                 if isinstance(dt, datetime):
-                    deadlines.append({
-                        "round": round_type.value,
-                        "cutoff_date": dt.isoformat()
+                    # Keep original text as description or infer simple one
+                    found_deadlines.append({
+                        "cutoff_date": dt,
+                        "description": line[:50] # truncated original text as context
                     })
             except (ValueError, OverflowError):
                 continue
+        
+        # Sort chronologically
+        found_deadlines.sort(key=lambda x: x["cutoff_date"])
+        
+        # Assign numeric rounds
+        results = []
+        for i, item in enumerate(found_deadlines, 1):
+            results.append({
+                "round": i,
+                "cutoff_date": item["cutoff_date"].isoformat(),
+                "description": item["description"]
+            })
                 
-        return deadlines
+        return results

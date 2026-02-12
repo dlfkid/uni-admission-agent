@@ -1,7 +1,8 @@
 import os
 import logging
-from typing import Optional, Tuple
-from sqlmodel import create_engine, Session, select, SQLModel
+from typing import Optional, Tuple, List, Dict
+from datetime import datetime, timezone
+from sqlmodel import create_engine, Session, select, SQLModel, col
 from sqlalchemy_utils import database_exists, create_database
 from src.models.admission import University, Program
 from dotenv import load_dotenv
@@ -50,80 +51,146 @@ class DatabaseManager:
             self.init_db()
         return Session(self.engine)
 
+    def get_university_by_slug(self, slug: str) -> Optional[University]:
+        """Retrieve a university by its slug."""
+        with self.get_session() as session:
+            statement = select(University).where(University.slug == slug)
+            return session.exec(statement).first()
+
     def upsert_program(self, program_data: dict, univ_slug: str) -> Tuple[Program, bool]:
         """
-        Upsert a program record.
-        Logic: Update if (university_id + academic_year + name_en) exists, else insert.
-        Requires 'academic_year' in program_data.
-        Returns: (Program, created: bool)
+        Upsert a program record using PostgreSQL ON CONFLICT.
+        Logic: 
+           - Match on (university_id, academic_year, name_en).
+           - Do UPDATE on conflict, but coalesce() to avoid overwriting existing non-nulls with new nulls.
+        Returns: (Program, created: bool) - Note: created boolean is harder to determine precisely with one query in SQLAlchemy 1.4/2.0 without RETURNING details, checking if system columns changed, or using xmax. 
+                   For simplicity in this Agent context, we might return True (potentially created/updated) or fetch after.
+                   Actually, let's stick to the interface but the 'created' bool might be just 'True' (processed).
         """
+        from sqlalchemy.dialects.postgresql import insert
+        from sqlalchemy import func
+
         with self.get_session() as session:
-            # 1. Ensure University exists (Lookup by Slug)
+            # 1. Ensure University exists
             univ = session.exec(select(University).where(University.slug == univ_slug)).first()
             if not univ:
-                # Fallback: create with name=slug if not exists
-                # In strict mode we might want to fail, but "not exist create" is requested.
-                # using slug as name initially.
                 univ = University(name=univ_slug, slug=univ_slug)
                 session.add(univ)
                 session.commit()
                 session.refresh(univ)
             
-            # 2. Check Composite Unique Constraint: univ_id + academic_year + name_en
+            # 2. Prepare Data & Translations
             name_en = program_data.get("name_en")
             name_zh = program_data.get("name_zh")
-            academic_year = program_data.get("academic_year")
             
             # --- Auto-Translation Logic ---
             if (not name_en and name_zh) or (not name_zh and name_en):
                 try:
-                    # Lazy import to avoid circular dependency
                     from src.agents.translation_agent import TranslationAgent
                     translator = TranslationAgent()
-                    
                     if not name_en and name_zh:
                         logger.info(f"Translating program name to EN: {name_zh}")
                         name_en = translator.translate_program_name(name_zh, to_lang="en")
                         program_data["name_en"] = name_en
-                        
                     elif not name_zh and name_en:
                         logger.info(f"Translating program name to ZH: {name_en}")
                         name_zh = translator.translate_program_name(name_en, to_lang="zh")
                         program_data["name_zh"] = name_zh
-                        
                 except Exception as e:
                     logger.error(f"Auto-translation failed: {e}")
-                    # Continue without translation, might fail validation below if name_en is still missing
             
-            if not name_en:
-                raise ValueError("Program data must contain 'name_en' (Auto-translation failed or no source name)")
-            if not academic_year:
-                raise ValueError("Program data must contain 'academic_year'")
+            if not name_en or not program_data.get("academic_year"):
+                raise ValueError("Program data must contain 'name_en' and 'academic_year'")
 
-            statement = select(Program).where(
-                Program.university_id == univ.id,
-                Program.academic_year == academic_year,
-                Program.name_en == name_en
-            )
-            existing_program = session.exec(statement).first()
+            # 3. Construct Insert Statement
+            # Add university_id to data
+            full_data = program_data.copy()
+            full_data["university_id"] = univ.id
+            if "updated_at" not in full_data:
+                full_data["updated_at"] = datetime.now(timezone.utc)
+
+            stmt = insert(Program).values(**full_data)
             
-            if existing_program:
-                # Update existing
-                for key, value in program_data.items():
-                    if value is not None: # Only update non-null values
-                        setattr(existing_program, key, value)
-                existing_program.university_id = univ.id
-                session.add(existing_program)
-                session.commit()
-                session.refresh(existing_program)
-                logger.debug(f"Updated program: {name_en} ({academic_year})")
-                return existing_program, False
-            else:
-                # Insert new
-                new_program = Program(**program_data)
-                new_program.university_id = univ.id
-                session.add(new_program)
-                session.commit()
-                session.refresh(new_program)
-                logger.debug(f"Inserted program: {name_en} ({academic_year})")
-                return new_program, True
+            # 4. Construct ON CONFLICT ... DO UPDATE Set
+            # We want to update all fields provided in full_data, BUT if the new value is None 
+            # and the DB has a value, we keep the DB value (COALESCE).
+            # Columns to theoretically update: everything except PK and constraints.
+            
+            # Note: We need to be careful. If we pass specific fields, we want to update them.
+            # The Requirement: "如果数据库已有记录，新入库的 null 字段不应覆盖已有值"
+            # This implies if provided key is None, ignore it? Or if provided key IS provided but None?
+            # Usually upsert dictionary `full_data` only contains keys we scraped. 
+            # If a key is NOT in `full_data`, `insert` uses default.
+            # `excluded` table contains the values tried for insert.
+            
+            # Let's iterate over ALL columns in Program model to build the set_ dict
+            # excluding primary keys and the unique constraint keys.
+            constraint_keys = {"university_id", "academic_year", "name_en"}
+            excluded_cols = constraint_keys | {"id"}
+            
+            update_dict = {}
+            from sqlalchemy import inspect as sa_inspect
+            mapper = sa_inspect(Program)
+            for col_obj in mapper.columns:
+                if col_obj.name not in excluded_cols:
+                    # COALESCE(excluded.col, existing.col)
+                    # If the INSERT attempted to put NULL (e.g. because data didn't have it and default is None), 
+                    # keep existing.
+                    update_dict[col_obj.name] = func.coalesce(getattr(stmt.excluded, col_obj.name), getattr(Program, col_obj.name))
+            
+            # Force update updated_at
+            update_dict["updated_at"] = datetime.now(timezone.utc)
+
+            stmt = stmt.on_conflict_do_update(
+                constraint="uq_program_year", # Must match the name in SQLModel
+                set_=update_dict
+            )
+            
+            # Execute
+            result = session.exec(stmt)
+            session.commit()
+            
+            # Fetch and return
+            # To be 100% strictly compatible with previous 'new_program, created', 
+            # we can't easily know if it was insert or update without more complex SQL/returning.
+            # But the caller mostly cares about the object.
+            # We re-fetch.
+            refreshed = session.exec(
+                select(Program).where(
+                    Program.university_id == univ.id,
+                    Program.academic_year == full_data["academic_year"],
+                    Program.name_en == full_data["name_en"]
+                )
+            ).first()
+            
+            if not refreshed:
+                # Should not happen
+                raise RuntimeError("Upsert failed to produce a record")
+
+            return refreshed, True # Returning True for 'processed'
+
+    def get_program_history(self, program_group_code: str) -> List[Program]:
+        """
+        Retrieve all historical records for a given program group code,
+        ordered by academic year.
+        """
+        with self.get_session() as session:
+            statement = select(Program).where(
+                Program.program_group_code == program_group_code
+            ).order_by(col(Program.academic_year))
+            results = session.exec(statement).all()
+            return list(results)
+
+    def get_program_group_map(self, university_id: int) -> Dict[str, str]:
+        """
+        Get a mapping of {name_en: program_group_code} for a university.
+        Used to provide context to LLM for consistent group code assignment.
+        Only returns entries where program_group_code is set.
+        """
+        with self.get_session() as session:
+            statement = select(Program.name_en, Program.program_group_code).where(
+                Program.university_id == university_id,
+                Program.program_group_code.is_not(None) # type: ignore
+            )
+            results = session.exec(statement).all()
+            return {name: code for name, code in results if name and code}

@@ -5,12 +5,40 @@ VolcEngine (豆包) provider implementation using Ark runtime SDK.
 import os
 import json
 import logging
-from typing import Optional, Type
+from typing import Optional, Type, List, Any
 
 from pydantic import BaseModel
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception
 
 from .base import LLMProvider, LLMResponse, RateLimitError, is_retryable
+
+try:
+    from volcenginesdkarkruntime import Ark  # type: ignore
+    from volcenginesdkarkruntime._exceptions import (
+        ArkAPIStatusError,  # type: ignore
+        ArkAuthenticationError,  # type: ignore
+        ArkRateLimitError,  # type: ignore
+    )
+    from volcenginesdkarkruntime.types.chat import ChatCompletion as ArkChatCompletion  # type: ignore
+    _VOLC_AVAILABLE = True
+except ImportError:
+    # Handle case where SDK is not installed
+    # Define dummy classes to satisfy type checkers (Zero Redlines rule)
+    _VOLC_AVAILABLE = False
+    
+    class Ark:  # type: ignore
+        def __init__(self, base_url=None, api_key=None, region=None): pass
+        chat: Any = None
+        
+    class ArkAPIStatusError(Exception):  # type: ignore
+        status_code: int = 0
+        
+    class ArkAuthenticationError(Exception): pass  # type: ignore
+    class ArkRateLimitError(Exception): pass  # type: ignore
+    
+    class ArkChatCompletion:  # type: ignore
+        choices: List[Any] = []
+        usage: Any = None
 
 logger = logging.getLogger(__name__)
 
@@ -20,52 +48,47 @@ class VolcEngineProvider(LLMProvider):
     火山引擎方舟（豆包）Provider，使用 volcenginesdkarkruntime SDK。
 
     通过 Ark 客户端调用豆包大模型进行文本生成，支持 JSON Mode 结构化输出。
-    认证方式: Access Key (AK) + Secret Key (SK)，从环境变量读取。
+    认证方式: API Key，从环境变量 VOLC_API_KEY 读取。
     """
 
     def __init__(
         self,
-        ak: Optional[str] = None,
-        sk: Optional[str] = None,
-        endpoint_id: Optional[str] = None,
         region: Optional[str] = None,
     ) -> None:
         # --- 从环境变量加载配置 ---
-        # VOLC_API_AK / VOLC_API_SK: 火山方舟平台的访问密钥对，用于 API 鉴权
-        self.ak = ak or os.environ.get("VOLC_API_AK") or ""
-        self.sk = sk or os.environ.get("VOLC_API_SK") or ""
-
-        # VOLC_ENDPOINT_ID: 推理终端节点 ID，在方舟控制台创建模型部署后获得
-        # 格式通常为 "ep-xxxxxxxxx"，这是调用特定模型的唯一标识
-        self.endpoint_id = (
-            endpoint_id
-            or os.environ.get("VOLC_ENDPOINT_ID")
-            or "ark"
-        )
+        self.base_url = os.environ.get("VOLC_BASE_URL") or "https://ark.cn-beijing.volces.com/api/v3"
 
         # VOLC_MODEL_NAME: 逻辑模型名称 (e.g. "doubao-pro-32k")
         # 用于 Token 计费匹配 (token_tracker.py) 和日志记录
         # 如果未指定，默认使用 endpoint_id，但这可能导致计费匹配失败
-        self.model_name = os.environ.get("VOLC_MODEL_NAME", self.endpoint_id)
+        self.model_id = os.environ.get("VOLC_MODEL_ID") or ""
 
         # VOLC_REGION: 服务区域，默认北京（cn-beijing）
         self.region = region or os.environ.get("VOLC_REGION") or "cn-beijing"
 
+        # VOLC_API_KEY: 火山方舟 API Key (替代 AK/SK)
+        self.api_key = os.environ.get("VOLC_API_KEY")
+
+        # VOLC_PROJECT_NAME: 项目名称，默认为 "default"
+        # 某些 API 调用需要指定项目上下文
+        self.project_name = os.environ.get("VOLC_PROJECT_NAME", "default")
+
         # --- 校验必填项 ---
-        if not self.ak or not self.sk:
+        if not self.api_key:
             raise ValueError(
-                "VolcEngine AK/SK is required (VOLC_API_AK and VOLC_API_SK). "
-                "请在 .env 中配置火山方舟的 Access Key 和 Secret Key。"
+                "VolcEngine Auth is required. "
+                "Provide VOLC_API_KEY in .env."
             )
 
         # --- 初始化 Ark 客户端 ---
         # volcenginesdkarkruntime.Ark 是方舟推理的官方客户端
-        # 使用 AK/SK 进行 HMAC 签名鉴权（而非 API Key 鉴权）
-        from volcenginesdkarkruntime import Ark
+        # 支持 API Key 鉴权
+        if not _VOLC_AVAILABLE:
+            raise ImportError("volcenginesdkarkruntime is not installed")
 
         self.client = Ark(
-            ak=self.ak,
-            sk=self.sk,
+            base_url=self.base_url,
+            api_key=self.api_key,
             region=self.region,
         )
 
@@ -87,13 +110,6 @@ class VolcEngineProvider(LLMProvider):
         2. 调用 chat.completions.create()，开启 JSON Mode
         3. 从返回值中提取文本和 token 用量
         """
-        # --- 导入异常类型（延迟导入，避免未安装时报错）---
-        from volcenginesdkarkruntime._exceptions import (
-            ArkAPIStatusError,
-            ArkAuthenticationError,
-            ArkRateLimitError,
-        )
-
         # --- 构建 system message，包含 JSON Schema 指令 ---
         schema_json = json.dumps(schema.model_json_schema(), indent=2)
         system_msg = (
@@ -104,21 +120,22 @@ class VolcEngineProvider(LLMProvider):
 
         try:
             # --- 调用豆包模型 ---
-            # model: 使用 endpoint_id 指定要调用的推理终端
+            # model: 使用 model_id 指定要调用的推理终端
             # response_format: 设置为 json_object 启用 JSON Mode
             # stream=False: 使用同步模式（非流式），确保返回完整的 ChatCompletion
+            # extra_headers: 传递项目名称 (X-Project-Name) 用于鉴权
             raw_response = self.client.chat.completions.create(
-                model=self.endpoint_id,
+                model=self.model_id,
                 messages=[
                     {"role": "system", "content": system_msg},
                     {"role": "user", "content": prompt},
                 ],
                 response_format={"type": "json_object"},
+                extra_headers={"X-Project-Name": self.project_name},
                 stream=False,
             )
 
             # --- 类型收窄: create() 返回联合类型，stream=False 时实际为 ChatCompletion ---
-            from volcenginesdkarkruntime.types.chat import ChatCompletion as ArkChatCompletion
 
             if not isinstance(raw_response, ArkChatCompletion):
                 raise TypeError(
@@ -131,7 +148,7 @@ class VolcEngineProvider(LLMProvider):
         except ArkAuthenticationError as e:
             # 鉴权失败：AK/SK 无效或过期，无法重试，直接抛出
             raise ValueError(
-                f"VolcEngine 鉴权失败，请检查 VOLC_API_AK 和 VOLC_API_SK: {e}"
+                f"VolcEngine 鉴权失败，请检查 VOLC_API_KEY: {e}"
             ) from e
         except ArkAPIStatusError as e:
             # 其他 HTTP 错误（如 503 服务不可用、余额不足等）
@@ -157,5 +174,5 @@ class VolcEngineProvider(LLMProvider):
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
             total_tokens=prompt_tokens + completion_tokens,
-            model=self.model_name,
+            model=self.model_id,
         )

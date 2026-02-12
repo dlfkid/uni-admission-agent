@@ -14,7 +14,7 @@ from decimal import Decimal
 from pydantic import BaseModel, Field
 
 from src.agents.factory import RouterAgent, create_router
-from src.models.admission import CurrencyCode, StudyMode, RoundType
+from src.models.admission import CurrencyCode, StudyMode
 
 logger = logging.getLogger(__name__)
 
@@ -46,7 +46,7 @@ class ParsedStudyOption(BaseModel):
 
 
 class ParsedDeadline(BaseModel):
-    round: RoundType = Field(..., description="Round type: Early, Main, Extended. Infer if not explicit.")
+    description: Optional[str] = Field(default=None, description="Round description, e.g., 'Early Round', 'Round 1', 'Main'.")
     cutoff_date: Optional[datetime] = Field(default=None, description="ISO 8601 date string. If missing, return null.")
 
 
@@ -54,6 +54,8 @@ class ParsedProgramData(BaseModel):
     tuition: Optional[ParsedTuition] = Field(default=None, description="Tuition fee structure")
     study_options: List[ParsedStudyOption] = Field(default_factory=list, description="List of study options")
     deadlines: List[ParsedDeadline] = Field(default_factory=list, description="List of application deadlines")
+    program_group_code: Optional[str] = Field(default=None, description="Unique code for program lineage (e.g. hku-msc-ai). Reuse existing if semantic match.")
+    original_name: Optional[str] = Field(default=None, description="If reusing group code for a renamed program, store the old name here.")
 
 
 class ParsedProgramBatch(BaseModel):
@@ -103,6 +105,8 @@ def _merge_parsed_data(
         tuition=merged_tuition,
         study_options=merged_options,
         deadlines=merged_deadlines,
+        program_group_code=new.program_group_code or existing.program_group_code,
+        original_name=new.original_name or existing.original_name,
     )
 
 
@@ -137,19 +141,29 @@ class LLMCleanerAgent:
         Returns:
             ParsedProgramData object or None if parsing fails.
         """
+        existing_context = raw_row.get("existing_programs_context", "None")
+
         prompt = f"""
         You are an expert data parsing assistant. 
-        Your task is to extract structured admission data from the following raw Excel row dictionary.
+        Your task is to extract structured admission data from the following raw Excel row dictionary/content.
         
         Raw Data:
         {raw_row}
         
+        Existing Programs Context (Name -> Group Code):
+        {existing_context}
+        
         Requirements:
         1. **Tuition**: Extract numeric amount and currency. Handle "per year" or total logic if implied.
         2. **Study Options**: Convert descriptions like "1 year FT / 2 years PT" into a list of options with mode and months.
-        3. **Deadlines**: Extract dates and infer round type (Early, Main, Extended). If strictly valid date is found, use it.
-           - If date is ambiguous, try best effort. 
-           - Round inference: "Round 1" -> Early, "Round 2"/Normal -> Main, "Clearing" -> Extended.
+        3. **Deadlines**: Extract dates and descriptions (e.g., "Round 1", "Main").
+           - Output ALL valid deadlines found.
+           - Sort output chronologically if possible, or preserve order.
+        4. **Program Evolution (Critical)**:
+           - Check if the current program name matches any in 'Existing Programs Context' in meaning (allow renaming/minor changes).
+           - IF MATCH: Use the existing `group_code` and set `original_name` to the old name.
+           - IF NEW: Generate a NEW unique, readable `group_code` (e.g. univ-level-subject-year, like 'hku-msc-ai-2026').
+           - NEVER assign different group codes to the same program across years.
         
         Output strictly valid JSON matching the schema.
         """
@@ -169,7 +183,7 @@ class LLMCleanerAgent:
             raise
 
     def clean_markdown(
-        self, markdown: str, source_url: str = "",
+        self, markdown: str, source_url: str = "", existing_programs: Optional[str] = None,
     ) -> Optional[ParsedProgramData]:
         """Parse Markdown content from a detail page into structured data.
 
@@ -180,31 +194,41 @@ class LLMCleanerAgent:
         Args:
             markdown: Full Markdown content of the detail page.
             source_url: Source URL for logging.
+            existing_programs: Context string mapping existing program names to group codes.
 
         Returns:
             ParsedProgramData or None if parsing fails entirely.
         """
         if len(markdown) <= MAX_DETAIL_CHARS:
-            return self._parse_single_pass(markdown, source_url)
+            return self._parse_single_pass(markdown, source_url, existing_programs)
 
-        return self._parse_rolling_chunks(markdown, source_url)
+        # For rolling chunks, we might need to pass context too, but for now passing only to single pass logic
+        # or we update _parse_rolling_chunks signature too.
+        # Given the prompt for rolling chunks is "clean_chunk.txt", we'd need to update that template 
+        # to support existing_programs if we want it there. 
+        # For MVP of this feature, let's assume valid large pages also get the context via _parse_rolling_chunks if we update it.
+        # Let's update _parse_rolling_chunks signature as well to be consistent.
+        return self._parse_rolling_chunks(markdown, source_url, existing_programs)
 
     # ------------------------------------------------------------------ #
     #  Private helpers                                                     #
     # ------------------------------------------------------------------ #
 
     def _parse_single_pass(
-        self, markdown: str, source_url: str,
+        self, markdown: str, source_url: str, existing_programs: Optional[str] = None,
     ) -> Optional[ParsedProgramData]:
         """Parse a small detail page in one LLM call."""
         raw_row: Dict[str, str] = {
             "source_url": source_url,
             "raw_content": markdown,
         }
+        if existing_programs:
+            raw_row["existing_programs_context"] = existing_programs
+            
         return self.clean_row(raw_row)
 
     def _parse_rolling_chunks(
-        self, markdown: str, source_url: str,
+        self, markdown: str, source_url: str, existing_programs: Optional[str] = None,
     ) -> Optional[ParsedProgramData]:
         """Parse a large detail page using rolling-window sequential chunks.
 
@@ -301,12 +325,15 @@ class LLMCleanerAgent:
 
         return chunks
 
-    def clean_batch(self, raw_rows: List[Dict[str, str]]) -> List[ParsedProgramData]:
+    def clean_batch(
+        self, raw_rows: List[Dict[str, str]], existing_programs: Optional[str] = None
+    ) -> List[ParsedProgramData]:
         """
         Parse a batch of raw rows into a list of ParsedProgramData.
 
         Args:
             raw_rows: List of dicts, each representing a row.
+            existing_programs: Context string mapping existing program names to group codes.
 
         Returns:
             List of ParsedProgramData objects.
@@ -320,12 +347,19 @@ class LLMCleanerAgent:
             "Your task is to extract structured admission data from the following list of raw Excel rows.",
             "Return a JSON object with a key 'programs' containing a list of parsed objects, strictly preserving the order.",
             "",
+            f"Existing Programs Context (Name -> Group Code):\n{existing_programs or 'None'}",
+            "",
             "Requirements:",
             "1. **Tuition**: Extract numeric amount and currency. Handle 'per year' or total logic if implied.",
             "2. **Study Options**: Convert descriptions like '1 year FT / 2 years PT' into a list of options with mode and months.",
-            "3. **Deadlines**: Extract dates and infer round type (Early, Main, Extended).",
-            "   - 'Round 1' -> Early, 'Round 2'/Normal -> Main, 'Clearing' -> Extended.",
-            "4. Missing Data: If a field cannot be extracted, set it to null/empty list as per schema.",
+            "3. **Deadlines**: Extract dates and descriptions (e.g., 'Round 1', 'Main').",
+            "   - Output ALL valid deadlines found, sorted chronologically.",
+            "4. **Program Evolution**:",
+            "   - Check if the current program name matches any in 'Existing Programs Context' in meaning (allow renaming/minor changes).",
+            "   - IF MATCH: Use the existing `group_code` and set `original_name` to the old name.",
+            "   - IF NEW: Generate a NEW unique, readable `group_code` (e.g. univ-level-subject-year). reuse existing format style.",
+            "   - NEVER assign different group codes to the same program.",
+            "5. Missing Data: If a field cannot be extracted, set it to null/empty list as per schema.",
             "",
             "Input Data Rows:",
         ]

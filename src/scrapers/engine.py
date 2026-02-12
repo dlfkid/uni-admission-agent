@@ -11,13 +11,16 @@ import logging
 import random
 import re
 from pathlib import Path
+from datetime import datetime
 from typing import Dict, List, Optional, Set, cast
 from urllib.parse import urljoin
 
 from crawl4ai import AsyncWebCrawler, BrowserConfig, CrawlerRunConfig, CacheMode, CrawlResult
+from sqlmodel import select
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 from src.agents.cleaner_agent import LLMCleanerAgent, ParsedProgramData
+from src.models.admission import University
 from src.agents.factory import RouterAgent, create_router
 from src.core.environment import ScraperError
 from src.models.scraper_models import (
@@ -515,6 +518,17 @@ class AdmissionScraper:
         # --- Detail layer: parse each page ---
         scout_candidates: List[CrawlPageResult] = []
 
+        # Fetch historical program context for evolution mapping (once per batch)
+        existing_programs_context: Optional[str] = None
+        with db_manager.get_session() as session:
+            univ = session.exec(
+                select(University).where(University.slug == univ_slug)
+            ).first()
+            if univ:
+                program_map = db_manager.get_program_group_map(univ.id)  # type: ignore[arg-type]
+                if program_map:
+                    existing_programs_context = str(program_map)
+
         for page in page_results:
             if not page.markdown:
                 continue
@@ -523,6 +537,7 @@ class AdmissionScraper:
                 parsed: Optional[ParsedProgramData] = cleaner.clean_markdown(
                     markdown=page.markdown,
                     source_url=page.url,
+                    existing_programs=existing_programs_context,
                 )
                 if parsed is None:
                     logger.warning(
@@ -550,15 +565,29 @@ class AdmissionScraper:
                     ]
 
                 if parsed.deadlines:
-                    program_data["deadlines"] = [
-                        d.model_dump(mode="json")
-                        for d in parsed.deadlines
-                    ]
+                    # Sort by date
+                    sorted_deadlines = sorted(
+                        parsed.deadlines,
+                        key=lambda x: x.cutoff_date or datetime.max,
+                    )
+                    program_data["deadlines"] = []
+                    for i, d in enumerate(sorted_deadlines, 1):
+                        d_dict = d.model_dump(mode="json")
+                        d_dict["round"] = i
+                        program_data["deadlines"].append(d_dict)
 
-                program_data["extra_metadata"] = {
+                # Evolution fields
+                if parsed.program_group_code:
+                    program_data["program_group_code"] = parsed.program_group_code
+
+                extra_metadata: Dict[str, object] = {
                     "source_url": page.url,
                     "crawl_depth": current_depth,
                 }
+                if parsed.original_name:
+                    extra_metadata["original_name"] = parsed.original_name
+
+                program_data["extra_metadata"] = extra_metadata
 
                 name_en = program_data.get("name_en")
                 if not name_en:
@@ -577,7 +606,7 @@ class AdmissionScraper:
                 total_imported += 1
                 action = "Inserted" if created else "Updated"
                 logger.info(
-                    f"{action}: {program_data['name_en']} ({year})"
+                    f"{action}: {program_data['name_en']} ({year})",
                 )
 
             except Exception as e:
