@@ -6,6 +6,7 @@ and integrates with RouterAgent/LLMCleanerAgent for structured data extraction.
 Supports dynamic crawl depth with LLM-driven heuristic scouting.
 """
 
+import json
 import asyncio
 import logging
 import random
@@ -23,6 +24,7 @@ from src.agents.cleaner_agent import LLMCleanerAgent, ParsedProgramData
 from src.models.admission import University
 from src.agents.factory import RouterAgent, create_router
 from src.core.environment import ScraperError
+from src.utils.text import generate_program_group_code
 from src.models.scraper_models import (
     CrawlPageResult,
     ExtractedLinks,
@@ -518,17 +520,6 @@ class AdmissionScraper:
         # --- Detail layer: parse each page ---
         scout_candidates: List[CrawlPageResult] = []
 
-        # Fetch historical program context for evolution mapping (once per batch)
-        existing_programs_context: Optional[str] = None
-        with db_manager.get_session() as session:
-            univ = session.exec(
-                select(University).where(University.slug == univ_slug)
-            ).first()
-            if univ:
-                program_map = db_manager.get_program_group_map(univ.id)  # type: ignore[arg-type]
-                if program_map:
-                    existing_programs_context = str(program_map)
-
         for page in page_results:
             if not page.markdown:
                 continue
@@ -537,7 +528,6 @@ class AdmissionScraper:
                 parsed: Optional[ParsedProgramData] = cleaner.clean_markdown(
                     markdown=page.markdown,
                     source_url=page.url,
-                    existing_programs=existing_programs_context,
                 )
                 if parsed is None:
                     logger.warning(
@@ -550,7 +540,7 @@ class AdmissionScraper:
                 # Build program data for DB
                 program_data: Dict[str, object] = {
                     "academic_year": year,
-                    "name_en": _extract_program_name(page.markdown),
+                    "name_en": _extract_program_name(page.markdown), # Re-extract to ensure we use what we passed to DB
                     "name_zh": "",
                 }
 
@@ -576,17 +566,20 @@ class AdmissionScraper:
                         d_dict["round"] = i
                         program_data["deadlines"].append(d_dict)
 
-                # Evolution fields
-                if parsed.program_group_code:
-                    program_data["program_group_code"] = parsed.program_group_code
+                # --- Deterministic program_group_code (local) ---
+                name_en = program_data.get("name_en")
+                if name_en:
+                    code = generate_program_group_code(univ_slug, str(name_en))
+                    program_data["program_group_code"] = code
+                    logger.info(
+                        "[New Program] 检测到新学科: %s，已分配 ID: %s",
+                        name_en, code,
+                    )
 
                 extra_metadata: Dict[str, object] = {
                     "source_url": page.url,
                     "crawl_depth": current_depth,
                 }
-                if parsed.original_name:
-                    extra_metadata["original_name"] = parsed.original_name
-
                 program_data["extra_metadata"] = extra_metadata
 
                 name_en = program_data.get("name_en")
@@ -606,7 +599,7 @@ class AdmissionScraper:
                 total_imported += 1
                 action = "Inserted" if created else "Updated"
                 logger.info(
-                    f"{action}: {program_data['name_en']} ({year})",
+                    f"{action}: {program_data['name_en']} ({year}) [Group: {program_data.get('program_group_code')}]",
                 )
 
             except Exception as e:

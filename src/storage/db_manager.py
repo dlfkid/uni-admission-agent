@@ -1,27 +1,36 @@
 import os
 import logging
+import threading
 from typing import Optional, Tuple, List, Dict
 from datetime import datetime, timezone
 from sqlmodel import create_engine, Session, select, SQLModel, col
 from sqlalchemy_utils import database_exists, create_database
+from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy import func
+from sqlalchemy import inspect as sa_inspect
 from src.models.admission import University, Program
+from src.models.scraper_models import ProgramContext
 from dotenv import load_dotenv
 
 load_dotenv()
 logger = logging.getLogger(__name__)
 
 class DatabaseManager:
-    _instance = None
+    _instance: Optional["DatabaseManager"] = None
+    _lock = threading.Lock()
+    initialized: bool
     
     def __new__(cls):
         if cls._instance is None:
-            cls._instance = super(DatabaseManager, cls).__new__(cls)
-            cls._instance.engine = None
+            with cls._lock:
+                if cls._instance is None:
+                    cls._instance = super(DatabaseManager, cls).__new__(cls)
+                    cls._instance.initialized = False
         return cls._instance
 
     def init_db(self, db_url: Optional[str] = None):
         """Initialize database connection and create tables."""
-        if self.engine:
+        if getattr(self, "engine", None):
             return
 
         if not db_url:
@@ -47,7 +56,7 @@ class DatabaseManager:
             raise
 
     def get_session(self) -> Session:
-        if not self.engine:
+        if not getattr(self, "engine", None):
             self.init_db()
         return Session(self.engine)
 
@@ -194,3 +203,49 @@ class DatabaseManager:
             )
             results = session.exec(statement).all()
             return {name: code for name, code in results if name and code}
+
+    def get_program_contexts(self, university_id: int) -> List[ProgramContext]:
+        """
+        Fetch rich context for all programs with a group code.
+        Returns a list of ProgramContext objects.
+        """
+        
+        with self.get_session() as session:
+            # Fetch most recent record for each group code to get latest metadata
+            # Window function would be ideal, but for simplicity/portability (sqlite), 
+            # we can fetch all and dedup in python or just fetch meaningful ones.
+            # Let's fetch all non-null group codes.
+            statement = select(Program).where(
+                Program.university_id == university_id,
+                Program.program_group_code.is_not(None) # type: ignore
+            )
+            programs = session.exec(statement).all()
+            
+            contexts = []
+            seen_groups = set()
+            
+            # Sort by year desc to prioritize latest info
+            sorted_programs = sorted(programs, key=lambda p: p.academic_year, reverse=True)
+            
+            for p in sorted_programs:
+                if not p.program_group_code: continue
+                
+                # We might want multiple aliases for the same group code if names changed?
+                # User said: "Fetch all history (name_en, group_code)". 
+                # So we should include ALL name variations for the same group code.
+                # But deduplicate if (name_en, group_code) is identical.
+                
+                key = (p.name_en, p.program_group_code)
+                if key in seen_groups:
+                    continue
+                seen_groups.add(key)
+                
+                contexts.append(ProgramContext(
+                    name_en=p.name_en,
+                    program_group_code=p.program_group_code,
+                    faculty=p.faculty,
+                    tuition_amount=float(p.tuition_amount) if p.tuition_amount else None,
+                    currency=p.currency.value if p.currency else None
+                ))
+                
+            return contexts

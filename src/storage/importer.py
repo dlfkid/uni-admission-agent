@@ -1,14 +1,17 @@
 import asyncio
 import logging
+from datetime import datetime
 from pathlib import Path
 from typing import Optional, Dict, List, Any, Tuple
-import pandas as pd
-from src.storage.db_manager import DatabaseManager
-from src.core.parser import DataCleaner
-from src.agents.cleaner_agent import LLMCleanerAgent, ParsedProgramData
-from src.utils.pdf_processor import PDFProcessor
 
-from datetime import datetime
+import pandas as pd
+
+from src.agents.cleaner_agent import LLMCleanerAgent, ParsedProgramData
+from src.core.parser import DataCleaner
+from src.storage.db_manager import DatabaseManager
+from src.utils.pdf_processor import PDFProcessor
+from src.utils.text import generate_program_group_code
+
 logger = logging.getLogger(__name__)
 
 class ExcelImporter:
@@ -21,7 +24,6 @@ class ExcelImporter:
     HEADER_MARKERS = {"专业中文名", "专业英文名", "English Name", "Tuition Fee", "学费"}
     
     # Mapping Excel headers to DB columns
-    # Key can be a substring of the header
     COLUMN_MAP = {
         "专业中文名": "name_zh",
         "专业英文名": "name_en",
@@ -64,24 +66,11 @@ class ExcelImporter:
         total_inserted = 0
         total_updated = 0
         
-        # Fetch existing programs map for evolution context
-        univ = self.db_manager.get_university_by_slug(univ_slug)
-        program_map = {}
-        if univ:
-             # Need to cast or strict check since get_program_group_map expects int
-             # Verified db_manager has get_university_by_slug returning University model which has id
-             program_map = self.db_manager.get_program_group_map(univ.id) # type: ignore
-        
-        # Convert map to context string for LLM (JSON format is usually good/token efficient)
-        import json
-        existing_programs_context = json.dumps(program_map, ensure_ascii=False) if program_map else None
-
         for sheet_name in xls.sheet_names:
             logger.info(f"Processing sheet: {sheet_name}")
             try:
                 inserted, updated = self._process_sheet(
-                    xls, sheet_name, univ_slug, year, 
-                    program_map, existing_programs_context
+                    xls, sheet_name, univ_slug, year
                 )
                 total_inserted += inserted
                 total_updated += updated
@@ -97,10 +86,6 @@ class ExcelImporter:
         logger.info("="*40)
 
     def _import_pdf(self, univ_slug: str, year: int) -> None:
-        """
-        Import admission data from a PDF file.
-        Converts PDF → Markdown → LLMCleanerAgent → DB.
-        """
         if not self.llm_agent:
             logger.error("PDF import requires --llm flag. Aborting.")
             return
@@ -117,10 +102,9 @@ class ExcelImporter:
             f"{result.char_count:,} chars"
         )
 
-        # Pass Markdown content to LLM for structured extraction
         raw_row: Dict[str, str] = {
             "source_file": str(self.file_path),
-            "raw_content": result.markdown[:8000],  # Limit tokens
+            "raw_content": result.markdown[:8000],
         }
 
         try:
@@ -139,7 +123,6 @@ class ExcelImporter:
                     opt.model_dump(mode="json") for opt in parsed.study_options
                 ]
             if parsed.deadlines:
-                # Sort by date
                 sorted_deadlines = sorted(
                     parsed.deadlines, 
                     key=lambda x: x.cutoff_date or datetime.max
@@ -164,90 +147,71 @@ class ExcelImporter:
 
     def _process_sheet(
         self, xls: pd.ExcelFile, sheet_name: str, univ_slug: str, year: int,
-        program_map: Dict[str, str], existing_schema_context: Optional[str]
     ) -> Tuple[int, int]:
         """
         Synchronous wrapper for async processing.
         Returns (inserted_count, updated_count)
         """
         return asyncio.run(self._process_sheet_async(
-            xls, sheet_name, univ_slug, year, program_map, existing_schema_context
+            xls, sheet_name, univ_slug, year
         ))
 
     async def _process_sheet_async(
         self, xls: pd.ExcelFile, sheet_name: str, univ_slug: str, year: int,
-        program_map: Dict[str, str], existing_schema_context: Optional[str]
     ) -> Tuple[int, int]:
         # 1. Read roughly to find header
         try:
-            # Read first 20 rows to scan for header
             df_preview = pd.read_excel(xls, sheet_name=sheet_name, header=None, nrows=20)
             header_idx = self._locate_header_index(df_preview)
-            
+
             if header_idx is None:
                 logger.warning(f"Skipping sheet '{sheet_name}': No recognized header found.")
                 return 0, 0
 
-            logger.info(f"Header found at index {header_idx}")
-
             # 2. Read actual data
             df = pd.read_excel(xls, sheet_name=sheet_name, header=header_idx)
-            
+
             # 3. Initial Parse & Collect Rows
-            all_programs = []
-            rows_needing_llm = []
-            
-            for idx, row in df.iterrows():
+            all_programs: List[Dict[str, Any]] = []
+            rows_needing_llm: List[Dict[str, Any]] = []
+
+            for _idx, row in df.iterrows():
                 program_data = self._parse_row(row)
                 if not program_data:
                     continue
-                
+
                 # Inject academic year and faculty
                 program_data["academic_year"] = year
                 program_data["faculty"] = sheet_name
-                
-                # Check for existing program link (Exact Match)
-                # If name_en exists in map, we can pre-fill program_group_code
-                name_en = program_data.get("name_en")
-                if name_en and name_en in program_map:
-                    program_data["program_group_code"] = program_map[name_en]
-                
-                # Check if LLM is needed
+
+                # --- Deterministic program_group_code (local, 0-latency) ---
+                name_en = program_data.get("name_en", "")
+                code = generate_program_group_code(univ_slug, str(name_en))
+                program_data["program_group_code"] = code
+                logger.info(
+                    "[New Program] 检测到新学科: %s，已分配 ID: %s",
+                    name_en, code,
+                )
+
+                # Check if LLM is needed (tuition / deadlines parsing)
                 needs_llm = self._check_needs_llm(program_data)
-                
-                # Store tuple (program_data, needs_llm_flag)
-                # Actually, strictly separate list references might be tricky if I want to update original dicts.
-                # Since dicts are mutable, I can store them in all_programs and also append specific ones to rows_needing_llm
+
                 all_programs.append(program_data)
                 if needs_llm:
                     rows_needing_llm.append(program_data)
-            
-            logger.info(f"Sheet '{sheet_name}': {len(all_programs)} valid rows. {len(rows_needing_llm)} require LLM cleaning.")
-            
-            # 4. Batch Process Rows Needing LLM
-            if rows_needing_llm:
-                await self._batch_process_llm(rows_needing_llm, existing_schema_context)
-                
-            # 4b. Final Pass: Ensure program_group_code exists for ALL rows
-            # If it wasn't assigned by map (exact match) or LLM (fuzzy match),
-            # generate a default one deterministically.
-            import re
-            def simple_slugify(text: str) -> str:
-                text = text.lower().strip()
-                text = re.sub(r'[^\w\s-]', '', text)
-                text = re.sub(r'[-\s]+', '-', text)
-                return text
 
-            for data in all_programs:
-                if not data.get("program_group_code"):
-                    p_name = data.get("name_en", "unknown")
-                    slug = simple_slugify(p_name)
-                    data["program_group_code"] = f"{univ_slug}-{slug}"
-                
+            logger.info(
+                f"Sheet '{sheet_name}': {len(all_programs)} valid rows. "
+                f"{len(rows_needing_llm)} require LLM cleaning."
+            )
+
+            # 4. Batch Process Rows Needing LLM (field extraction only)
+            if rows_needing_llm:
+                await self._batch_process_llm(rows_needing_llm)
+
             # 5. Upsert All
             inserted_count = 0
             updated_count = 0
-            valid_count = 0
             for program_data in all_programs:
                 try:
                     _, created = self.db_manager.upsert_program(program_data, univ_slug)
@@ -255,16 +219,70 @@ class ExcelImporter:
                         inserted_count += 1
                     else:
                         updated_count += 1
-                    valid_count += 1
                 except Exception as e:
                     logger.error(f"DB Error upserting {program_data.get('name_en')}: {e}")
-            
-            logger.info(f"Imported {valid_count} programs from '{sheet_name}' (New: {inserted_count}, Updated: {updated_count})")
+
             return inserted_count, updated_count
 
         except Exception as e:
             logger.error(f"Error processing sheet '{sheet_name}': {e}")
             return 0, 0
+
+    def _locate_header_index(self, df: pd.DataFrame) -> Optional[int]:
+        for idx, row in df.iterrows():
+            row_values = {str(v).strip() for v in row.values if pd.notna(v)}
+            if len(row_values.intersection(self.HEADER_MARKERS)) > 0:
+                if isinstance(idx, int):
+                    return idx
+        return None
+
+    def _get_mapped_field(self, col_name: str) -> Optional[str]:
+        col_clean = col_name.replace('\n', '')
+        if col_clean in self.COLUMN_MAP:
+            return self.COLUMN_MAP[col_clean]
+        for key, field in self.COLUMN_MAP.items():
+            if key in col_clean:
+                return field
+        return None
+
+    def _parse_row(self, row: pd.Series) -> Optional[Dict[str, Any]]:
+        data: Dict[str, Any] = {
+            "extra_metadata": {}
+        }
+        for col, val in row.items():
+            col_name = str(col).strip()
+            if pd.isna(val) or val == "":
+                continue
+            field_key = self._get_mapped_field(col_name)
+            if field_key:
+                val_str = str(val).strip()
+                data[field_key] = val_str
+            else:
+                data["extra_metadata"][col_name] = val
+        
+        if "name_en" not in data:
+             return None
+
+        if "name_zh" not in data:
+            data["name_zh"] = ""
+            
+        if "tuition_fee_raw" in data:
+            amount, currency = DataCleaner.parse_tuition(data["tuition_fee_raw"])
+            if amount:
+                data["tuition_amount"] = amount
+                data["currency"] = currency
+
+        if "duration_raw" in data:
+            options = DataCleaner.parse_study_options(data["duration_raw"])
+            if options:
+                data["study_options"] = options
+                
+        if "deadline_raw" in data:
+            deadlines = DataCleaner.parse_deadlines(data["deadline_raw"])
+            if deadlines:
+                data["deadlines"] = deadlines
+                
+        return data
 
     def _check_needs_llm(self, data: Dict[str, Any]) -> bool:
         """Check if row needs LLM cleaning."""
@@ -279,9 +297,7 @@ class ExcelImporter:
             return True
         return False
 
-    async def _batch_process_llm(
-        self, rows: List[Dict[str, Any]], existing_programs_context: Optional[str]
-    ):
+    async def _batch_process_llm(self, rows: List[Dict[str, Any]]):
         """
         Process rows in batches of 5 with concurrency limit of 3.
         Updates the dictionaries in-place.
@@ -296,7 +312,6 @@ class ExcelImporter:
         
         async def process_chunk(chunk: List[Dict[str, Any]]):
             if not self.llm_agent:
-                logger.warning("LLM Agent not initialized but batch processing triggered. Skipping.")
                 return
 
             async with sem:
@@ -304,49 +319,42 @@ class ExcelImporter:
                     # Prepare input for LLM (minimize tokens)
                     llm_inputs = []
                     for data in chunk:
-                        inp = {
+                        inp: Dict[str, Any] = {
                             "Course Name": data.get("name_en"),
                             "Tuition Fee": data.get("tuition_fee_raw"),
                             "Duration": data.get("duration_raw"),
-                            "Deadlines": data.get("deadline_raw")
+                            "Deadlines": data.get("deadline_raw"),
                         }
                         llm_inputs.append({k: v for k, v in inp.items() if v})
-                    
+
                     if not llm_inputs:
                         return
 
                     logger.info(f"Processing batch of {len(llm_inputs)} rows...")
-                    # Call Agent (Blocking call wrapped in thread execution if needed, 
-                    # but tenacity sleep is blocking? No, tenacity async is better but agent is sync.
-                    # We should run sync agent method in executor to avoid blocking loop.)
-                    
-                    # NOTE: clean_batch is synchronous. We must run it in executor.
+
                     loop = asyncio.get_event_loop()
                     results = await loop.run_in_executor(
-                        None, 
-                        self.llm_agent.clean_batch, 
+                        None,
+                        self.llm_agent.clean_batch,
                         llm_inputs,
-                        existing_programs_context
                     )
-                    
-                    # Merge results back
+
+                    # Merge results back (field extraction only)
                     if results and len(results) == len(chunk):
                         for data, res in zip(chunk, results):
-                            # Tuition
                             if "tuition_amount" not in data and res.tuition:
                                 data["tuition_amount"] = res.tuition.amount
                                 data["currency"] = res.tuition.currency
-                            
-                            # Study Options
+
                             if "study_options" not in data and res.study_options:
-                                data["study_options"] = [opt.model_dump(mode='json') for opt in res.study_options]
-                            
-                            # Deadlines
+                                data["study_options"] = [
+                                    opt.model_dump(mode="json") for opt in res.study_options
+                                ]
+
                             if "deadlines" not in data and res.deadlines:
-                                # Sort by date
                                 sorted_deadlines = sorted(
-                                    res.deadlines, 
-                                    key=lambda x: x.cutoff_date or datetime.max
+                                    res.deadlines,
+                                    key=lambda x: x.cutoff_date or datetime.max,
                                 )
                                 data["deadlines"] = []
                                 for i, d in enumerate(sorted_deadlines, 1):
@@ -354,106 +362,8 @@ class ExcelImporter:
                                     d_dict["round"] = i
                                     data["deadlines"].append(d_dict)
 
-                            # Program Evolution (LLM detected)
-                            if res.program_group_code:
-                                data["program_group_code"] = res.program_group_code
-                            if res.original_name:
-                                if "extra_metadata" not in data:
-                                    data["extra_metadata"] = {}
-                                data["extra_metadata"]["original_name"] = res.original_name
-                    
                 except Exception as e:
                     logger.error(f"Batch processing failed: {e}")
 
         # Run all chunks
         await asyncio.gather(*(process_chunk(chunk) for chunk in chunks))
-
-    def _locate_header_index(self, df: pd.DataFrame) -> Optional[int]:
-        """
-        Finds the row index that contains recognizable header columns.
-        """
-        for idx, row in df.iterrows():
-            # Convert row values to string set for matching
-            row_values = {str(v).strip() for v in row.values if pd.notna(v)}
-            # If intersection with markers is substantial (>= 1 marker found)
-            if len(row_values.intersection(self.HEADER_MARKERS)) > 0:
-                if isinstance(idx, int):
-                    return idx
-        return None
-
-    def _get_mapped_field(self, col_name: str) -> Optional[str]:
-        """Map excel column name to db field using exact or substring match."""
-        # Clean column name (remove newlines etc)
-        col_clean = col_name.replace('\n', '')
-        
-        # 1. Exact match
-        if col_clean in self.COLUMN_MAP:
-            return self.COLUMN_MAP[col_clean]
-            
-        # 2. Substring match
-        for key, field in self.COLUMN_MAP.items():
-            if key in col_clean:
-                return field
-        return None
-
-    def _parse_row(self, row: pd.Series) -> Optional[Dict[str, Any]]:
-        """
-        Transforms a DataFrame row into a dictionary matching the Program model.
-        Extras go into 'extra_metadata'.
-        """
-        data: Dict[str, Any] = {
-            "extra_metadata": {}
-        }
-        
-        has_primary_key = False
-        
-        for col, val in row.items():
-            # Clean column name and value
-            col_name = str(col).strip()
-            
-            if pd.isna(val) or val == "":
-                continue
-            
-            # Map field
-            field_key = self._get_mapped_field(col_name)
-            
-            if field_key:
-                val_str = str(val).strip()
-                data[field_key] = val_str
-                if field_key == "name_en":
-                    has_primary_key = True
-            else:
-                # Extra Metadata (JSONB)
-                data["extra_metadata"][col_name] = val
-        
-        if "name_en" not in data:
-             return None
-
-        # Ensure required fields defaults
-        if "name_zh" not in data:
-            data["name_zh"] = ""
-            
-        # --- Post-processing / Cleaning ---
-        # 1. Tuition
-        if "tuition_fee_raw" in data:
-            amount, currency = DataCleaner.parse_tuition(data["tuition_fee_raw"])
-            if amount:
-                data["tuition_amount"] = amount
-                data["currency"] = currency
-
-        # 2. Duration / Study Options
-        if "duration_raw" in data:
-            options = DataCleaner.parse_study_options(data["duration_raw"])
-            if options:
-                data["study_options"] = options
-                
-        # 3. Deadlines
-        if "deadline_raw" in data:
-            deadlines = DataCleaner.parse_deadlines(data["deadline_raw"])
-            if deadlines:
-                data["deadlines"] = deadlines
-                
-        # 4. LLM Fallback Check (Logic moved to batch processing)
-        # Just return the data and let the batch processor decide if LLM is needed
-            
-        return data

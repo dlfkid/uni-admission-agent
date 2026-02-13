@@ -71,3 +71,17 @@ class PageTypeResult(BaseModel):
     confidence: float = Field(..., ge=0.0, le=1.0, description="Confidence score 0.0-1.0")
     reasoning: str = Field(..., max_length=100, description="Brief explanation")
 
+
+class ProgramContext(BaseModel):
+    """Historical context for a program to aid matching."""
+    name_en: str
+    program_group_code: str
+    faculty: Optional[str] = None
+    tuition_amount: Optional[float] = None
+    currency: Optional[str] = None
+    frequency: Optional[str] = None # e.g. "per year" - inferred? simplified for now.
+    
+    def normalize_name(self) -> str:
+        import re
+        s = self.name_en.lower()
+        return re.sub(r'[^a-z0-9]', '', s)
