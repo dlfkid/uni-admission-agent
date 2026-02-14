@@ -11,99 +11,106 @@ This project automates the collection of admission criteria from world-renowned 
 - **Automation:** Playwright with Stealth Plugin
 - **Extraction:** Crawl4AI / Firecrawl (Markdown-first approach)
 - **Validation:** Pydantic (Strongly typed schemas)
-- **Storage:** SQLite
+- **Storage:** PostgreSQL (via SQLModel)
+- **API:** FastAPI + MCP Server
+- **CLI:** Typer
+
+## 📐 Architecture
+
+```
+Entry Points                    Services Layer              Infrastructure
+┌──────────────┐
+│  CLI (Typer)  │──┐
+└──────────────┘  │    ┌──────────────────┐    ┌───────────────┐
+┌──────────────┐  ├──→ │ src/services/    │──→ │ src/scrapers/ │
+│ FastAPI REST │──┤    │   crawler.py     │    │ src/agents/   │
+└──────────────┘  │    └──────────────────┘    │ src/storage/  │
+┌──────────────┐  │                            │ src/core/     │
+│  MCP Server  │──┘                            └───────────────┘
+└──────────────┘
+┌──────────────┐
+│Chrome Plugin │──→ POST /crawl (REST)
+└──────────────┘
+```
 
 ## 🚀 Getting Started
 1. `pyenv local 3.12.0`
-2. `python -m venv venv && source venv/bin/activate`
-3. `pip install -e .`
-4. Copy `.env.example` to `.env` and add your API keys.
-4. Copy `.env.example` to `.env` and add your API keys.
-
+2. `uv sync`
+3. Copy `.env.example` to `.env` and add your API keys.
 
 ## 📖 Usage
-Run the main CLI to interact with the engine:
+
+### CLI Commands
 
 ```bash
-# General environment check
-uv run src/main.py check
+# Environment check
+uv run src/cmd/cli.py check
 
-# Start the crawling task (Placeholder for now)
-uv run src/main.py run
-
-# Import Excel data (Strict Regex only by default)
-# Arguments:
-#   --name: University slug (lowercase, numbers, hyphens only, e.g., hku)
+# Import Excel data
+#   --name: University slug (a-z0-9-)
 #   --year: Academic year (e.g., 2026)
-#   --file: Path to the XLSX file
-#   --llm:  Enable LLM analysis for missing data (optional)
-# Example:
-uv run src/main.py import --name hku --year 2026 --file example/hku-26-27.xlsx
+#   --file: Path to XLSX file
+#   --llm:  Enable LLM analysis (optional)
+uv run src/cmd/cli.py import --name hku --year 2026 --file example/hku-26-27.xlsx
 
-# Import Excel data with LLM Fallback
-uv run src/main.py import --name hku --year 2026 --file example/hku-26-27.xlsx --llm
+# Import with LLM fallback
+uv run src/cmd/cli.py import --name hku --year 2026 --file example/hku-26-27.xlsx --llm
 
 # Export data to Excel
-# Arguments:
 #   --name:   University slug
 #   --output: Output file path
-#   --year:   Academic year (optional, defaults to all years)
-# Example:
-uv run src/main.py export --name hku --output hku_export.xlsx --year 2026
+#   --year:   Academic year (optional)
+uv run src/cmd/cli.py export --name hku --output hku_export.xlsx --year 2026
 
 # Crawl a URL and import admission data
-# Arguments:
-#   --name:      University slug (lowercase, numbers, hyphens only)
-#   --year:      Academic year (e.g., 2026)
-#   --url:       Starting URL to crawl
-#   --continue:  Extra depth for LLM-driven scouting (default: 0)
-# Examples:
-uv run src/main.py crawl --name hku --year 2026 --url https://admissions.hku.hk/programmes
-uv run src/main.py crawl --name hku --year 2026 --url https://admissions.hku.hk/programmes --continue 2
+#   --name:      University slug
+#   --year:      Academic year
+#   --url:       Starting URL
+#   --continue:  Extra depth for LLM scouting (default: 0)
+uv run src/cmd/cli.py crawl --name hku --year 2026 --url https://admissions.hku.hk/programmes
+uv run src/cmd/cli.py crawl --name hku --year 2026 --url https://admissions.hku.hk/programmes --continue 2
 
-# Check database status
-uv run src/main.py status
+# Database status
+uv run src/cmd/cli.py status
+
+# Start API + MCP server (default: 0.0.0.0:8910)
+uv run src/cmd/cli.py serve
+uv run src/cmd/cli.py serve --port 9000
 ```
+
+### REST API
+
+With the server running (`uv run src/cmd/cli.py serve`):
+
+```bash
+# Submit a crawl job (returns task_id)
+curl -X POST http://localhost:8910/crawl \
+  -H "Content-Type: application/json" \
+  -d '{"url": "https://admissions.hku.hk/programmes", "univ_slug": "hku", "year": 2026}'
+
+# Check task status
+curl http://localhost:8910/tasks/{task_id}
+
+# Database statistics
+curl http://localhost:8910/status
+
+# Query programs
+curl "http://localhost:8910/programs?univ_slug=hku&year=2026"
+```
+
+### MCP Server
+
+The MCP server is mounted at `/mcp` and exposes two tools:
+- **`crawl`** — Crawl a URL and import admission data
+- **`db_query`** — Query programs from the database
+
+### Chrome Extension
+
+1. `cd extension && npm install && npm run build`
+2. Open `chrome://extensions` → Enable Developer Mode → Load unpacked → select `extension/dist`
+3. Navigate to a university admissions page, click the extension icon, enter slug + year, and click **Send to Agent**
 
 ## 🤖 Agentic Principles
 - **Stealth First:** Never trigger bot detection; emulate human behavior.
 - **Markdown-Centric:** Convert HTML to Markdown before LLM processing to save tokens.
 - **Verified Output:** All data must pass Pydantic validation before being committed to the database.
-
-## Action trail
-```mermaid
-graph TD
-    A[开始任务: Task Runner] --> B{本地状态检查}
-    B -->|首次运行| C[发现阶段: Discovery Agent]
-    B -->|增量更新| D[同步阶段: Sync Monitor]
-
-    subgraph "Phase 1: 智能侦察 (Reconnaissance)"
-        C --> C1[访问大学官网主页]
-        C1 --> C2[Gemini 识别 Admission/Requirement 深度链接]
-        C2 --> C3[构建待爬取 URL 队列]
-    end
-
-    subgraph "Phase 2: 隐身抓取 (Stealth Crawling)"
-        D & C3 --> E[Playwright Stealth 模拟访问]
-        E --> E1[执行真人模拟操作: 滚动/点击]
-        E1 --> E2[HTML 内容捕获]
-        E2 --> E3[Crawl4AI 转化为 Markdown]
-    end
-
-    subgraph "Phase 3: 语义提取 (Intelligence Extraction)"
-        E3 --> F[计算页面 Hash]
-        F -->|Hash 没变| G[跳过处理: 节省 Token]
-        F -->|Hash 已变| H[Gemini Flash 解析 Markdown]
-        H --> I[按照 Pydantic Schema 生成 JSON]
-    end
-
-    subgraph "Phase 4: 校验与存储 (Persistence)"
-        I --> J{Pydantic 自动验证}
-        J -->|失败| K[标记异常: 人工干预/重试]
-        J -->|通过| L[写入 SQLite 数据库]
-        L --> M[更新版本快照]
-    end
-
-    M --> N[生成更新报告]
-    N --> O[结束]
-```

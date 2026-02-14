@@ -35,8 +35,11 @@ dependencies = [
     "google-genai>=1.62.0",
     "openai>=2.18.0",
     "pymupdf4llm>=0.2.9",
-    "pymupdf4llm>=0.2.9",
     "volcengine-python-sdk[ark]>=5.0.9",
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.34.0",
+    "typer>=0.15.0",
+    "mcp[cli]>=1.9.0",
 ]
 
 [project.optional-dependencies]
@@ -47,7 +50,7 @@ dev = [
 ]
 
 [project.scripts]
-uni-admission = "src.main:main"
+uni-admission = "src.cmd.cli:app"
 
 [build-system]
 requires = ["hatchling"]

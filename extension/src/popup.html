@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>UniAdmission Agent</title>
+    <link rel="stylesheet" href="./popup.css" />
+</head>
+
+<body>
+    <div class="container">
+        <header>
+            <h1>🎓 UniAdmission</h1>
+            <button id="config-btn" class="icon-btn" title="Configure .env">⚙️</button>
+        </header>
+
+        <!-- INPUT FORM MODE -->
+        <div id="input-section">
+            <div class="field">
+                <label for="slug">University Slug</label>
+                <input id="slug" type="text" placeholder="e.g. hku" />
+            </div>
+
+            <div class="field">
+                <label for="year">Academic Year</label>
+                <input id="year" type="number" placeholder="e.g. 2026" value="2026" />
+            </div>
+
+            <div class="field">
+                <label>Current URL</label>
+                <p id="current-url" class="url-display">Loading…</p>
+            </div>
+
+            <button id="send-btn" type="button" class="primary-btn">Start Crawl</button>
+        </div>
+
+        <!-- MONITOR MODE -->
+        <div id="monitor-section" class="hidden">
+            <div class="monitor-header">
+                <h3>Crawling in Progress...</h3>
+                <span id="task-id-display" class="task-badge"></span>
+            </div>
+
+            <div class="progress-container">
+                <p id="progress-text">Initializing...</p>
+                <div class="progress-bar">
+                    <div id="progress-fill"></div>
+                </div>
+            </div>
+
+            <div class="logs-container">
+                <pre id="logs-console"></pre>
+            </div>
+
+            <button id="stop-btn" type="button" class="danger-btn">Stop Task</button>
+        </div>
+
+        <div id="status" class="status hidden"></div>
+    </div>
+
+    <!-- CONFIG MODAL -->
+    <div id="config-modal" class="modal hidden">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>Configuration</h2>
+                <button id="close-config-btn" class="close-btn">&times;</button>
+            </div>
+
+            <div class="config-body">
+                <div class="field">
+                    <label>Database URL</label>
+                    <input id="db-url-input" type="text" placeholder="postgresql://..." />
+                </div>
+
+                <div class="field">
+                    <label>LLM Priority (Drag to reorder)</label>
+                    <ul id="llm-list">
+                        <!-- Items injected by TS -->
+                    </ul>
+                </div>
+            </div>
+
+            <div class="modal-actions">
+                <button id="save-config-btn" class="primary-btn">Save Changes</button>
+            </div>
+        </div>
+    </div>
+
+    <script type="module" src="./popup.ts"></script>
+</body>
+
+</html>
