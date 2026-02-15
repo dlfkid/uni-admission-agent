@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import List, Optional, Dict
 from io import StringIO
 
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Query, Body
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import find_dotenv, dotenv_values
@@ -187,6 +188,16 @@ def _update_env_file_structured(config: StructuredConfig) -> None:
 #  FastAPI application
 # ---------------------------------------------------------------------------
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Lifespan context manager for database initialization."""
+    try:
+        DatabaseManager().init_db()
+        logger.info("Database initialised")
+    except Exception as e:
+        logger.warning("Database init warning: %s", e)
+    yield
+
 app = FastAPI(
     title="UniAdmission Agent API",
     description=(
@@ -194,6 +205,7 @@ app = FastAPI(
         "importing data, and querying program information."
     ),
     version="0.3.0",
+    lifespan=lifespan,
 )
 
 # CORS — allow Chrome extension and local dev tools
@@ -206,21 +218,6 @@ app.add_middleware(
 )
 
 task_manager = TaskManager()
-
-
-# ---------------------------------------------------------------------------
-#  Lifecycle
-# ---------------------------------------------------------------------------
-
-
-@app.on_event("startup")
-async def _startup() -> None:
-    """Initialise database on server startup."""
-    try:
-        DatabaseManager().init_db()
-        logger.info("Database initialised")
-    except Exception as e:
-        logger.warning("Database init warning: %s", e)
 
 
 # ---------------------------------------------------------------------------

@@ -5,6 +5,8 @@ from src.models.admission import Program, University
 from src.storage.db_manager import DatabaseManager
 from sqlalchemy_utils import database_exists, create_database, drop_database
 
+pytestmark = pytest.mark.integration
+
 @pytest.fixture(name="db_manager")
 def fixture_db_manager():
     # Force reset singleton to ensure we can init with test URL

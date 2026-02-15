@@ -11,11 +11,17 @@ if horizontal scaling is needed.
 
 import asyncio
 import logging
+import time
 import uuid
 from enum import Enum
 from typing import Optional, Dict, Any, List
 
 logger = logging.getLogger(__name__)
+
+# ── Eviction tunables ──────────────────────────────────────────────────
+MAX_TASKS: int = 100
+EVICTION_TTL_SECONDS: int = 3600  # 1 hour
+MAX_LOGS_PER_TASK: int = 500
 
 
 class TaskState(str, Enum):
@@ -30,7 +36,11 @@ class TaskState(str, Enum):
 class TaskInfo:
     """Mutable state container for a single task."""
 
-    __slots__ = ("task_id", "state", "progress", "result", "error", "logs", "params", "tokens_used")
+    __slots__ = (
+        "task_id", "state", "progress", "result", "error",
+        "logs", "params", "tokens_used",
+        "created_at", "completed_at",
+    )
 
     def __init__(self, task_id: str) -> None:
         self.task_id: str = task_id
@@ -38,10 +48,11 @@ class TaskInfo:
         self.progress: Optional[str] = None
         self.result: Optional[Dict[str, Any]] = None
         self.error: Optional[str] = None
-        self.error: Optional[str] = None
         self.logs: List[str] = []
         self.params: Dict[str, Any] = {}
         self.tokens_used: int = 0
+        self.created_at: float = time.monotonic()
+        self.completed_at: Optional[float] = None
 
     def to_dict(self) -> Dict[str, Any]:
         """Serialise for API responses."""
@@ -51,7 +62,6 @@ class TaskInfo:
             "progress": self.progress,
             "result": self.result,
             "error": self.error,
-            "logs": self.logs,
             "logs": self.logs,
             "params": self.params,
             "tokens_used": self.tokens_used,
@@ -89,12 +99,12 @@ class TaskManager:
             RuntimeError: If another task is already RUNNING or PENDING.
         """
         if self._active_task_id:
-            # Check if it's actually done but not cleaned up?
-            # No, we rely on update_task to clear _active_task_id.
-            # But let's be safe: if state is DONE/FAILED, allow new one.
             active_info = self._task_store.get(self._active_task_id)
             if active_info and active_info.state in (TaskState.RUNNING, TaskState.PENDING):
                 raise RuntimeError(f"Task {self._active_task_id} is already running")
+
+        # Evict stale completed tasks before creating a new one
+        self._evict_stale()
 
         task_id = uuid.uuid4().hex[:12]
         self._task_store[task_id] = TaskInfo(task_id)
@@ -132,10 +142,13 @@ class TaskManager:
         return False
 
     def add_log(self, task_id: str, message: str) -> None:
-        """Append a log message to the task."""
+        """Append a log message to the task (capped at MAX_LOGS_PER_TASK)."""
         info = self._task_store.get(task_id)
         if info:
             info.logs.append(message)
+            if len(info.logs) > MAX_LOGS_PER_TASK:
+                # FIFO: discard oldest entries
+                info.logs = info.logs[-MAX_LOGS_PER_TASK:]
 
     def update_task(
         self,
@@ -155,9 +168,11 @@ class TaskManager:
 
         if state is not None:
             info.state = state
-            # If terminal state, clear active flag
-            if state in (TaskState.DONE, TaskState.FAILED) and self._active_task_id == task_id:
-                self._active_task_id = None
+            # If terminal state, clear active flag and record completion time
+            if state in (TaskState.DONE, TaskState.FAILED):
+                info.completed_at = time.monotonic()
+                if self._active_task_id == task_id:
+                    self._active_task_id = None
                 # Cleanup task object reference
                 self._task_objects.pop(task_id, None)
 
@@ -169,3 +184,38 @@ class TaskManager:
             info.error = error
         if tokens_used is not None:
             info.tokens_used = tokens_used
+
+    # ── Eviction ───────────────────────────────────────────────────────
+
+    def _evict_stale(self) -> None:
+        """Remove completed/failed tasks that exceed TTL or max-size limits."""
+        now = time.monotonic()
+        terminal = (TaskState.DONE, TaskState.FAILED)
+
+        # 1. TTL-based eviction
+        expired = [
+            tid for tid, info in self._task_store.items()
+            if info.state in terminal
+            and info.completed_at is not None
+            and (now - info.completed_at) > EVICTION_TTL_SECONDS
+        ]
+        for tid in expired:
+            del self._task_store[tid]
+        if expired:
+            logger.info("Evicted %d stale tasks (TTL)", len(expired))
+
+        # 2. Max-size eviction (oldest completed first)
+        if len(self._task_store) > MAX_TASKS:
+            completed = sorted(
+                (
+                    (tid, info)
+                    for tid, info in self._task_store.items()
+                    if info.state in terminal
+                ),
+                key=lambda x: x[1].created_at,
+            )
+            to_remove = len(self._task_store) - MAX_TASKS
+            for tid, _ in completed[:to_remove]:
+                del self._task_store[tid]
+            if to_remove > 0:
+                logger.info("Evicted %d tasks (max-size)", min(to_remove, len(completed)))

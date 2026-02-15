@@ -3,6 +3,8 @@ from unittest.mock import MagicMock, patch
 from src.storage.db_manager import DatabaseManager
 from src.models.admission import University, Program
 
+pytestmark = pytest.mark.integration
+
 @pytest.fixture
 def mock_db_manager():
     # Helper to mock DB session interactions

@@ -11,11 +11,15 @@ sys.path.append(str(PROJECT_ROOT))
 # Load environment variables
 load_dotenv()
 
+import pytest
+
 from src.agents.cleaner_agent import LLMCleanerAgent
 from src.core.token_tracker import tracker
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+pytestmark = pytest.mark.integration
 
 def test_agent():
     # Example Row Data (Complex)

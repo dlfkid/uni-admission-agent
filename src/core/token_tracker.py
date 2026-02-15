@@ -131,6 +131,11 @@ class TokenTracker:
         summary = self.get_summary()
         logger.debug(summary)
 
+    def reset(self) -> None:
+        """Clear all accumulated usage data (thread-safe)."""
+        with self._data_lock:
+            self._usage.clear()
+
 
 # Global singleton instance
 tracker = TokenTracker()

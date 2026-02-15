@@ -1,0 +1,158 @@
+============================= test session starts ==============================
+platform darwin -- Python 3.12.12, pytest-9.0.2, pluggy-1.6.0 -- /Users/rayne.deng/Documents/seal/uni-admission-agent/.venv/bin/python3
+cachedir: .pytest_cache
+rootdir: /Users/rayne.deng/Documents/seal/uni-admission-agent
+configfile: pyproject.toml
+testpaths: tests
+plugins: anyio-4.12.1
+collecting ... collected 121 items / 6 deselected / 115 selected
+
+tests/test_deadline_refactor.py::test_parse_deadlines_regex_sorting PASSED [  0%]
+tests/test_deadline_refactor.py::test_parsed_deadline_model_sorting_logic PASSED [  1%]
+tests/test_matcher.py::test_exact_match PASSED                           [  2%]
+tests/test_matcher.py::test_normalized_match PASSED                      [  3%]
+tests/test_matcher.py::test_slow_path_ranking PASSED                     [  4%]
+tests/test_matcher.py::test_faculty_boost PASSED                         [  5%]
+tests/test_matcher.py::test_tuition_boost PASSED                         [  6%]
+tests/test_paths.py::test_is_frozen_false PASSED                         [  6%]
+tests/test_paths.py::test_is_frozen_true PASSED                          [  7%]
+tests/test_paths.py::test_get_bundle_dir_dev PASSED                      [  8%]
+tests/test_paths.py::test_get_bundle_dir_frozen PASSED                   [  9%]
+tests/test_paths.py::test_get_data_dir_dev PASSED                        [ 10%]
+tests/test_paths.py::test_get_data_dir_frozen PASSED                     [ 11%]
+tests/test_paths.py::test_get_prompts_dir PASSED                         [ 12%]
+tests/test_paths.py::test_configure_playwright_path_not_frozen PASSED    [ 13%]
+tests/test_paths.py::test_configure_playwright_path_frozen_macos PASSED  [ 13%]
+tests/test_paths.py::test_configure_playwright_path_respects_existing_env PASSED [ 14%]
+tests/test_scrapers/test_engine_helpers.py::test_split_short_text PASSED [ 15%]
+tests/test_scrapers/test_engine_helpers.py::test_split_exact_boundary PASSED [ 16%]
+tests/test_scrapers/test_engine_helpers.py::test_split_on_paragraph PASSED [ 17%]
+tests/test_scrapers/test_engine_helpers.py::test_split_hard_fallback PASSED [ 18%]
+tests/test_scrapers/test_engine_helpers.py::test_split_empty PASSED      [ 19%]
+tests/test_scrapers/test_engine_helpers.py::test_extract_h1 PASSED       [ 20%]
+tests/test_scrapers/test_engine_helpers.py::test_extract_h2 PASSED       [ 20%]
+tests/test_scrapers/test_engine_helpers.py::test_extract_prefers_h1 PASSED [ 21%]
+tests/test_scrapers/test_engine_helpers.py::test_extract_no_heading PASSED [ 22%]
+tests/test_scrapers/test_engine_helpers.py::test_extract_links_markdown PASSED [ 23%]
+tests/test_scrapers/test_engine_helpers.py::test_extract_links_raw_urls PASSED [ 24%]
+tests/test_scrapers/test_engine_helpers.py::test_extract_links_filters_assets PASSED [ 25%]
+tests/test_scrapers/test_engine_helpers.py::test_extract_links_filters_login PASSED [ 26%]
+tests/test_scrapers/test_engine_helpers.py::test_extract_links_excludes_base PASSED [ 26%]
+tests/test_scrapers/test_engine_helpers.py::test_extract_links_skips_anchors_and_mailto PASSED [ 27%]
+tests/test_scrapers/test_engine_helpers.py::test_detect_detail_by_content PASSED [ 28%]
+tests/test_scrapers/test_engine_helpers.py::test_detect_index_by_links PASSED [ 29%]
+tests/test_scrapers/test_engine_helpers.py::test_detect_detail_few_links_no_signals PASSED [ 30%]
+tests/test_scrapers/test_engine_helpers.py::test_detect_detail_signals_override_links PASSED [ 31%]
+tests/test_scrapers/test_parser.py::test_parse_tuition[HK$ 350,000-expected_amount0-HKD] PASSED [ 32%]
+tests/test_scrapers/test_parser.py::test_parse_tuition[HKD 100000-expected_amount1-HKD] PASSED [ 33%]
+tests/test_scrapers/test_parser.py::test_parse_tuition[US$ 50,000-expected_amount2-USD] PASSED [ 33%]
+tests/test_scrapers/test_parser.py::test_parse_tuition[USD 25,000-expected_amount3-USD] PASSED [ 34%]
+tests/test_scrapers/test_parser.py::test_parse_tuition[RMB 200,000-expected_amount4-CNY] PASSED [ 35%]
+tests/test_scrapers/test_parser.py::test_parse_tuition[CNY 180000-expected_amount5-CNY] PASSED [ 36%]
+tests/test_scrapers/test_parser.py::test_parse_tuition[\xa3 9,250-expected_amount6-GBP] PASSED [ 37%]
+tests/test_scrapers/test_parser.py::test_parse_tuition[GBP 15,000-expected_amount7-GBP] PASSED [ 38%]
+tests/test_scrapers/test_parser.py::test_parse_tuition_none PASSED       [ 39%]
+tests/test_scrapers/test_parser.py::test_parse_tuition_empty PASSED      [ 40%]
+tests/test_scrapers/test_parser.py::test_parse_tuition_no_match PASSED   [ 40%]
+tests/test_scrapers/test_parser.py::test_parse_study_options[Full-time 1 year-FullTime-12] PASSED [ 41%]
+tests/test_scrapers/test_parser.py::test_parse_study_options[Part-time 2 years-PartTime-24] PASSED [ 42%]
+tests/test_scrapers/test_parser.py::test_parse_study_options[Full time 1.5 year-FullTime-18] PASSED [ 43%]
+tests/test_scrapers/test_parser.py::test_parse_study_options[\u5168\u65e5\u5236 1 \u5e74-FullTime-12] PASSED [ 44%]
+tests/test_scrapers/test_parser.py::test_parse_study_options[\u517c\u8bfb\u5236 24 \u4e2a\u6708-PartTime-24] PASSED [ 45%]
+tests/test_scrapers/test_parser.py::test_parse_study_options[6 months-Unknown-6] PASSED [ 46%]
+tests/test_scrapers/test_parser.py::test_parse_study_options_none PASSED [ 46%]
+tests/test_scrapers/test_parser.py::test_parse_study_options_empty PASSED [ 47%]
+tests/test_scrapers/test_parser.py::test_parse_study_options_no_duration PASSED [ 48%]
+tests/test_scrapers/test_parser.py::test_parse_deadlines_multiple PASSED [ 49%]
+tests/test_scrapers/test_parser.py::test_parse_deadlines_single PASSED   [ 50%]
+tests/test_scrapers/test_parser.py::test_parse_deadlines_none PASSED     [ 51%]
+tests/test_scrapers/test_parser.py::test_parse_deadlines_empty PASSED    [ 52%]
+tests/test_scrapers/test_parser.py::test_parse_deadlines_unparseable PASSED [ 53%]
+tests/test_server_config.py::test_parse_empty_config PASSED              [ 53%]
+tests/test_server_config.py::test_parse_full_config PASSED               [ 54%]
+tests/test_server_config.py::test_parse_config_with_comments PASSED      [ 55%]
+tests/test_server_config.py::test_update_preserves_comments PASSED       [ 56%]
+tests/test_server_config.py::test_update_adds_new_keys PASSED            [ 57%]
+tests/test_server_config.py::test_update_creates_backup PASSED           [ 58%]
+tests/test_task_manager.py::test_task_info_defaults PASSED               [ 59%]
+tests/test_task_manager.py::test_task_info_to_dict PASSED                [ 60%]
+tests/test_task_manager.py::test_create_task PASSED                      [ 60%]
+tests/test_task_manager.py::test_create_task_conflict PASSED             [ 61%]
+tests/test_task_manager.py::test_create_task_after_completion PASSED     [ 62%]
+tests/test_task_manager.py::test_update_task_state_transitions PASSED    [ 63%]
+tests/test_task_manager.py::test_update_task_unknown_id PASSED           [ 64%]
+tests/test_task_manager.py::test_update_task_clears_active_on_failure PASSED [ 65%]
+tests/test_task_manager.py::test_cancel_task_no_task_object PASSED       [ 66%]
+tests/test_task_manager.py::test_get_active_task PASSED                  [ 66%]
+tests/test_task_manager.py::test_get_active_task_returns_none_after_done PASSED [ 67%]
+tests/test_task_manager.py::test_add_log PASSED                          [ 68%]
+tests/test_task_manager.py::test_add_log_cap PASSED                      [ 69%]
+tests/test_task_manager.py::test_add_log_nonexistent_task PASSED         [ 70%]
+tests/test_task_manager.py::test_eviction_by_ttl PASSED                  [ 71%]
+tests/test_task_manager.py::test_eviction_by_max_size PASSED             [ 72%]
+tests/test_task_manager.py::test_eviction_preserves_running_tasks PASSED [ 73%]
+tests/test_task_manager.py::test_get_task_not_found PASSED               [ 73%]
+tests/test_text.py::test_normalize_program_name[Master of Science (Business Analytics)-mastersciencebusinessanalytics] PASSED [ 74%]
+tests/test_text.py::test_normalize_program_name[Bachelor of Arts in Design-bachelorartsdesign] PASSED [ 75%]
+tests/test_text.py::test_normalize_program_name[MSc in Computer Science-msccomputerscience] PASSED [ 76%]
+tests/test_text.py::test_normalize_program_name[Master of Science (Artificial Intelligence)-masterscienceartificialintelligence] PASSED [ 77%]
+tests/test_text.py::test_normalize_program_name[MBA-mba] PASSED          [ 78%]
+tests/test_text.py::test_normalize_program_name[PhD with Finance-phdfinance] PASSED [ 79%]
+tests/test_text.py::test_normalize_program_name[Master & PhD-masterphd] PASSED [ 80%]
+tests/test_text.py::test_normalize_program_name[   Spaced   Out   -spacedout] PASSED [ 80%]
+tests/test_text.py::test_normalize_program_name[The Master of The Arts-masterarts] PASSED [ 81%]
+tests/test_text.py::test_normalize_program_name[MA in Translation & Interpretation-matranslationinterpretation] PASSED [ 82%]
+tests/test_text.py::test_normalize_empty PASSED                          [ 83%]
+tests/test_text.py::test_normalize_all_stopwords PASSED                  [ 84%]
+tests/test_text.py::test_generate_program_group_code[hku-Master of Finance-hku#masterfinance] PASSED [ 85%]
+tests/test_text.py::test_generate_program_group_code[nus-MSc in Computer Science-nus#msccomputerscience] PASSED [ 86%]
+tests/test_text.py::test_generate_program_group_code[cuhk-MBA-cuhk#mba] PASSED [ 86%]
+tests/test_text.py::test_generate_program_group_code[hku--hku#unknown] PASSED [ 87%]
+tests/test_text.py::test_deterministic_idempotency PASSED                [ 88%]
+tests/test_token_tracker.py::test_model_usage_defaults PASSED            [ 89%]
+tests/test_token_tracker.py::test_model_usage_total PASSED               [ 90%]
+tests/test_token_tracker.py::test_model_usage_cost_known_model PASSED    [ 91%]
+tests/test_token_tracker.py::test_model_usage_cost_unknown_model PASSED  [ 92%]
+tests/test_token_tracker.py::test_track_usage PASSED                     [ 93%]
+tests/test_token_tracker.py::test_track_usage_accumulates PASSED         [ 93%]
+tests/test_token_tracker.py::test_track_usage_multiple_models PASSED     [ 94%]
+tests/test_token_tracker.py::test_track_usage_none_model PASSED          [ 95%]
+tests/test_token_tracker.py::test_get_summary_empty PASSED               [ 96%]
+tests/test_token_tracker.py::test_get_summary_with_data PASSED           [ 97%]
+tests/test_token_tracker.py::test_reset PASSED                           [ 98%]
+tests/test_token_tracker.py::test_reset_then_track_again PASSED          [ 99%]
+tests/test_token_tracker.py::test_thread_safety PASSED                   [100%]
+
+=============================== warnings summary ===============================
+<frozen importlib._bootstrap>:488
+<frozen importlib._bootstrap>:488
+  <frozen importlib._bootstrap>:488: DeprecationWarning: builtin type SwigPyPacked has no __module__ attribute
+
+<frozen importlib._bootstrap>:488
+<frozen importlib._bootstrap>:488
+  <frozen importlib._bootstrap>:488: DeprecationWarning: builtin type SwigPyObject has no __module__ attribute
+
+<frozen importlib._bootstrap>:488
+  <frozen importlib._bootstrap>:488: DeprecationWarning: builtin type swigvarlink has no __module__ attribute
+
+src/api/server.py:216
+  /Users/rayne.deng/Documents/seal/uni-admission-agent/src/api/server.py:216: DeprecationWarning: 
+          on_event is deprecated, use lifespan event handlers instead.
+  
+          Read more about it in the
+          [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
+          
+    @app.on_event("startup")
+
+.venv/lib/python3.12/site-packages/fastapi/applications.py:4573
+  /Users/rayne.deng/Documents/seal/uni-admission-agent/.venv/lib/python3.12/site-packages/fastapi/applications.py:4573: DeprecationWarning: 
+          on_event is deprecated, use lifespan event handlers instead.
+  
+          Read more about it in the
+          [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
+          
+    return self.router.on_event(event_type)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+================ 115 passed, 6 deselected, 7 warnings in 1.33s =================
+sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute

@@ -6,6 +6,8 @@ from src.models.admission import University, Program
 from src.storage.db_manager import DatabaseManager
 from sqlalchemy_utils import database_exists, create_database, drop_database
 
+pytestmark = pytest.mark.integration
+
 # Re-use the fixture logic from test_schema_upsert.py for DB setup
 TEST_DB_URL = os.getenv("DATABASE_URL", "postgresql+psycopg2://postgres:postgres@localhost:5432/uni_admission") + "_test_evolution"
 
