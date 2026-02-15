@@ -217,16 +217,39 @@ def _check_playwright() -> None:
     Check if Playwright is installed via verifying browser installation.
     
     Tries these methods in order:
-    1. python -m playwright (Preferred, uses installed package)
-    2. playwright binary
-    3. playwright-cli binary
+    1. Direct Python API check (Preferred for both Dev & Frozen)
+    2. python -m playwright (Dev only)
+    3. playwright binary (Dev/System only)
     
     Raises:
         PlaywrightError: If Playwright usage fails
     """
     logger.info("Checking Playwright installation...")
     
-    # 1. Try Python module execution (Recommended for Python projects)
+    # 0. Frozen/General Mode: Try importing and checking executable path directly
+    try:
+        from playwright.sync_api import sync_playwright
+        with sync_playwright() as p:
+            # We must cast to Path because in some versions it's a string
+            browser_path = Path(p.chromium.executable_path)
+            if browser_path.exists():
+                logger.debug(f"Playwright browser found at: {browser_path}")
+                logger.info("✓ Playwright browser found (via API)")
+                return
+            else:
+                logger.warning(f"Playwright browser path does not exist: {browser_path}")
+    except Exception as e:
+        logger.debug(f"Failed to check via API: {e}")
+
+    # If frozen, we stop here because subprocess calls won't work well
+    if is_frozen():
+         raise PlaywrightError(
+            "Playwright browser not found.\n"
+            "Solution 1 (Recommended): Install a supported browser (Chrome/Edge).\n"
+            "Solution 2: Set 'PLAYWRIGHT_BROWSERS_PATH' env var to your browser's folder."
+        )
+
+    # 1. Dev Mode: Try Python module execution
     try:
         result = subprocess.run(
             [sys.executable, '-m', 'playwright', '--version'],
@@ -241,7 +264,7 @@ def _check_playwright() -> None:
     except Exception as e:
         logger.debug(f"Failed to check python module: {e}")
 
-    # 2. Try identifying binary in PATH
+    # 2. Dev Mode: Try identifying binary in PATH
     commands = ['playwright', 'playwright-cli']
     
     for cmd in commands:
@@ -262,7 +285,7 @@ def _check_playwright() -> None:
 
     # If all failed
     raise PlaywrightError(
-        "Playwright not found via python module or CLI.\n"
+        "Playwright not found via API, module, or CLI.\n"
         "Ensure it is installed in your python environment:\n"
         "  uv pip install playwright && uv run playwright install\n"
         "Or via npm for CLI:\n"

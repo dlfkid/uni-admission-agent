@@ -8,6 +8,7 @@ when running from source (``uv run``) and when packaged as a
 standalone binary via PyInstaller.
 """
 
+import os
 import sys
 from pathlib import Path
 
@@ -15,6 +16,38 @@ from pathlib import Path
 def is_frozen() -> bool:
     """Return *True* when running inside a PyInstaller bundle."""
     return getattr(sys, "frozen", False)
+
+
+def configure_playwright_path() -> None:
+    """Set ``PLAYWRIGHT_BROWSERS_PATH`` so the frozen app uses system browsers.
+
+    When Playwright is bundled by PyInstaller, its default browser lookup
+    resolves to ``_internal/playwright/driver/.local-browsers/``, which is
+    inside the read-only bundle.  We redirect it to the system's default
+    Playwright cache so that ``playwright install chromium`` works as expected.
+
+    The standard cache locations are:
+
+    * **macOS** — ``~/Library/Caches/ms-playwright``
+    * **Linux** — ``~/.cache/ms-playwright``
+    * **Windows** — ``%LOCALAPPDATA%\\ms-playwright``
+    """
+    if not is_frozen():
+        return
+    # Respect an explicit override from the user
+    if os.environ.get("PLAYWRIGHT_BROWSERS_PATH"):
+        return
+
+    home = Path.home()
+    if sys.platform == "darwin":
+        browsers = home / "Library" / "Caches" / "ms-playwright"
+    elif sys.platform == "win32":
+        local = os.environ.get("LOCALAPPDATA", str(home / "AppData" / "Local"))
+        browsers = Path(local) / "ms-playwright"
+    else:  # Linux / other POSIX
+        browsers = home / ".cache" / "ms-playwright"
+
+    os.environ["PLAYWRIGHT_BROWSERS_PATH"] = str(browsers)
 
 
 def get_bundle_dir() -> Path:

@@ -61,7 +61,25 @@ uv run src/cmd/cli.py import --name hku --year 2026 --file example/hku-26-27.xls
 #   --output: Output file path
 #   --year:   Academic year (optional)
 uv run src/cmd/cli.py export --name hku --output hku_export.xlsx --year 2026
+### 4. Troubleshooting
 
+**Error: "Playwright browser not found"**
+
+If you see this error when running the executable, it means the required Chrome browser is missing.
+
+**Solution 1: Install Browsers (Recommended)**
+If you have Python installed:
+```bash
+pip install playwright
+playwright install chromium
+```
+
+**Solution 2: Use Custom Path**
+If you already have Playwright browsers installed elsewhere, set the environment variable:
+```bash
+export PLAYWRIGHT_BROWSERS_PATH=/path/to/ms-playwright
+./adm-agent serve
+```
 # Crawl a URL and import admission data
 #   --name:      University slug
 #   --year:      Academic year

@@ -26,6 +26,11 @@ import typer
 # Ensure project root on path for imports
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
+# Must run before any Playwright import to redirect browser lookup
+from src.core.paths import configure_playwright_path  # noqa: E402
+
+configure_playwright_path()
+
 from src.core.token_tracker import tracker
 from src.services.crawler import (
     check_environment,
@@ -220,6 +225,24 @@ def serve(
 ) -> None:
     """Start the FastAPI + MCP server."""
     _setup_logging(verbose)
+    
+    # Pre-flight check: Ensure browser is available
+    try:
+        from playwright.sync_api import sync_playwright
+        with sync_playwright() as p:
+            browser_path = Path(p.chromium.executable_path)
+            if not browser_path.exists():
+                raise FileNotFoundError(f"Browser executable not found at: {browser_path}")
+            typer.echo(f"✅ Found browser at: {browser_path}")
+    except Exception as e:
+        typer.echo("❌ Critical Error: Playwright browser not found!", err=True)
+        typer.echo(f"   Details: {e}", err=True)
+        typer.echo("\n👉 Solution 1: Install browsers (if you have python/uv installed):", err=True)
+        typer.echo("   uv run playwright install chromium", err=True)
+        typer.echo("\n👉 Solution 2: Set custom path via environment variable:", err=True)
+        typer.echo("   export PLAYWRIGHT_BROWSERS_PATH=/path/to/ms-playwright", err=True)
+        raise typer.Exit(code=1)
+
     _init_db(verbose)
 
     try:
