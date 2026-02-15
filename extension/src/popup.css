@@ -23,8 +23,7 @@ body {
   background: var(--bg);
   color: var(--text);
   min-width: 360px;
-  min-height: 520px;
-  /* Slightly taller for config */
+  /* No fixed min-height — let Chrome auto-size the popup to content */
 }
 
 /* Layout */
@@ -188,13 +187,33 @@ button:active {
   margin-bottom: 12px;
 }
 
+.status-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 6px;
+}
+
 #progress-text {
   font-size: 12px;
   color: var(--accent);
-  margin-bottom: 6px;
+  margin-bottom: 0;
+  /* Reset margin since we use flex row */
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  flex: 1;
+}
+
+.token-badge {
+  font-size: 10px;
+  font-family: monospace;
+  background: rgba(45, 212, 191, 0.1);
+  /* Teal tint */
+  color: #2dd4bf;
+  padding: 2px 6px;
+  border-radius: 4px;
+  border: 1px solid rgba(45, 212, 191, 0.2);
 }
 
 .progress-bar {
@@ -227,23 +246,31 @@ button:active {
   }
 }
 
+/* Global Utility */
+.hidden {
+  display: none !important;
+}
+
 .logs-container {
-  background: #0d1117;
-  border-radius: var(--radius);
-  padding: 10px;
-  height: 180px;
-  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
   margin-bottom: 12px;
-  border: 1px solid rgba(255, 255, 255, 0.05);
 }
 
 #logs-console {
+  background: #0d1117;
+  border-radius: var(--radius);
+  padding: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.05);
   font-family: "Menlo", "Consolas", monospace;
   font-size: 11px;
   color: #a0a0b0;
   white-space: pre-wrap;
   word-wrap: break-word;
   line-height: 1.4;
+  height: 180px;
+  overflow-y: auto;
+  transition: all 0.3s ease;
 }
 
 /* Modal */
@@ -386,4 +413,63 @@ button:active {
   display: flex;
   flex-direction: column;
   gap: 4px;
+}
+
+/* Input States */
+input:disabled,
+button:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+  background-color: rgba(255, 255, 255, 0.05);
+}
+
+/* Logs Header */
+.logs-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.logs-header h4 {
+  margin: 0;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+}
+
+.logs-header .icon-btn {
+  font-size: 12px;
+  padding: 2px 6px;
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 4px;
+}
+
+.logs-header .icon-btn:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.logs-container {
+  display: flex;
+  flex-direction: column;
+  /* Allow container to shrink when collapsed if needed, 
+       but mostly we toggle the PRE height */
+}
+
+#logs-console {
+  transition: all 0.3s ease;
+  overflow-y: auto;
+  user-select: text;
+  cursor: text;
+}
+
+#logs-console.collapsed {
+  max-height: 0 !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  border: none !important;
+  opacity: 0;
 }

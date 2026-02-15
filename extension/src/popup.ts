@@ -14,6 +14,24 @@ const API_BASE = "http://localhost:8910";
 //  Types
 // ---------------------------------------------------------------------------
 
+interface TaskParams {
+    url: string;
+    univ_slug: string;
+    year: number;
+    continue_depth: number;
+}
+
+interface TaskInfo {
+    task_id: string;
+    state: string;
+    progress?: string;
+    result?: any;
+    error?: string;
+    logs?: string[];
+    params?: TaskParams;
+    tokens_used?: number;
+}
+
 interface StructuredConfig {
     database_url: string;
     llm_priority: string[];
@@ -39,8 +57,11 @@ const sendBtn = document.getElementById("send-btn") as HTMLButtonElement;
 const taskIdDisplay = document.getElementById("task-id-display") as HTMLSpanElement;
 const progressText = document.getElementById("progress-text") as HTMLParagraphElement;
 const progressFill = document.getElementById("progress-fill") as HTMLDivElement;
+const tokenDisplay = document.getElementById("token-display") as HTMLSpanElement;
 const logsConsole = document.getElementById("logs-console") as HTMLPreElement;
+const toggleLogsBtn = document.getElementById("toggle-logs-btn") as HTMLButtonElement;
 const stopBtn = document.getElementById("stop-btn") as HTMLButtonElement;
+const continueBtn = document.getElementById("continue-btn") as HTMLButtonElement;
 
 // Config
 const configBtn = document.getElementById("config-btn") as HTMLButtonElement;
@@ -58,6 +79,58 @@ const statusDiv = document.getElementById("status") as HTMLDivElement;
 
 let activePollInterval: number | null = null;
 let draggedItem: HTMLElement | null = null;
+const LOGS_EXPANDED_KEY = "logs_expanded";
+
+// Helper to disable/enable form
+function setFormEnabled(enabled: boolean) {
+    slugInput.disabled = !enabled;
+    yearInput.disabled = !enabled;
+    sendBtn.disabled = !enabled;
+    // We don't disable config btn as user might want to check settings?
+    // But changing settings while running is risky. Let's leave config enabled for now.
+}
+
+function initLogsToggle() {
+    const isExpanded = localStorage.getItem(LOGS_EXPANDED_KEY) !== "false"; // Default to true/open if missing? 
+    // User requested default collapsed? "Default popup... collapsed"
+    // Okay, requirement: "default popup ... until user clicks expand. memory function."
+    // So default should be false if not set.
+    const savedState = localStorage.getItem(LOGS_EXPANDED_KEY);
+    const shouldBeExpanded = savedState === "true"; // Default false
+
+    updateLogsState(shouldBeExpanded);
+
+
+
+    continueBtn.addEventListener("click", () => {
+        switchView("input");
+        // Reset monitor state for next run
+        progressText.textContent = "Ready";
+        progressFill.style.width = "0%";
+        tokenDisplay.classList.add("hidden");
+        // logsConsole.textContent = ""; 
+
+        // Ensure inputs are unlocked
+        setFormEnabled(true);
+        sendBtn.textContent = "Start Crawl";
+    });
+
+    toggleLogsBtn.addEventListener("click", () => {
+        const currentlyExpanded = !logsConsole.classList.contains("collapsed");
+        updateLogsState(!currentlyExpanded);
+    });
+}
+
+function updateLogsState(expanded: boolean) {
+    if (expanded) {
+        logsConsole.classList.remove("collapsed");
+        toggleLogsBtn.textContent = "Hide";
+    } else {
+        logsConsole.classList.add("collapsed");
+        toggleLogsBtn.textContent = "Show";
+    }
+    localStorage.setItem(LOGS_EXPANDED_KEY, String(expanded));
+}
 
 function showStatus(msg: string, type: "success" | "error" | "info"): void {
     statusDiv.textContent = msg;
@@ -112,12 +185,34 @@ async function init() {
         }
     });
 
+    // Initialize logs toggle state
+    initLogsToggle();
+
     try {
         const res = await fetch(`${API_BASE}/tasks/active`);
         if (res.ok) {
-            const data = await res.json();
+            const data: TaskInfo = await res.json();
             if (data && data.task_id) {
+                // Task Running! Sync state.
                 startMonitoring(data.task_id);
+
+                // POPULATE & LOCK PARAMS (Requirement 3)
+                if (data.params) {
+                    slugInput.value = data.params.univ_slug || "";
+                    yearInput.value = String(data.params.year || "");
+                    // URL? tab.url might differ if user navigated away.
+                    // But we display params in the inputs.
+                    if (data.params.url) {
+                        urlDisplay.textContent = data.params.url;
+                        // Visual cue that it's the *task's* URL, not necessarily current tab
+                    }
+                }
+
+                // Disable inputs if running
+                if (data.state === "RUNNING" || data.state === "PENDING") {
+                    setFormEnabled(false);
+                    sendBtn.textContent = "Running...";
+                }
             }
         }
     } catch (err) {
@@ -151,6 +246,9 @@ sendBtn.addEventListener("click", async () => {
             body: JSON.stringify({ url, univ_slug: slug, year, continue_depth: 0 }),
         });
 
+        // Lock UI immediately
+        setFormEnabled(false);
+
         if (res.status === 409) {
             showStatus("A task is already running!", "error");
             init();
@@ -175,7 +273,20 @@ sendBtn.addEventListener("click", async () => {
 function startMonitoring(taskId: string) {
     switchView("monitor");
     taskIdDisplay.textContent = taskId;
-    logsConsole.textContent = ""; // Clear logs on start
+    taskIdDisplay.textContent = taskId;
+    // Do NOT clear logs if we are reconnecting to a running task!
+    // logsConsole.textContent = ""; 
+
+    // Check if we are reconnecting (logs might be empty initially)
+    // Actually, pollTask will overwrite textContent. 
+    // To avoid flicker, we can clear only if we are starting FRESH.
+    // But distinguishing fresh vs reconnect is hard here.
+    // Let's just let pollTask handle it. It replaces textContent.
+
+    stopBtn.classList.remove("hidden"); // Default visible when monitoring starts
+    continueBtn.classList.add("hidden"); // Hide continue button
+    tokenDisplay.textContent = "Tokens: 0";
+    tokenDisplay.classList.remove("hidden");
 
     pollTask(taskId);
     if (activePollInterval) clearInterval(activePollInterval);
@@ -207,6 +318,23 @@ async function pollTask(taskId: string) {
 
         progressText.textContent = `${state}: ${progress || "..."}`;
 
+        if (data.tokens_used !== undefined) {
+            tokenDisplay.textContent = `Tokens: ${data.tokens_used.toLocaleString()}`;
+            tokenDisplay.classList.remove("hidden");
+        }
+
+        // Stop button visibility (Requirement 2)
+        if (state === "RUNNING" || state === "PENDING") {
+            stopBtn.classList.remove("hidden");
+            continueBtn.classList.add("hidden");
+            setFormEnabled(false); // Ensure locked
+        } else {
+            stopBtn.classList.add("hidden");
+            continueBtn.classList.remove("hidden");
+            // setFormEnabled(true); // Don't unlock yet, wait for continue
+            // sendBtn.textContent = "Start Crawl"; // Wait for continue
+        }
+
         if (logs && Array.isArray(logs)) {
             const text = logs.join("\n");
             const isScrolledToBottom = logsConsole.scrollHeight - logsConsole.scrollTop <= logsConsole.clientHeight + 50;
@@ -225,13 +353,13 @@ async function pollTask(taskId: string) {
             progressFill.style.width = "100%";
             stopPolling();
             showStatus(`Completed! Imported: ${result?.imported_count ?? 0}`, "success");
-            setTimeout(() => switchView("input"), 3000);
+            // setTimeout(() => switchView("input"), 3000);
         } else if (state === "FAILED") {
             progressFill.style.width = "100%";
             progressFill.style.backgroundColor = "var(--error)";
             stopPolling();
             showStatus(`Failed: ${error}`, "error");
-            setTimeout(() => switchView("input"), 5000);
+            // setTimeout(() => switchView("input"), 5000);
         }
 
     } catch (err) {

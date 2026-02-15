@@ -13,5 +13,7 @@
         "default_popup": "popup.html",
         "default_title": "UniAdmission Agent"
     },
-    "icons": {}
+    "icons": {
+        "128": "icons/icon128.png"
+    }
 }

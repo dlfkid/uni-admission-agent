@@ -43,17 +43,25 @@
             </div>
 
             <div class="progress-container">
-                <p id="progress-text">Initializing...</p>
+                <div class="status-row">
+                    <p id="progress-text">Initializing...</p>
+                    <span id="token-display" class="token-badge hidden">0 Tokens</span>
+                </div>
                 <div class="progress-bar">
                     <div id="progress-fill"></div>
                 </div>
             </div>
 
             <div class="logs-container">
+                <div class="logs-header">
+                    <h4>Console Output</h4>
+                    <button id="toggle-logs-btn" class="icon-btn small" title="Toggle Logs">_</button>
+                </div>
                 <pre id="logs-console"></pre>
             </div>
 
-            <button id="stop-btn" type="button" class="danger-btn">Stop Task</button>
+            <button id="stop-btn" type="button" class="danger-btn hidden">Stop Task</button>
+            <button id="continue-btn" type="button" class="primary-btn hidden">Continue</button>
         </div>
 
         <div id="status" class="status hidden"></div>
