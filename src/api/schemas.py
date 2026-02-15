@@ -91,6 +91,14 @@ class TaskStatusResponse(BaseModel):
         default_factory=list,
         description="Execution logs",
     )
+    params: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Task parameters (url, univ_slug, year, etc.)",
+    )
+    tokens_used: int = Field(
+        default=0,
+        description="Total LLM tokens consumed by this task",
+    )
 
 
 class StatusResponse(BaseModel):

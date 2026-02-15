@@ -12,6 +12,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from src.core.paths import get_bundle_dir, get_data_dir, is_frozen
+
 
 # ============================================================================
 # Custom Exceptions
@@ -102,12 +104,13 @@ class DirectoryError(EnvironmentError):
 
 logger = logging.getLogger(__name__)
 
-# Project paths
-PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+# Project paths — resolved at runtime for both dev and frozen modes
+PROJECT_ROOT = get_bundle_dir()
+_data_root = get_data_dir()
 DATA_DIRS = [
-    PROJECT_ROOT / "data" / "raw_markdown",
-    PROJECT_ROOT / "data" / "processed",
-    PROJECT_ROOT / "data" / "database"
+    _data_root / "raw_markdown",
+    _data_root / "processed",
+    _data_root / "database",
 ]
 
 
@@ -461,8 +464,9 @@ def ensure_ready(verbose: bool = False) -> bool:
     
     try:
         # Run all validation checks
-        _check_uv_command()
-        _check_uv_sync()
+        if not is_frozen():
+            _check_uv_command()
+            _check_uv_sync()
         _check_playwright()
         _ensure_directories()
         _check_database()

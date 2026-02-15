@@ -16,6 +16,7 @@ Or directly:
 import asyncio
 import logging
 import shutil
+import threading
 from pathlib import Path
 from typing import List, Optional, Dict
 from io import StringIO
@@ -98,10 +99,10 @@ def _parse_structured_config() -> StructuredConfig:
     config_dict = dotenv_values(env_path)
     
     # 1. Database
-    db_url = config_dict.get("DATABASE_URL", "")
+    db_url = config_dict.get("DATABASE_URL") or ""
     
     # 2. Priority List
-    priority_raw = config_dict.get("LLM_PRIORITY_LIST", "")
+    priority_raw = config_dict.get("LLM_PRIORITY_LIST") or ""
     priority_list = [p.strip() for p in priority_raw.split(",") if p.strip()]
     
     # 3. Providers
@@ -236,7 +237,7 @@ async def api_crawl(body: CrawlRequest) -> CrawlResponse:
     Enforces singleton execution (only one crawl at a time).
     """
     try:
-        task_id = task_manager.create_task()
+        task_id = task_manager.create_task(params=body.model_dump())
     except RuntimeError as e:
         # Task already running
         raise HTTPException(status_code=409, detail=str(e))
@@ -248,18 +249,65 @@ async def api_crawl(body: CrawlRequest) -> CrawlResponse:
         root_logger.addHandler(log_handler)
         
         task_manager.update_task(task_id, state=TaskState.RUNNING, progress="Crawling…")
+        
+        # Snapshot start tokens
+        from src.core.token_tracker import tracker
+        initial_tokens = sum(u.total_tokens for u in tracker._usage.values())
+
         try:
-            result: CrawlResult = await crawl_url(
-                url=body.url,
-                univ_slug=body.univ_slug,
-                year=body.year,
-                continue_depth=body.continue_depth,
+            # We need to periodically update token usage? 
+            # Or just update it at the end? 
+            # User asked for "display tokens used from start to finish", implying dynamic updates would be nice.
+            # But crawl_url is awaited. We can't easily poll during await unless we wrap it or use a separate task.
+            # For now, let's update at the end (and maybe start?).
+            # Actually, `crawl_url` might be long running. 
+            # Ideally we'd have a background poller, but for "Repair", let's keep it simple: 
+            # Update at start (0) and end. 
+            # If user wants real-time, we need a poller. 
+            # Let's add a simple poller task?
+            
+            stop_event = threading.Event()
+
+            def _poll_tokens_thread() -> None:
+                """Poll token usage in a background thread.
+
+                Uses a real OS thread so it is NOT blocked by synchronous
+                LLM HTTP calls that starve the asyncio event loop.
+                """
+                while not stop_event.is_set():
+                    stop_event.wait(2)
+                    if stop_event.is_set():
+                        break
+                    current = sum(u.total_tokens for u in tracker._usage.values())
+                    used = current - initial_tokens
+                    if used > 0:
+                        logger.info("Task %s token usage: %d", task_id, used)
+                    task_manager.update_task(task_id, tokens_used=used)
+
+            poller_thread = threading.Thread(
+                target=_poll_tokens_thread, daemon=True, name=f"token-poll-{task_id}"
             )
+            poller_thread.start()
+
+            try:
+                result: CrawlResult = await crawl_url(
+                    url=body.url,
+                    univ_slug=body.univ_slug,
+                    year=body.year,
+                    continue_depth=body.continue_depth,
+                )
+            finally:
+                stop_event.set()
+                poller_thread.join(timeout=3)
+                
+            # Final update
+            final_tokens = sum(u.total_tokens for u in tracker._usage.values())
             task_manager.update_task(
                 task_id,
                 state=TaskState.DONE,
                 progress="Complete",
                 result=result.model_dump(),
+                tokens_used=final_tokens - initial_tokens
             )
         except asyncio.CancelledError:
             logger.info(f"Task {task_id} cancelled")

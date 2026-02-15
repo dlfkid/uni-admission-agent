@@ -6,10 +6,12 @@ Build a trusted, self-updating database of university admission requirements.
 **Scope**: Multi-university crawler with intelligent depth exploration and context-aware parsing.
 
 **Key Features**:
-- Intelligent crawl depth with LLM-driven heuristic scouting
-- Rolling window sequential chunking for context preservation
+- Intelligent crawl depth with Heuristic/Regex scouting (optimized for speed/cost)
+- Rolling window sequential chunking for context preservation on large pages
 - Multi-provider LLM routing (Google Gemini, DeepSeek, OpenAI, VolcEngine)
 - Stealth browsing with anti-detection mechanisms
+- **Chrome Extension** for interactive control and monitoring
+- **Stand-alone Executable** build for easy distribution
 
 ---
 
@@ -17,249 +19,145 @@ Build a trusted, self-updating database of university admission requirements.
 
 | Layer | Technology |
 |:------|:-----------|
-| **Crawling** | `crawl4ai` + `playwright` + `playwright-stealth` |
+| **Crawling** | `crawl4ai` (v0.4+) + `playwright` + `playwright-stealth` |
 | **LLM** | Multi-provider routing: Gemini, DeepSeek, OpenAI, VolcEngine (豆包) |
 | **Data Validation** | `pydantic` (v2) with strict schema enforcement |
-| **Database** | `sqlmodel` (SQLite for dev, PostgreSQL ready) |
+| **Database** | `sqlmodel` (PostgreSQL default, SQLite fallback) |
+| **API / Control** | `fastapi`, `uvicorn`, `mcp` (Model Context Protocol) |
+| **CLI** | `typer` |
+| **Build** | `pyinstaller` (Backend), `npm` (Extension) |
 | **Migration** | `alembic` |
-| **PDF Processing** | `pymupdf4llm` |
-| **Environment** | `uv` package manager, Python 3.12+ |
+| **Env Management** | `uv` package manager, Python 3.12+ |
 
 ---
 
 ## 3. Core Architecture
 
-### 3.1 Intelligent Crawling Engine
+### 3.1 Intelligent Crawling Engine (Hybrid)
 
-**Two-tier strategy with dynamic depth**:
+**Strategy**: Performance-optimized hybrid approach.
+1.  **Regex / Heuristic**: Used for high-volume tasks (link extraction, page type detection) to save tokens and latency.
+2.  **LLM**: Reserved for complex tasks (content cleaning, structured data extraction).
 
 ```
 L1: Index Page (course list)
-  ↓ extract_links() → concurrent chunks
+  ↓ Regex Link Extraction → concurrent chunks
 L2: Detail Pages (individual programs)
-  ↓ clean_markdown() → rolling window sequential chunks
-  ↓ parse failure + --continue > 0 → Heuristic Scout
+  ↓ LLM Clean & Parse (Rolling Window)
+  ↓ parse failure + --continue > 0 → Scout
 L3+: Scout-recommended pages
-  ↓ LLM page type detection → INDEX or DETAIL
-  ↓ Recurse with appropriate strategy
+  ↓ Heuristic Page Type Detection (Link Count/Content Signals)
+  ↓ Recurse
 ```
 
-**Key mechanisms**:
-- **Concurrent chunking** (index pages): Each link is independent, parallel LLM calls
-- **Sequential rolling window** (detail pages): Context preserved via summary pass-through
-- **Page type detection**: LLM classifies scout candidates as index/detail
+### 3.2 Chrome Extension & API
 
-### 3.2 Chunking Strategies
+The system exposes a REST API and MCP server for external control.
+-   **Server**: `src/api/server.py` (FastAPI)
+-   **Protocol**: HTTP + SSE (Server-Sent Events) for real-time logs
+-   **Extension**: React/Vite-based UI in `extension/` directory.
+    -   Connects to `http://localhost:8910`
+    -   Displays real-time logs and token usage
+    -   Manages crawler configuration
 
-| Page Type | Strategy | Max Chunk Size | Context Handling |
-|:----------|:---------|:---------------|:-----------------|
-| Index (course list) | **Concurrent** | 30K chars | None needed (links independent) |
-| Detail (single program) | **Sequential rolling window** | 20K chars | Previous chunk summary → next chunk |
-
-**Rolling window flow**:
-```
-Chunk 1 + "no context" → data₁ + summary₁
-Chunk 2 + summary₁    → data₂ + summary₂
-Chunk N + summaryₙ₋₁  → dataₙ
-→ Merge all dataᵢ
-```
-
-### 3.3 LLM Multi-Provider Routing
-
-**RouterAgent** (`src/agents/factory.py`):
-- Supports: Google Gemini, DeepSeek, OpenAI, VolcEngine (豆包)
-- Configuration via environment variables
-- Automatic fallback on provider failure
-
-**Usage**:
-```python
-router = create_router()
-response = router.generate(prompt, ResponseModel)
-```
-
-### 3.4 Data Flow
+### 3.3 Data Flow
 
 ```mermaid
 flowchart LR
     A[Web Page] -->|crawl4ai| B[Markdown]
-    B -->|chunk if needed| C[LLM Router]
-    C -->|structured output| D[Pydantic Model]
-    D -->|validation| E[SQLModel ORM]
-    E -->|upsert| F[SQLite/PostgreSQL]
+    B -->|Regex/Heuristic| C{Page Type?}
+    C -->|Index| D[Extract Links]
+    C -->|Detail| E[LLM Router]
+    E -->|Clean & Parse| F[Pydantic Model]
+    F -->|Validation| G[SQLModel ORM]
+    G -->|Upsert| H[PostgreSQL]
 ```
 
 ---
 
-## 4. Directory Structure
+## 4. Build & Distribution System
+
+The project supports a fully automated build pipeline to generate standalone artifacts.
+
+### 4.1 Artifacts
+-   **Backend Engine**: `adm-agent` (Single-directory executable via PyInstaller)
+-   **Frontend**: `extension/uni-admission-extension.zip` (Chrome Extension)
+
+### 4.2 Build Process
+Managed by `scripts/build_dist.py`:
+1.  `npm run build` (Extension) → `dist/` + `.zip`
+2.  `pyinstaller adm-agent.spec` (Backend) → `dist/adm-agent/`
+3.  **Assembly** → `release/` folder with everything needed.
+
+### 4.3 Path Resolution
+`src/core/paths.py` handles runtime path resolution transparently:
+-   **Dev Mode**: Uses source tree (`src/`, `data/`).
+-   **Frozen Mode**: Uses `sys._MEIPASS` for bundled assets and `~/.uni-agent/` for writable data.
+
+---
+
+## 5. Directory Structure
 
 ```
 uni-admission-agent/
 ├── src/
-│   ├── agents/
-│   │   ├── factory.py          # RouterAgent multi-provider LLM
-│   │   ├── cleaner_agent.py    # LLMCleanerAgent (detail page parsing)
-│   │   ├── providers.py        # LLM provider adapters
-│   │   └── prompts/
-│   │       ├── extract_links.txt       # Index page link extraction
-│   │       ├── scout_links.txt         # Heuristic scout evaluation
-│   │       ├── clean_chunk.txt         # Rolling window chunk parsing
-│   │       └── detect_page_type.txt    # Page type classification
-│   ├── core/
-│   │   ├── environment.py      # Dependency checks (uv, playwright, LLM SDKs)
-│   │   ├── parser.py           # HTML → Markdown utilities
-│   │   └── pdf_processor.py    # PDF → Markdown conversion
-│   ├── models/
-│   │   ├── admission.py        # SQLModel database schemas
-│   │   └── scraper_models.py   # Pydantic scraping output models
-│   ├── scrapers/
-│   │   ├── engine.py           # AdmissionScraper core logic
-│   │   └── browser.py          # Stealth browser configuration
-│   ├── storage/
-│   │   ├── db_manager.py       # Database operations
-│   │   ├── importer.py         # Excel → DB import
-│   │   └── exporter.py         # DB → Excel export
-│   └── main.py                 # CLI entry point
-├── tests/                      # pytest test suite
-├── data/
-│   └── raw_markdown/           # Cached markdown downloads
-├── migrations/                 # Alembic database migrations
-├── pyproject.toml              # uv project config
-└── PROJECT_CONTEXT.md          # This file
+│   ├── agents/             # LLM logic (Router, Cleaner)
+│   ├── api/                # FastAPI + MCP Server
+│   ├── cmd/                # CLI Entry Points
+│   ├── core/               # Core utilities (paths, env, config)
+│   ├── models/             # DB & Pydantic schemas
+│   ├── scrapers/           # Crawling logic (Engine, Browser)
+│   ├── services/           # Business logic (Crawler Service)
+│   ├── storage/            # DB Manager, Import/Export
+│   └── utils/              # Text/PDF processors
+├── extension/              # Chrome Extension source
+├── scripts/                # Build & Maintenance scripts
+├── tests/                  # Pytest suite
+├── data/                   # Default data storage (dev mode)
+├── migrations/             # Alembic migrations
+├── adm-agent.spec          # PyInstaller config
+├── pyproject.toml          # Project config
+└── README.md               # User guide
 ```
-
----
-
-## 5. Key Design Patterns
-
-### 5.1 Anti-Detection (Stealth Crawling)
-- Random user agents via `fake_useragent`
-- Random delays (0.5s - 2s) between actions
-- `playwright-stealth` plugin for browser fingerprint evasion
-- Exponential backoff retry with `tenacity`
-
-### 5.2 Token Cost Control
-- **Index pages**: Concurrent chunking (fastest)
-- **Detail pages ≤ 20K**: Single-pass LLM call
-- **Detail pages > 20K**: Sequential rolling window (context preserved, but slower)
-- **Scout calls**: Max 5 per session (`MAX_SCOUT_CALLS`)
-- **Page type detection**: Only during scout recursion (~550 tokens/call)
-
-### 5.3 Error Handling
-- All LLM calls wrapped in try-except with logging
-- Failed pages collected in `_failed_urls` for scout evaluation
-- Scout report printed if no data imported (human-in-the-loop)
-- Database upsert with conflict resolution (unique on `name_en` + `university_id` + `academic_year`)
 
 ---
 
 ## 6. CLI Usage
 
-### 6.1 Environment Check
+All commands are available via `uv run src/cmd/cli.py` or the `adm-agent` executable.
+
 ```bash
-uv run src/main.py check
-```
-Verifies: uv, playwright, database, LLM SDKs
+# Start Server (API + MCP)
+uv run src/cmd/cli.py serve --port 8910
 
-### 6.2 Crawl Command
-```bash
-# Basic crawl (2 layers: index → detail)
-uv run src/main.py crawl --name hku --year 2026 --url https://admissions.hku.hk/programmes
+# Crawl
+uv run src/cmd/cli.py crawl --name hku --year 2026 --url <URL>
 
-# With scout depth (2 + N layers)
-uv run src/main.py crawl --name hku --year 2026 --url <URL> --continue 2
-```
+# Import/Export
+uv run src/cmd/cli.py import --file data.xlsx ...
+uv run src/cmd/cli.py export --output data.xlsx ...
 
-**Parameters**:
-- `--name`: University slug (lowercase, alphanumeric + hyphens)
-- `--year`: Academic year (numeric)
-- `--url`: Starting URL (index page)
-- `--continue`: Extra scout depth (default: 0)
-
-### 6.3 Import/Export
-```bash
-# Import Excel → DB
-uv run src/main.py import --file data.xlsx --name hku --year 2026
-
-# Export DB → Excel
-uv run src/main.py export --name hku --year 2026 --output programs.xlsx
+# Check Status/Env
+uv run src/cmd/cli.py status
+uv run src/cmd/cli.py check
 ```
 
 ---
 
-## 7. Environment Variables
+## 7. Configuration
 
-Required in `.env`:
+Managed via `.env` (loaded at runtime).
+
 ```bash
-# LLM Providers (configure at least one)
+# LLM Credentials
 GOOGLE_GENAI_API_KEY=...
 DEEPSEEK_API_KEY=...
 OPENAI_API_KEY=...
-VOLC_API_KEY=...          # 火山方舟 API Key
-VOLC_MODEL_ID=doubao-pro-32k # 用于计费的模型id
-VOLC_REGION=cn-beijing   # 服务区域 (默认: cn-beijing)
+VOLC_API_KEY=...
 
-# LLM Routing Priority (comma-separated)
+# Provider Priority
 LLM_PROVIDER_PRIORITY=deepseek,google,openai,volcengine
 
-# Database URL (optional, defaults to SQLite)
-DATABASE_URL=sqlite:///./admission.db
+# Database
+DATABASE_URL=postgresql+psycopg2://user:pass@localhost:5432/uni_admission
 ```
-
----
-
-## 8. Development Guidelines
-
-### 8.1 Code Style (MANDATORY)
-- **Pathlib only**: No string path concatenation
-- **Type hints**: All functions must have type annotations
-- **F-string logging**: `logger.info("Value: %s", value)` (not f-strings)
-- **Pydantic validation**: All LLM outputs → Pydantic models
-- **Max function length**: 60 lines (split if longer)
-
-### 8.2 Testing
-```bash
-# Run all tests
-uv run pytest
-
-# Run with coverage
-uv run pytest --cov=src
-
-# Lint checks
-uv run ruff check src/
-uv run pyright src/
-```
-
-### 8.3 Adding New Universities
-1. Add university to database via `db_manager.py`
-2. Test crawl with `--continue 0` first
-3. If parse fails, increase `--continue` gradually
-4. Review Scout Report for unexplored high-value links
-
----
-
-## 9. Troubleshooting
-
-### Common Issues
-
-**"No structured data extracted"**:
-- Page is too complex → increase `--continue` depth
-- Check Scout Report for recommended links
-- Verify LLM provider is working (`uv run src/main.py check`)
-
-**"Token limit exceeded"**:
-- Page > 20K chars triggers sequential chunking (slower but safe)
-- Reduce `MAX_DETAIL_CHARS` in `cleaner_agent.py` if needed
-
-**"Browser detection / blocked"**:
-- Ensure `playwright-stealth` is installed
-- Check random delays in `browser.py`
-- Verify user-agent rotation
-
----
-
-## 10. Future Enhancements
-- [ ] Async parallel detail page crawling
-- [ ] Incremental updates (diff detection)
-- [ ] Multi-language support (Chinese program names)
-- [ ] Real-time monitoring dashboard
-- [ ] Webhook notifications for deadline changes

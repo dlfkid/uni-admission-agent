@@ -30,7 +30,7 @@ class TaskState(str, Enum):
 class TaskInfo:
     """Mutable state container for a single task."""
 
-    __slots__ = ("task_id", "state", "progress", "result", "error", "logs")
+    __slots__ = ("task_id", "state", "progress", "result", "error", "logs", "params", "tokens_used")
 
     def __init__(self, task_id: str) -> None:
         self.task_id: str = task_id
@@ -38,7 +38,10 @@ class TaskInfo:
         self.progress: Optional[str] = None
         self.result: Optional[Dict[str, Any]] = None
         self.error: Optional[str] = None
+        self.error: Optional[str] = None
         self.logs: List[str] = []
+        self.params: Dict[str, Any] = {}
+        self.tokens_used: int = 0
 
     def to_dict(self) -> Dict[str, Any]:
         """Serialise for API responses."""
@@ -49,6 +52,9 @@ class TaskInfo:
             "result": self.result,
             "error": self.error,
             "logs": self.logs,
+            "logs": self.logs,
+            "params": self.params,
+            "tokens_used": self.tokens_used,
         }
 
 
@@ -76,7 +82,7 @@ class TaskManager:
             cls._instance = inst
         return cls._instance
 
-    def create_task(self) -> str:
+    def create_task(self, params: Optional[Dict[str, Any]] = None) -> str:
         """Register a new task and return its ID.
 
         Raises:
@@ -92,6 +98,8 @@ class TaskManager:
 
         task_id = uuid.uuid4().hex[:12]
         self._task_store[task_id] = TaskInfo(task_id)
+        if params:
+            self._task_store[task_id].params = params
         self._active_task_id = task_id
         logger.info("Task created: %s", task_id)
         return task_id
@@ -137,6 +145,7 @@ class TaskManager:
         progress: Optional[str] = None,
         result: Optional[Dict[str, Any]] = None,
         error: Optional[str] = None,
+        tokens_used: Optional[int] = None,
     ) -> None:
         """Update fields on an existing task."""
         info = self._task_store.get(task_id)
@@ -158,3 +167,5 @@ class TaskManager:
             info.result = result
         if error is not None:
             info.error = error
+        if tokens_used is not None:
+            info.tokens_used = tokens_used

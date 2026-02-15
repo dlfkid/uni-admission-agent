@@ -20,7 +20,7 @@ This project automates the collection of admission criteria from world-renowned 
 ```
 Entry Points                    Services Layer              Infrastructure
 ┌──────────────┐
-│  CLI (Typer)  │──┐
+│  CLI (Typer) │──┐
 └──────────────┘  │    ┌──────────────────┐    ┌───────────────┐
 ┌──────────────┐  ├──→ │ src/services/    │──→ │ src/scrapers/ │
 │ FastAPI REST │──┤    │   crawler.py     │    │ src/agents/   │
@@ -106,9 +106,49 @@ The MCP server is mounted at `/mcp` and exposes two tools:
 
 ### Chrome Extension
 
-1. `cd extension && npm install && npm run build`
-2. Open `chrome://extensions` → Enable Developer Mode → Load unpacked → select `extension/dist`
-3. Navigate to a university admissions page, click the extension icon, enter slug + year, and click **Send to Agent**
+The extension provides a UI to interact with the agent.
+
+**Build & Install:**
+1.  **Build the extension package**:
+    ```bash
+    cd extension
+    npm install  # First time only
+    npm run build
+    ```
+    This will generate:
+    - `extension/dist/`: The unpackaged extension folder.
+    - `extension/uni-admission-extension.zip`: A ready-to-share zip file.
+
+2.  **Load into Chrome**:
+    - Open Chrome and navigate to `chrome://extensions`.
+    - Enable **Developer mode** (top right toggle).
+    - Click **Load unpacked**.
+    - Select the `extension/dist` folder.
+
+**Usage:**
+- Click the extension icon in your browser toolbar.
+- Configure settings (database URL, LLM keys) via the gear icon.
+- Enter a university slug (e.g., `hku`) and year, then start crawling.
+
+## 📦 Build & Distribution
+
+To package the agent for distribution (standalone executable + extension zip):
+
+1.  **Install PyInstaller**:
+    ```bash
+    pip install pyinstaller
+    ```
+
+2.  **Run the Build Script**:
+    ```bash
+    python scripts/build_dist.py
+    ```
+
+3.  **Check Release Folder**:
+    The script generates a `release/` directory containing:
+    -   `adm-agent/`: The standalone executable (backend engine).
+    -   `extension.zip`: The packaged Chrome extension.
+    -   `README.txt`: Quick start guide for end-users.
 
 ## 🤖 Agentic Principles
 - **Stealth First:** Never trigger bot detection; emulate human behavior.

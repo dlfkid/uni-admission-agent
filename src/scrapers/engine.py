@@ -11,7 +11,6 @@ import asyncio
 import logging
 import random
 import re
-from pathlib import Path
 from datetime import datetime
 from typing import Dict, List, Optional, Set, cast
 from urllib.parse import urljoin
@@ -24,6 +23,7 @@ from src.agents.cleaner_agent import LLMCleanerAgent, ParsedProgramData
 
 from src.agents.factory import RouterAgent, create_router
 from src.core.environment import ScraperError
+from src.core.paths import get_prompts_dir
 from src.utils.text import generate_program_group_code
 from src.models.scraper_models import (
     CrawlPageResult,
@@ -44,7 +44,7 @@ MAX_MARKDOWN_CHARS = 30000  # Truncate Markdown before sending to LLM
 
 # --- Prompt Loading ---
 
-_PROMPTS_DIR = Path(__file__).resolve().parent.parent / "agents" / "prompts"
+_PROMPTS_DIR = get_prompts_dir()
 
 
 def _load_prompt(filename: str) -> str:

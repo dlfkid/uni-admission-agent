@@ -6,7 +6,6 @@ from raw Excel rows or scraped content.
 """
 
 import logging
-from pathlib import Path
 from typing import Dict, List, Optional, Any
 
 from datetime import datetime
@@ -14,6 +13,7 @@ from decimal import Decimal
 from pydantic import BaseModel, Field
 
 from src.agents.factory import RouterAgent, create_router
+from src.core.paths import get_prompts_dir
 from src.models.admission import CurrencyCode, StudyMode
 
 logger = logging.getLogger(__name__)
@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 # --- Constants ---
 
 MAX_DETAIL_CHARS = 20000  # Max chars per chunk for detail page parsing
-PROMPTS_DIR = Path(__file__).resolve().parent / "prompts"
+PROMPTS_DIR = get_prompts_dir()
 
 
 # --- Prompt Loading ---
