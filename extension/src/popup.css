@@ -1,0 +1,475 @@
+/* UniAdmission Agent — Chrome Extension Popup */
+
+:root {
+  --bg: #1a1a2e;
+  --surface: #16213e;
+  --accent: #6c63ff;
+  --accent-hover: #857dff;
+  --text: #eaeaea;
+  --text-muted: #a0a0b0;
+  --success: #4ade80;
+  --error: #f87171;
+  --radius: 10px;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: "Inter", "Segoe UI", system-ui, -apple-system, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  min-width: 360px;
+  /* No fixed min-height — let Chrome auto-size the popup to content */
+}
+
+/* Layout */
+.container {
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  height: 100%;
+}
+
+header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding-bottom: 10px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+h1 {
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+/* Fields */
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+}
+
+input,
+textarea {
+  background: var(--surface);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: var(--radius);
+  padding: 10px 12px;
+  color: var(--text);
+  font-size: 13px;
+  font-family: inherit;
+  outline: none;
+  transition: border-color 0.2s;
+  width: 100%;
+}
+
+input:focus,
+textarea:focus {
+  border-color: var(--accent);
+}
+
+.url-display {
+  font-size: 12px;
+  color: var(--text-muted);
+  word-break: break-all;
+  background: var(--surface);
+  padding: 8px 12px;
+  border-radius: var(--radius);
+  line-height: 1.4;
+  max-height: 60px;
+  overflow-y: auto;
+}
+
+/* Buttons */
+button {
+  border: none;
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition: opacity 0.2s, transform 0.1s;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+button:active {
+  transform: scale(0.98);
+}
+
+.primary-btn {
+  background: var(--accent);
+  color: #fff;
+  padding: 12px;
+  font-size: 14px;
+  font-weight: 600;
+  width: 100%;
+}
+
+.primary-btn:hover {
+  background: var(--accent-hover);
+}
+
+.danger-btn {
+  background: rgba(248, 113, 113, 0.15);
+  color: var(--error);
+  padding: 10px;
+  font-size: 13px;
+  font-weight: 600;
+  border: 1px solid rgba(248, 113, 113, 0.3);
+  width: 100%;
+}
+
+.danger-btn:hover {
+  background: rgba(248, 113, 113, 0.25);
+}
+
+.icon-btn {
+  background: transparent;
+  color: var(--text);
+  font-size: 16px;
+  padding: 6px;
+  border-radius: 50%;
+}
+
+.icon-btn:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.close-btn {
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 24px;
+  padding: 0 4px;
+  line-height: 1;
+}
+
+.close-btn:hover {
+  color: var(--text);
+}
+
+/* Monitor Section */
+.monitor-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 10px;
+}
+
+.monitor-header h3 {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.task-badge {
+  font-size: 11px;
+  color: var(--text-muted);
+  background: rgba(255, 255, 255, 0.1);
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+.progress-container {
+  margin-bottom: 12px;
+}
+
+.status-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 6px;
+}
+
+#progress-text {
+  font-size: 12px;
+  color: var(--accent);
+  margin-bottom: 0;
+  /* Reset margin since we use flex row */
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 1;
+}
+
+.token-badge {
+  font-size: 10px;
+  font-family: monospace;
+  background: rgba(45, 212, 191, 0.1);
+  /* Teal tint */
+  color: #2dd4bf;
+  padding: 2px 6px;
+  border-radius: 4px;
+  border: 1px solid rgba(45, 212, 191, 0.2);
+}
+
+.progress-bar {
+  height: 6px;
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+#progress-fill {
+  height: 100%;
+  background: var(--accent);
+  width: 0%;
+  /* Dynamic */
+  transition: width 0.3s ease;
+  animation: pulse 2s infinite;
+}
+
+@keyframes pulse {
+  0% {
+    opacity: 0.8;
+  }
+
+  50% {
+    opacity: 1;
+  }
+
+  100% {
+    opacity: 0.8;
+  }
+}
+
+/* Global Utility */
+.hidden {
+  display: none !important;
+}
+
+.logs-container {
+  display: flex;
+  flex-direction: column;
+  margin-bottom: 12px;
+}
+
+#logs-console {
+  background: #0d1117;
+  border-radius: var(--radius);
+  padding: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  font-family: "Menlo", "Consolas", monospace;
+  font-size: 11px;
+  color: #a0a0b0;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  line-height: 1.4;
+  height: 180px;
+  overflow-y: auto;
+  transition: all 0.3s ease;
+}
+
+/* Modal */
+.modal {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: rgba(0, 0, 0, 0.8);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  z-index: 100;
+  backdrop-filter: blur(4px);
+  opacity: 1;
+  transition: opacity 0.2s;
+}
+
+.modal.hidden {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.modal-content {
+  background: var(--bg);
+  width: 95%;
+  height: 95%;
+  border-radius: var(--radius);
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 10px 25px rgba(0, 0, 0, 0.5);
+  overflow: hidden;
+}
+
+.modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 16px 20px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  background: var(--surface);
+}
+
+.modal-header h2 {
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.config-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 20px;
+}
+
+.modal-actions {
+  padding: 16px 20px;
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+  display: flex;
+  justify-content: flex-end;
+  background: var(--surface);
+}
+
+/* LLM List Styling */
+#llm-list {
+  list-style: none;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.llm-item {
+  background: var(--surface);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: var(--radius);
+  transition: transform 0.2s, box-shadow 0.2s;
+}
+
+.llm-item.dragging {
+  opacity: 0.5;
+  border-color: var(--accent);
+}
+
+.llm-header {
+  display: flex;
+  align-items: center;
+  padding: 10px 12px;
+  cursor: grab;
+}
+
+.llm-header:active {
+  cursor: grabbing;
+}
+
+.handle {
+  margin-right: 12px;
+  color: var(--text-muted);
+  font-size: 18px;
+  line-height: 1;
+  cursor: grab;
+}
+
+.name {
+  flex: 1;
+  font-weight: 600;
+  font-size: 13px;
+  text-transform: capitalize;
+}
+
+.toggle-btn {
+  background: transparent;
+  color: var(--text-muted);
+  padding: 4px;
+  font-size: 10px;
+  border-radius: 4px;
+  min-width: 24px;
+  height: 24px;
+}
+
+.toggle-btn:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: var(--text);
+}
+
+.llm-settings {
+  padding: 12px;
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+  background: rgba(0, 0, 0, 0.2);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.llm-settings.hidden {
+  display: none;
+}
+
+.setting-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+/* Input States */
+input:disabled,
+button:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+  background-color: rgba(255, 255, 255, 0.05);
+}
+
+/* Logs Header */
+.logs-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.logs-header h4 {
+  margin: 0;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+}
+
+.logs-header .icon-btn {
+  font-size: 12px;
+  padding: 2px 6px;
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 4px;
+}
+
+.logs-header .icon-btn:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.logs-container {
+  display: flex;
+  flex-direction: column;
+  /* Allow container to shrink when collapsed if needed, 
+       but mostly we toggle the PRE height */
+}
+
+#logs-console {
+  transition: all 0.3s ease;
+  overflow-y: auto;
+  user-select: text;
+  cursor: text;
+}
+
+#logs-console.collapsed {
+  max-height: 0 !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  border: none !important;
+  opacity: 0;
+}

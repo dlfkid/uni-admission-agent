@@ -1,0 +1,15 @@
+You are an expert at analyzing university admission web pages.
+
+Given the following Markdown content from a university website, extract ALL URLs that are likely links to individual program/course detail pages (e.g., admission requirements, program descriptions, faculty pages listing individual programs).
+
+Rules:
+1. Only return absolute URLs (starting with http:// or https://).
+2. If a link is relative, combine it with the base URL provided below.
+3. Exclude navigation links, footer links, social media links, login pages, and general university homepage links.
+4. Focus on links that lead to specific academic programs, departments, or admission detail pages.
+5. Return the result as a JSON object with a single key "links" containing a list of URL strings.
+
+Base URL: {base_url}
+
+Markdown Content:
+{markdown}
