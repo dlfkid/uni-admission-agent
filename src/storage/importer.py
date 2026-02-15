@@ -28,12 +28,12 @@ class ExcelImporter:
         "专业中文名": "name_zh",
         "专业英文名": "name_en",
         "English Name": "name_en",
-        "学费": "tuition_fee_raw",
-        "Tuition Fee": "tuition_fee_raw",
-        "学习时长": "duration_raw",
-        "Duration": "duration_raw",
-        "非本地人申请截止日期": "deadline_raw",
-        "Deadline": "deadline_raw"
+        "学费": "_tuition_raw",
+        "Tuition Fee": "_tuition_raw",
+        "学习时长": "_duration_raw",
+        "Duration": "_duration_raw",
+        "非本地人申请截止日期": "_deadline_raw",
+        "Deadline": "_deadline_raw"
     }
 
     def __init__(self, file_path: str, use_llm: bool = False):
@@ -209,12 +209,17 @@ class ExcelImporter:
             if rows_needing_llm:
                 await self._batch_process_llm(rows_needing_llm)
 
-            # 5. Upsert All
+            # 5. Upsert All (strip processing-only keys before DB write)
             inserted_count = 0
             updated_count = 0
             for program_data in all_programs:
+                # Remove intermediate raw keys that are not DB columns
+                db_data = {
+                    k: v for k, v in program_data.items()
+                    if not k.startswith("_")
+                }
                 try:
-                    _, created = self.db_manager.upsert_program(program_data, univ_slug)
+                    _, created = self.db_manager.upsert_program(db_data, univ_slug)
                     if created:
                         inserted_count += 1
                     else:
@@ -266,19 +271,19 @@ class ExcelImporter:
         if "name_zh" not in data:
             data["name_zh"] = ""
             
-        if "tuition_fee_raw" in data:
-            amount, currency = DataCleaner.parse_tuition(data["tuition_fee_raw"])
+        if "_tuition_raw" in data:
+            amount, currency = DataCleaner.parse_tuition(data["_tuition_raw"])
             if amount:
                 data["tuition_amount"] = amount
                 data["currency"] = currency
 
-        if "duration_raw" in data:
-            options = DataCleaner.parse_study_options(data["duration_raw"])
+        if "_duration_raw" in data:
+            options = DataCleaner.parse_study_options(data["_duration_raw"])
             if options:
                 data["study_options"] = options
                 
-        if "deadline_raw" in data:
-            deadlines = DataCleaner.parse_deadlines(data["deadline_raw"])
+        if "_deadline_raw" in data:
+            deadlines = DataCleaner.parse_deadlines(data["_deadline_raw"])
             if deadlines:
                 data["deadlines"] = deadlines
                 
@@ -289,11 +294,11 @@ class ExcelImporter:
         if not self.use_llm:
             return False
             
-        if data.get("tuition_fee_raw") and "tuition_amount" not in data:
+        if data.get("_tuition_raw") and "tuition_amount" not in data:
             return True
-        if data.get("duration_raw") and "study_options" not in data:
+        if data.get("_duration_raw") and "study_options" not in data:
             return True
-        if data.get("deadline_raw") and "deadlines" not in data:
+        if data.get("_deadline_raw") and "deadlines" not in data:
             return True
         return False
 
@@ -321,9 +326,9 @@ class ExcelImporter:
                     for data in chunk:
                         inp: Dict[str, Any] = {
                             "Course Name": data.get("name_en"),
-                            "Tuition Fee": data.get("tuition_fee_raw"),
-                            "Duration": data.get("duration_raw"),
-                            "Deadlines": data.get("deadline_raw"),
+                            "Tuition Fee": data.get("_tuition_raw"),
+                            "Duration": data.get("_duration_raw"),
+                            "Deadlines": data.get("_deadline_raw"),
                         }
                         llm_inputs.append({k: v for k, v in inp.items() if v})
 

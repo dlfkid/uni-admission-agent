@@ -67,11 +67,6 @@ class Program(SQLModel, table=True):
     # Round number is assigned chronologically (1, 2, 3...)
     deadlines: List[Dict[str, Any]] = Field(default=[], sa_column=Column(JSONB))
     
-    # Legacy/Raw field fallback
-    tuition_fee_raw: Optional[str] = None
-    duration_raw: Optional[str] = None
-    deadline_raw: Optional[str] = None
-    
     # Store any extra columns from Excel as JSON
     extra_metadata: Dict[str, Any] = Field(default={}, sa_column=Column(JSONB))
     

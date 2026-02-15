@@ -47,11 +47,9 @@ class ExcelExporter:
                     "Academic Year": p.academic_year,
                     "Program Name (EN)": p.name_en,
                     "Program Name (ZH)": p.name_zh,
+                    "Faculty": p.faculty,
                     "Tuition": p.tuition_amount,
                     "Currency": p.currency,
-                    "Tuition (Raw)": p.tuition_fee_raw,
-                    "Duration (Raw)": p.duration_raw,
-                    "Deadline (Raw)": p.deadline_raw,
                     "Updated At": p.updated_at
                 }
                 # Add extra metadata flattened? Or separate? 

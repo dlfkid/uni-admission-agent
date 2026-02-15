@@ -11,12 +11,17 @@ CURRENT CHUNK (Chunk {chunk_number}/{total_chunks}):
 TASK:
 Extract the following admission data from the current chunk. If information spans across chunks (e.g., a label in the previous context and a value in this chunk), use the context to reconstruct the full meaning.
 
-1. **Tuition**: Extract numeric amount and currency. Handle "per year" or total.
-2. **Study Options**: Extract study modes (FullTime, PartTime, Hybrid) and duration in months.
-3. **Deadlines**: Extract application deadlines with dates and round types (Early, Main, Extended).
+1. **Faculty**: Identify the top-level academic unit (Faculty, School, or College).
+   - Look for text containing "Faculty of...", "School of...", "College of...".
+   - If a program is in the "Department of Computer Science" under the "Faculty of Engineering", the faculty value should be "Faculty of Engineering".
+   - If not explicitly mentioned, infer from context or set to null.
+2. **Tuition**: Extract numeric amount and currency. Handle "per year" or total.
+3. **Study Options**: Extract study modes (FullTime, PartTime, Hybrid) and duration in months.
+4. **Deadlines**: Extract application deadlines with dates and round types (Early, Main, Extended).
    - "Round 1" → Early, "Round 2"/Normal → Main, "Clearing" → Extended.
 
 IMPORTANT:
+- Only return necessary structured data. Do NOT include any raw HTML snippets or duplicate original text in the JSON output.
 - If a field was already fully extracted in a previous chunk (mentioned in context), you may return null for that field.
 - If information is split across chunks, combine the context with this chunk to reconstruct the data.
 - Provide a brief "context_summary" (max 200 chars) capturing key unfinished information for the next chunk.

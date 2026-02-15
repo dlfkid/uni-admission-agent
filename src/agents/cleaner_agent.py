@@ -51,6 +51,7 @@ class ParsedDeadline(BaseModel):
 
 
 class ParsedProgramData(BaseModel):
+    faculty: Optional[str] = Field(default=None, description="Top-level academic unit (Faculty, School, or College). e.g., 'Faculty of Engineering'.")
     tuition: Optional[ParsedTuition] = Field(default=None, description="Tuition fee structure")
     study_options: List[ParsedStudyOption] = Field(default_factory=list, description="List of study options")
     deadlines: List[ParsedDeadline] = Field(default_factory=list, description="List of application deadlines")
@@ -87,6 +88,7 @@ def _merge_parsed_data(
         Merged ParsedProgramData.
     """
     merged_tuition = new.tuition if new.tuition else existing.tuition
+    merged_faculty = new.faculty if new.faculty else existing.faculty
 
     # Accumulate study options and deadlines (dedup by content)
     merged_options = list(existing.study_options)
@@ -100,6 +102,7 @@ def _merge_parsed_data(
             merged_deadlines.append(dl)
 
     return ParsedProgramData(
+        faculty=merged_faculty,
         tuition=merged_tuition,
         study_options=merged_options,
         deadlines=merged_deadlines,
@@ -145,11 +148,17 @@ class LLMCleanerAgent:
         {raw_row}
 
         Requirements:
-        1. **Tuition**: Extract numeric amount and currency. Handle "per year" or total logic if implied.
-        2. **Study Options**: Convert descriptions like "1 year FT / 2 years PT" into a list of options with mode and months.
-        3. **Deadlines**: Extract dates and descriptions.
+        1. **Faculty**: Identify the top-level academic unit (Faculty, School, or College).
+           - Look for text containing 'Faculty of...', 'School of...', 'College of...'.
+           - If a program is in 'Department of Computer Science' under 'Faculty of Engineering', return 'Faculty of Engineering'.
+           - If not explicitly mentioned, infer from context or set to null.
+        2. **Tuition**: Extract numeric amount and currency. Handle "per year" or total logic if implied.
+        3. **Study Options**: Convert descriptions like "1 year FT / 2 years PT" into a list of options with mode and months.
+        4. **Deadlines**: Extract dates and descriptions.
            - Output ALL valid deadlines found, sorted chronologically.
-        4. Missing Data: If a field cannot be extracted, set it to null/empty list as per schema.
+        5. Missing Data: If a field cannot be extracted, set it to null/empty list as per schema.
+
+        IMPORTANT: Only return necessary structured data. Do NOT include any raw HTML snippets or duplicate original text in the JSON output.
 
         Output strictly valid JSON matching the schema.
         """
@@ -329,11 +338,16 @@ class LLMCleanerAgent:
             "Return a JSON object with a key 'programs' containing a list of parsed objects, strictly preserving the order.",
             "",
             "Requirements:",
-            "1. **Tuition**: Extract numeric amount and currency. Handle 'per year' or total logic if implied.",
-            "2. **Study Options**: Convert descriptions like '1 year FT / 2 years PT' into a list of options with mode and months.",
-            "3. **Deadlines**: Extract dates and descriptions.",
+            "1. **Faculty**: Identify the top-level academic unit (Faculty, School, or College).",
+            "   - Look for text containing 'Faculty of...', 'School of...', 'College of...'.",
+            "   - If a program is in a department, identify its parent Faculty. If not available, set to null.",
+            "2. **Tuition**: Extract numeric amount and currency. Handle 'per year' or total logic if implied.",
+            "3. **Study Options**: Convert descriptions like '1 year FT / 2 years PT' into a list of options with mode and months.",
+            "4. **Deadlines**: Extract dates and descriptions.",
             "   - Output ALL valid deadlines found, sorted chronologically.",
-            "4. Missing Data: If a field cannot be extracted, set it to null/empty list as per schema.",
+            "5. Missing Data: If a field cannot be extracted, set it to null/empty list as per schema.",
+            "",
+            "IMPORTANT: Only return necessary structured data. Do NOT include any raw HTML snippets or duplicate original text in the JSON output.",
             "",
             "Input Data Rows:",
         ]

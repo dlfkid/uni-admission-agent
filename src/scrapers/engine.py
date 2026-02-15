@@ -6,7 +6,7 @@ and integrates with RouterAgent/LLMCleanerAgent for structured data extraction.
 Supports dynamic crawl depth with LLM-driven heuristic scouting.
 """
 
-import json
+
 import asyncio
 import logging
 import random
@@ -17,19 +17,17 @@ from typing import Dict, List, Optional, Set, cast
 from urllib.parse import urljoin
 
 from crawl4ai import AsyncWebCrawler, BrowserConfig, CrawlerRunConfig, CacheMode, CrawlResult
-from sqlmodel import select
+
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 from src.agents.cleaner_agent import LLMCleanerAgent, ParsedProgramData
-from src.models.admission import University
+
 from src.agents.factory import RouterAgent, create_router
 from src.core.environment import ScraperError
 from src.utils.text import generate_program_group_code
 from src.models.scraper_models import (
     CrawlPageResult,
-    ExtractedLinks,
     PageType,
-    PageTypeResult,
     ScoutedLink,
     ScoutedLinks,
     ScoutReport,
@@ -179,10 +177,10 @@ class AdmissionScraper:
 
     def extract_links(self, markdown: str, base_url: str) -> List[str]:
         """
-        Use LLM to extract program detail page URLs from Markdown.
-
-        For large pages, splits the content into safe chunks and processes
-        each chunk separately, then aggregates and deduplicates results.
+        Extract potential program detail page URLs from Markdown using Regex.
+        
+        Optimized to avoid LLM calls. Finds all [text](url) and raw URLs,
+        then filters for valid absolute URLs.
 
         Args:
             markdown: Markdown content of the page.
@@ -191,63 +189,52 @@ class AdmissionScraper:
         Returns:
             List of absolute URLs for program detail pages.
         """
-        # Split into chunks if content exceeds limit
-        chunks = _split_markdown_chunks(markdown, MAX_MARKDOWN_CHARS)
-        logger.info(
-            "Extracting links via LLM: %s chars of Markdown (%d chunk%s)",
-            f"{len(markdown):,}", len(chunks),
-            "" if len(chunks) == 1 else "s",
-        )
+        logger.info("Extracting links via Regex (heuristic)...")
+        
+        # Regex to find markdown links: [text](href)
+        md_link_pattern = re.compile(r"\[.*?\]\((.*?)\)")
+        # Regex to find raw http(s) links
+        raw_url_pattern = re.compile(r"(https?://[^\s\)]+)")
 
-        prompt_template = _load_prompt("extract_links.txt")
-        all_links: List[str] = []
+        found_links: Set[str] = set()
+        
+        # 1. Extract from markdown links
+        for match in md_link_pattern.findall(markdown):
+            # Clean up link (remove title parts like " title")
+            href = match.split(" ")[0].strip()
+            if href:
+                found_links.add(href)
+                
+        # 2. Extract raw URLs
+        for match in raw_url_pattern.findall(markdown):
+            found_links.add(match)
 
-        for i, chunk in enumerate(chunks):
-            logger.info(
-                "Processing chunk %d/%d (%s chars)...",
-                i + 1, len(chunks), f"{len(chunk):,}",
-            )
-            prompt = prompt_template.format(
-                base_url=base_url, markdown=chunk,
-            )
-
-            try:
-                response = self.router.generate(prompt, ExtractedLinks)
-
-                if not response.text:
-                    logger.warning(
-                        "Empty response from LLM for chunk %d", i + 1,
-                    )
-                    continue
-
-                extracted = _parse_extracted_links(response.text)
-                all_links.extend(extracted.links)
-
-            except Exception as e:
-                logger.error(
-                    "Link extraction failed for chunk %d: %s", i + 1, e,
-                )
-                # Continue with remaining chunks rather than failing
+        # 3. Resolve and Filter
+        resolved_links: List[str] = []
+        for link in found_links:
+            # Skip empty or anchor links
+            if not link or link.startswith("#") or link.startswith("mailto:"):
                 continue
 
-        # Resolve relative URLs + deduplicate
-        seen: set[str] = set()
-        resolved: List[str] = []
-        for link in all_links:
-            absolute = (
-                link if link.startswith(("http://", "https://"))
-                else urljoin(base_url, link)
-            )
-            if absolute not in seen:
-                seen.add(absolute)
-                resolved.append(absolute)
+            try:
+                absolute = urljoin(base_url, link)
+                
+                # Heuristic: Filter out obviously irrelevant links
+                # (e.g., CSS, JS, images, login pages)
+                lower_link = absolute.lower()
+                if any(ext in lower_link for ext in [".css", ".js", ".png", ".jpg", ".jpeg", ".ico", ".svg", ".woff", ".ttf"]):
+                    continue
+                if "login" in lower_link or "signin" in lower_link or "admin" in lower_link:
+                    continue
+                    
+                # Ensure it's not the base URL itself
+                if absolute.rstrip("/") != base_url.rstrip("/"):
+                    resolved_links.append(absolute)
+            except Exception:
+                continue
 
-        logger.info(
-            "Extracted %d unique program links via LLM "
-            "(%d total from %d chunks)",
-            len(resolved), len(all_links), len(chunks),
-        )
-        return resolved
+        logger.info("Extracted %d unique links via Regex", len(resolved_links))
+        return resolved_links
 
     def scout_links(
         self, markdown: str, links: List[str], base_url: str,
@@ -325,41 +312,34 @@ class AdmissionScraper:
     def detect_page_type(
         self, markdown: str, link_count: int,
     ) -> PageType:
-        """Use LLM to detect if a page is an index (course list) or detail (single program).
-
-        Args:
-            markdown: Page content in Markdown.
-            link_count: Number of links found on the page.
-
-        Returns:
-            PageType.INDEX or PageType.DETAIL (defaults to DETAIL on error).
+        """Determines if a page is an INDEX or DETAIL page using heuristics.
+        
+        Optimization: Replaced LLM call with content & link density check.
+        Strong content signals ("Tuition", "Deadline") => DETAIL.
         """
-        content_preview = markdown[:3000]  # First 3K chars for efficiency
-        prompt_template = _load_prompt("detect_page_type.txt")
-        prompt = prompt_template.format(
-            content_preview=content_preview,
-            link_count=link_count,
-        )
+        # 1. Strong content signals for Detail Page
+        # If these keywords appear, it's likely a program page regardless of links
+        content_lower = markdown.lower()
+        detail_signals = [
+            "tuition fee", "program fee", "application deadline", 
+            "entry requirements", "admission requirements",
+            "course structure", "module list", "what you will study",
+            "program overview", "degree requirements"
+        ]
+        
+        if any(signal in content_lower for signal in detail_signals):
+             logger.info("Page Type Detection: DETAIL (Found content signal)")
+             return PageType.DETAIL
 
-        try:
-            response = self.router.generate(prompt, PageTypeResult)
-
-            if not response.text:
-                logger.warning("Empty LLM response for page type detection")
-                return PageType.DETAIL  # Default to detail on failure
-
-            result = PageTypeResult.model_validate_json(response.text)
-            logger.info(
-                "Page type: %s (confidence: %.2f) — %s",
-                result.page_type.value.upper(),
-                result.confidence,
-                result.reasoning,
-            )
-            return result.page_type
-
-        except Exception as e:
-            logger.error("Page type detection failed: %s", e)
-            return PageType.DETAIL  # Safe default
+        # 2. Heuristic: Indices usually have many links
+        threshold = 15
+        
+        if link_count > threshold:
+            logger.info(f"Page Type Detection: INDEX (Links={link_count} > {threshold})")
+            return PageType.INDEX
+        
+        logger.info(f"Page Type Detection: DETAIL (Links={link_count} <= {threshold})")
+        return PageType.DETAIL
 
     async def crawl_and_clean(
         self,
@@ -391,10 +371,46 @@ class AdmissionScraper:
         self._all_scouted_links = []
         self._failed_urls = []
 
-        logger.info(
-            "Starting crawl pipeline for %s (%d), max depth: %d",
-            univ_slug, year, 2 + continue_depth,
+        if not url:
+             logger.error("No URL provided for crawl.")
+             return 0
+
+        # Probe the entry URL to detect type
+        logger.info("Probing entry URL to detect page type: %s", url)
+        try:
+            probe_result = await self.crawl_page(url)
+        except ScraperError:
+             logger.error("Failed to probe entry URL: %s", url)
+             return 0
+
+        if not probe_result.markdown:
+             logger.error("Entry URL yielded no content: %s", url)
+             return 0
+
+        # Detect type
+        page_type = self.detect_page_type(
+            markdown=probe_result.markdown,
+            link_count=len(probe_result.links),
         )
+        
+        # If detected as DETAIL, we set is_index_layer=False
+        # This tells _crawl_depth to skip link extraction and parse the page directly.
+        is_index = (page_type == PageType.INDEX)
+        
+        logger.info(
+            "Entry Point detected as: %s (is_index_layer=%s)", 
+            page_type.value.upper(), is_index
+        )
+        
+        # Reset visited so _crawl_depth can process it again (it dedups against visited)
+        # Since we just probed it, we might want to keep it in visited?
+        # No, _crawl_depth expects to crawl it. 
+        # But wait, we just crawled it. 
+        # Optimization: We can pass the probe result to avoid re-crawling?
+        # _crawl_depth implementation doesn't support passing results currently.
+        # For now, let it re-crawl (simpler change). The crawler caches if enabled, 
+        # but here we use CacheMode.BYPASS.
+        # However, re-crawling is robust.
 
         imported = await self._crawl_depth(
             urls=[url],
@@ -402,7 +418,7 @@ class AdmissionScraper:
             year=year,
             current_depth=0,
             max_continue=continue_depth,
-            is_index_layer=True,
+            is_index_layer=is_index,
         )
 
         # --- Scout Report (Human-in-the-loop) ---
@@ -543,6 +559,9 @@ class AdmissionScraper:
                     "name_en": _extract_program_name(page.markdown), # Re-extract to ensure we use what we passed to DB
                     "name_zh": "",
                 }
+
+                if parsed.faculty:
+                    program_data["faculty"] = parsed.faculty
 
                 if parsed.tuition:
                     program_data["tuition_amount"] = parsed.tuition.amount
@@ -769,44 +788,7 @@ def _split_markdown_chunks(
     return chunks
 
 
-def _parse_extracted_links(raw_text: str) -> ExtractedLinks:
-    """Parse LLM JSON output with fallback repair for truncated responses.
 
-    When the LLM output token limit is exceeded, the JSON may be cut off
-    mid-string (e.g., ``"https://www.ucl.ac``). This function first tries
-    strict parsing, then falls back to extracting valid URLs via regex.
-    """
-    # 1. Try strict JSON parse
-    try:
-        return ExtractedLinks.model_validate_json(raw_text)
-    except Exception:
-        pass
-
-    # 2. Try to extract JSON block from markdown fences
-    json_match = re.search(r"```(?:json)?\s*(\{.*?)```", raw_text, re.DOTALL)
-    if json_match:
-        try:
-            return ExtractedLinks.model_validate_json(json_match.group(1))
-        except Exception:
-            pass
-
-    # 3. Fallback: extract all valid URLs via regex
-    logger.warning(
-        "JSON parse failed, falling back to regex URL extraction"
-    )
-    url_pattern = re.compile(r'https?://[^\s"\',\]\)]+[a-zA-Z0-9/]')
-    found_urls = url_pattern.findall(raw_text)
-
-    # Deduplicate while preserving order
-    seen: set[str] = set()
-    unique_urls: list[str] = []
-    for url in found_urls:
-        if url not in seen:
-            seen.add(url)
-            unique_urls.append(url)
-
-    logger.info("Regex fallback recovered %d URLs", len(unique_urls))
-    return ExtractedLinks(links=unique_urls)
 
 
 def _extract_program_name(markdown: str) -> str:
