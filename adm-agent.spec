@@ -3,14 +3,87 @@
 PyInstaller spec for UniAdmission Agent (adm-agent).
 
 Build with:
-    pyinstaller adm-agent.spec
+    uv run python scripts/build_dist.py
+
+NOTE: We use collect_all() extensively because uv-managed venvs have a
+package layout that PyInstaller's standard module-graph analysis cannot
+reliably discover (e.g. typer/typer-slim split packages).
 """
 
 import sys
 from pathlib import Path
+from PyInstaller.utils.hooks import collect_all
 
 block_cipher = None
 ROOT = Path(SPECPATH)
+
+# ---------------------------------------------------------------------------
+# Force-collect packages that PyInstaller fails to discover in uv venvs
+# ---------------------------------------------------------------------------
+
+# Packages whose datas / binaries / hiddenimports must be force-collected.
+# collect_all() returns (datas, binaries, hiddenimports) for each package.
+_COLLECT_PKGS = [
+    # --- CLI ---
+    "typer",
+    "click",
+    "rich",
+    # --- FastAPI / ASGI ---
+    "fastapi",
+    "starlette",
+    "uvicorn",
+    # --- Database ---
+    "sqlmodel",
+    "sqlalchemy",
+    "sqlalchemy_utils",
+    "psycopg2",
+    "aiosqlite",
+    "alembic",
+    # --- Data processing ---
+    "pandas",
+    "openpyxl",
+    "dateutil",
+    # --- LLM ---
+    "google.genai",
+    "openai",
+    # --- Scraping ---
+    "playwright",
+    "playwright_stealth",
+    "crawl4ai",
+    # --- Pydantic ---
+    "pydantic",
+    "pydantic_settings",
+    # --- MCP ---
+    "mcp",
+    # --- PDF ---
+    "pymupdf4llm",
+]
+
+all_datas = []
+all_binaries = []
+all_hiddenimports = []
+
+for pkg in _COLLECT_PKGS:
+    try:
+        datas, binaries, hiddenimports = collect_all(pkg)
+        all_datas += datas
+        all_binaries += binaries
+        all_hiddenimports += hiddenimports
+    except Exception:
+        print(f"WARN: collect_all('{pkg}') failed — skipping")
+
+# ---------------------------------------------------------------------------
+# Static datas
+# ---------------------------------------------------------------------------
+
+# Prompt templates — bundled into src/agents/prompts/ inside _MEIPASS
+all_datas.append(
+    (str(ROOT / "src" / "agents" / "prompts" / "*.txt"), "src/agents/prompts")
+)
+
+# .env.example for reference
+if (ROOT / ".env.example").exists():
+    all_datas.append((str(ROOT / ".env.example"), "."))
 
 # ---------------------------------------------------------------------------
 # Analysis
@@ -18,71 +91,14 @@ ROOT = Path(SPECPATH)
 
 a = Analysis(
     [str(ROOT / "src" / "cmd" / "cli.py")],
-    pathex=[str(ROOT)],
-    binaries=[],
-    datas=[
-        # Prompt templates — bundled into src/agents/prompts/ inside _MEIPASS
-        (str(ROOT / "src" / "agents" / "prompts" / "*.txt"), "src/agents/prompts"),
-        # .env.example for reference
-        (str(ROOT / ".env.example"), ".") if (ROOT / ".env.example").exists() else (None, None),
-    ],
-    hiddenimports=[
-        # --- Typer / CLI ---
-        "typer",
-        "click",
-        # --- FastAPI + ASGI ---
-        "uvicorn",
-        "uvicorn.logging",
-        "uvicorn.loops",
-        "uvicorn.loops.auto",
-        "uvicorn.protocols",
-        "uvicorn.protocols.http",
-        "uvicorn.protocols.http.auto",
-        "uvicorn.protocols.websockets",
-        "uvicorn.protocols.websockets.auto",
-        "uvicorn.lifespan",
-        "uvicorn.lifespan.on",
-        "fastapi",
-        "starlette",
-        "starlette.routing",
-        "starlette.responses",
-        "starlette.middleware",
-        "starlette.middleware.cors",
-        "starlette.concurrency",
+    pathex=[str(ROOT)] + sys.path,
+    binaries=all_binaries,
+    datas=all_datas,
+    hiddenimports=all_hiddenimports + [
         # --- Server module (string-imported by uvicorn.run) ---
         "src.api.server",
         "src.api.schemas",
         "src.api.task_manager",
-        # --- Database ---
-        "sqlmodel",
-        "sqlalchemy",
-        "sqlalchemy.dialects.postgresql",
-        "sqlalchemy_utils",
-        "psycopg2",
-        "aiosqlite",
-        "alembic",
-        # --- Data processing ---
-        "pandas",
-        "openpyxl",
-        "dateutil",
-        # --- LLM Providers ---
-        "google.genai",
-        "openai",
-        "volcenginesdkcore",
-        "volcenginesdkarkruntime",
-        # --- Scraping ---
-        "playwright",
-        "playwright.async_api",
-        "playwright_stealth",
-        "crawl4ai",
-        # --- MCP ---
-        "mcp",
-        # --- PDF ---
-        "pymupdf4llm",
-        "fitz",
-        # --- Pydantic ---
-        "pydantic",
-        "pydantic_settings",
         # --- Project modules ---
         "src.core.paths",
         "src.core.environment",
@@ -104,7 +120,6 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    # Strip out things we definitely don't need
     excludes=[
         "tkinter",
         "unittest",
@@ -117,9 +132,6 @@ a = Analysis(
     cipher=block_cipher,
     noarchive=False,
 )
-
-# Filter out None entries from datas (e.g. when .env.example is missing)
-a.datas = [(src, dst, typ) for src, dst, typ in a.datas if src is not None]
 
 # ---------------------------------------------------------------------------
 # Build
@@ -138,7 +150,6 @@ exe = EXE(
     strip=False,
     upx=True,
     console=True,
-    # Disable terminal window on macOS — not relevant for CLI tool
     disable_windowed_traceback=False,
 )
 

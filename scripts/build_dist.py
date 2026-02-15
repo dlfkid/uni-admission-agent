@@ -112,20 +112,23 @@ def build_engine() -> Path:
         Path to the ``dist/adm-agent/`` directory.
     """
     logger.info("⚙️  Building Backend Engine via PyInstaller …")
-    _ensure_tool("pyinstaller", "pip install pyinstaller")
+    
+    # We run PyInstaller via the current python interpreter to ensure it detects
+    # the packages installed in the current environment (e.g. .venv).
+    cmd = [
+        sys.executable, "-m", "PyInstaller",
+        str(SPEC_FILE),
+        "--noconfirm",
+        "--clean",
+        "--distpath", str(PI_DIST),
+        "--workpath", str(PI_BUILD),
+    ]
 
     if not SPEC_FILE.exists():
         raise FileNotFoundError(f"Spec file not found: {SPEC_FILE}")
 
     _run(
-        [
-            "pyinstaller",
-            str(SPEC_FILE),
-            "--noconfirm",
-            "--clean",
-            "--distpath", str(PI_DIST),
-            "--workpath", str(PI_BUILD),
-        ],
+        cmd,
         cwd=PROJECT_ROOT,
         label="pyinstaller",
     )

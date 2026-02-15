@@ -81,6 +81,7 @@ exclude_lines = [
 
 [dependency-groups]
 dev = [
+    "pyinstaller>=6.19.0",
     "pyright>=1.1.408",
     "ruff>=0.15.0",
 ]
