@@ -286,19 +286,23 @@ def package_release(
     _write_readme(staging_dir, exe_name)
     
     # 5. Archive
-    output_path = RELEASE_ROOT / base_name
-    
+    # NOTE: Do NOT use Path.with_suffix() here — pathlib treats the dot
+    # in version strings like "v0.3" as a file-extension separator, which
+    # silently strips the platform suffix and causes name collisions.
     if os_name == "windows":
-        archive_format = "zip"
-        shutil.make_archive(str(output_path), archive_format, root_dir=PI_DIST, base_dir=base_name)
-        final_file = output_path.with_suffix(".zip")
+        final_file = RELEASE_ROOT / f"{base_name}.zip"
+        shutil.make_archive(
+            str(RELEASE_ROOT / base_name),
+            "zip",
+            root_dir=PI_DIST,
+            base_dir=base_name,
+        )
     else:
-        # User requested .tar.gz for MacOS/Linux
-        # Use tarfile to preserve permissions
-        final_file = output_path.with_suffix(".tar.gz")
+        # .tar.gz for macOS / Linux — use tarfile to preserve permissions
+        final_file = RELEASE_ROOT / f"{base_name}.tar.gz"
         with tarfile.open(final_file, "w:gz") as tar:
             tar.add(staging_dir, arcname=base_name)
-            
+
     logger.info("  ✅ Created archive: %s", final_file)
     return final_file
 
