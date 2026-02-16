@@ -3,9 +3,16 @@ __pycache__/
 *.py[codz]
 *$py.class
 
+# Node
+node_modules/
+
 # C extensions
 *.so
 .DS_Store
+
+# Pylint reports
+pylint_report*.txt
+pylint_full_report.txt
 # Distribution / packaging
 .Python
 build/

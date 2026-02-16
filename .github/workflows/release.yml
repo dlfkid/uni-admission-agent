@@ -43,17 +43,8 @@ jobs:
         shell: bash
         run: |
           cd extension
-          npm install
+          npm ci
           npm run build
-          # Create zip (cross-platform way via python or zip command)
-          # Windows might define 'zip' if using bash shell, but python is safer? 
-          # Or just use the standard 'zip' command which is usually available in Git Bash on Windows.
-          # Best to use python to be safe on all runners or specifically use Powershell on Windows?
-          # Actually, 'scripts/build_dist.py' has a build_extension() function that does npm install, run build, AND zips it.
-          # The USER instruction says "run npm install and npm run build, and zip dist to extension.zip".
-          # Since I modified build_dist.py to support --skip-frontend-build, I can do it manually here OR let build_dist keys do it.
-          # "Front compilation: enter extension/ ... zip ...".
-          # I will follow user instructions literally for the workflow steps.
           if [ "${{ runner.os }}" == "Windows" ]; then
             powershell Compress-Archive -Path dist/* -DestinationPath uni-admission-extension.zip
           else
