@@ -1,0 +1,13 @@
+warning: Failed to parse `pyproject.toml` during settings discovery:
+  TOML parse error at line 91, column 23
+     |
+  91 |     "pyright>=1.1.408",
+     |                       ^
+  key with no value, expected `=`
+
+error: Failed to parse: `pyproject.toml`
+  Caused by: TOML parse error at line 91, column 23
+   |
+91 |     "pyright>=1.1.408",
+   |                       ^
+key with no value, expected `=`

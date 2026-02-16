@@ -1,0 +1,8 @@
+   Building uni-admission-agent @ file:///Users/rayne.deng/Documents/seal/uni-admission-agent
+      Built uni-admission-agent @ file:///Users/rayne.deng/Documents/seal/uni-admission-agent
+Uninstalled 1 package in 2ms
+Installed 1 package in 3ms
+
+-------------------------------------------------------------------
+Your code has been rated at 10.00/10 (previous run: 9.49/10, +0.51)
+
