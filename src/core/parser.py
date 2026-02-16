@@ -88,7 +88,7 @@ class DataCleaner:
              # Default assumption if not specified? 
              # Let's verify context. If text is "1 year", usually FT. 
              # But safe to say Unknown for now or infer FT implies mostly.
-             pass
+            pass
 
         # Parse duration
         months = 0
