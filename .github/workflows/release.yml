@@ -49,7 +49,7 @@ jobs:
           npm ci
           npm run build
           if [ "${{ runner.os }}" == "Windows" ]; then
-            powershell Compress-Archive -Path dist/* -DestinationPath uni-admission-extension.zip
+            powershell -Command "Compress-Archive -Path 'dist\*' -DestinationPath 'uni-admission-extension.zip'"
           else
             cd dist && zip -r ../uni-admission-extension.zip . && cd ..
           fi
