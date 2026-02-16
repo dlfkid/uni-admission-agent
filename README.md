@@ -33,7 +33,74 @@ Entry Points                    Services Layer              Infrastructure
 └──────────────┘
 ```
 
-## 🚀 Getting Started
+## � Production Usage (No Code Required)
+
+If you just want to *use* the agent without writing code, download the latest release for your platform.
+
+### 1. Download
+Go to the [Releases Page](../../releases) and download the artifact for your OS:
+- **Windows**: `adm-agent-vX.Y.Z-windows-x86_64.zip`
+- **macOS**: `adm-agent-vX.Y.Z-macos-arm64.tar.gz` (Apple Silicon) or `x86_64` (Intel)
+- **Linux**: `adm-agent-vX.Y.Z-linux-x86_64.tar.gz`
+
+### 2. Installation & Run
+
+#### Windows
+1. Unzip the file.
+2. Open `cmd` or `PowerShell` in the unzipped folder.
+3. Run:
+   ```powershell
+   # Check environment
+   .\adm-agent.exe check
+   
+   # Start the server
+   .\adm-agent.exe serve
+   ```
+
+#### macOS / Linux
+1. Extract the archive:
+   ```bash
+   tar -xzf adm-agent-*.tar.gz
+   cd adm-agent-*
+   ```
+2. Run via terminal:
+   ```bash
+   # Check environment
+   ./adm-agent check
+   
+   # Start the server
+   ./adm-agent serve
+   ```
+   > **macOS Note**: If you see "System cannot verify the developer", go to **Settings > Privacy & Security** and click "Allow Anyway".
+
+### 3. Setup
+The agent needs a database connection.
+1. Make sure you have **PostgreSQL** running.
+2. Create a `.env` file in the same folder as the executable. You can copy the content below:
+   ```bash
+   # PostgreSQL Connection URL
+   # Format: postgresql+psycopg2://user:password@host:port/dbname
+   DATABASE_URL=postgresql+psycopg2://postgres:postgres@localhost:5432/uni_admission
+
+   # Gemini APIKey config
+   GEMINI_API_KEY=your_gemini_api_key_here
+   GEMINI_MODEL_NAME=gemini-2.0-flash
+
+   # DeepSeek APIKey config
+   DEEPSEEK_API_KEY=your_deepseek_api_key_here
+   DEEPSEEK_BASE_URL=https://api.deepseek.com
+   DEEPSEEK_MODEL_NAME=deepseek-chat
+
+   # VolcEngine (豆包) config
+   VOLC_API_KEY=your_volc_api_key_here
+   VOLC_MODEL_ID=your_model_endpoint_id
+
+   # LLM Priority config
+   LLM_PRIORITY_LIST=deepseek, gemini, volcengine
+   ```
+3. Set your `DATABASE_URL` and API keys in `.env`.
+
+## �🚀 Getting Started (Development)
 1. `pyenv local 3.12.0`
 2. `uv sync`
 3. Copy `.env.example` to `.env` and add your API keys.
@@ -61,6 +128,8 @@ uv run src/cmd/cli.py import --name hku --year 2026 --file example/hku-26-27.xls
 #   --output: Output file path
 #   --year:   Academic year (optional)
 uv run src/cmd/cli.py export --name hku --output hku_export.xlsx --year 2026
+```
+
 ### 4. Troubleshooting
 
 **Error: "Playwright browser not found"**
@@ -79,7 +148,7 @@ If you already have Playwright browsers installed elsewhere, set the environment
 ```bash
 export PLAYWRIGHT_BROWSERS_PATH=/path/to/ms-playwright
 ./adm-agent serve
-```
+
 # Crawl a URL and import admission data
 #   --name:      University slug
 #   --year:      Academic year
