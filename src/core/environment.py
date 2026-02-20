@@ -485,9 +485,8 @@ def install_playwright_browser() -> bool:
             return True
         else:
             raise PlaywrightError(
-                "Browser installation failed (exit code %d).\n"
+                f"Browser installation failed (exit code {completed.returncode}).\n"
                 "Please check your network connection and try again."
-                % completed.returncode
             )
     except ImportError:
         raise PlaywrightError(
