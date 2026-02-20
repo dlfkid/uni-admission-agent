@@ -621,8 +621,8 @@ class AdmissionScraper:
                     f"{action}: {program_data['name_en']} ({year}) [Group: {program_data.get('program_group_code')}]",
                 )
 
-            except Exception as e:
-                logger.error("Failed to process %s: %s", page.url, e)
+            except Exception:
+                logger.exception("Failed to process %s", page.url)
                 self._failed_urls.append(page.url)
                 scout_candidates.append(page)
 

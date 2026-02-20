@@ -1,7 +1,7 @@
 import os
 import logging
 import threading
-from typing import Optional, Tuple, List, Dict
+from typing import Any, Optional, Tuple, List, Dict
 from datetime import datetime, timezone
 from sqlmodel import create_engine, Session, select, SQLModel, col
 from sqlalchemy_utils import database_exists, create_database
@@ -14,6 +14,31 @@ from dotenv import load_dotenv
 
 load_dotenv()
 logger = logging.getLogger(__name__)
+
+
+def _normalize_text_payload(value: Any) -> Any:
+    """Normalize payload values for DB writes.
+
+    Recursively converts unexpected bytes into string to avoid
+    Unicode decode errors in database adapters on Windows.
+    """
+    if isinstance(value, dict):
+        return {
+            _normalize_text_payload(k): _normalize_text_payload(v)
+            for k, v in value.items()
+        }
+    if isinstance(value, list):
+        return [_normalize_text_payload(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_normalize_text_payload(item) for item in value)
+    if isinstance(value, bytes):
+        for encoding in ("utf-8", "gb18030", "latin-1"):
+            try:
+                return value.decode(encoding)
+            except UnicodeDecodeError:
+                continue
+        return value.decode("utf-8", errors="replace")
+    return value
 
 class DatabaseManager:
     _instance: Optional["DatabaseManager"] = None
@@ -113,7 +138,7 @@ class DatabaseManager:
 
             # 3. Construct Insert Statement
             # Add university_id to data
-            full_data = program_data.copy()
+            full_data = _normalize_text_payload(program_data.copy())
             full_data["university_id"] = univ.id
             if "updated_at" not in full_data:
                 full_data["updated_at"] = datetime.now(timezone.utc)
