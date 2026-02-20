@@ -10,12 +10,21 @@ from sqlalchemy import func
 from sqlalchemy import inspect as sa_inspect
 from src.models.admission import University, Program
 from src.models.scraper_models import ProgramContext
-from dotenv import load_dotenv
+from dotenv import load_dotenv, find_dotenv
 
-# Windows may default to system locale (e.g. cp936/GBK) when reading .env.
-# Explicitly force UTF-8 so multi-byte chars in passwords/comments
-# don't corrupt the DATABASE_URL passed to psycopg2.
-load_dotenv(encoding="utf-8")
+# On Windows with a Chinese locale the .env file may be saved in GBK/GB18030.
+# Try common encodings in priority order so DATABASE_URL always loads correctly.
+_ENV_FILE = find_dotenv(usecwd=True) or find_dotenv()
+if _ENV_FILE:
+    for _enc in ("utf-8-sig", "utf-8", "gb18030"):
+        try:
+            load_dotenv(_ENV_FILE, encoding=_enc, override=True)
+            break
+        except (UnicodeDecodeError, LookupError):
+            continue
+else:
+    load_dotenv()
+
 logger = logging.getLogger(__name__)
 
 
@@ -43,6 +52,45 @@ def _normalize_text_payload(value: Any) -> Any:
         return value.decode("utf-8", errors="replace")
     return value
 
+
+def _patch_psycopg2_for_gbk() -> None:
+    """Patch psycopg2.connect so GBK-encoded error messages from PostgreSQL
+    are re-decoded correctly on Windows Chinese locale systems.
+
+    Without this patch, a connection failure whose error message is in GBK
+    (e.g. 致命错误: 用户"postgres"Password认证失败) causes psycopg2 to raise an
+    unreadable ``UnicodeDecodeError`` instead of a proper ``OperationalError``,
+    completely hiding the real problem from the operator.
+    """
+    try:
+        import psycopg2  # pylint: disable=import-outside-toplevel
+        from psycopg2 import OperationalError  # pylint: disable=import-outside-toplevel
+    except ImportError:
+        return  # psycopg2 not installed – nothing to patch
+
+    _original_connect = psycopg2.connect
+
+    def _gbk_safe_connect(*args, **kwargs):
+        try:
+            return _original_connect(*args, **kwargs)
+        except UnicodeDecodeError as exc:
+            raw_bytes: bytes = exc.object  # type: ignore[assignment]
+            # Attempt to decode the GBK error message for a readable traceback
+            try:
+                decoded = raw_bytes.decode("gbk", errors="replace")
+            except Exception:  # pragma: no cover
+                decoded = raw_bytes.decode("latin-1", errors="replace")
+            raise OperationalError(
+                f"psycopg2 connection failed (GBK error message re-decoded): "
+                f"{decoded}"
+            ) from exc
+
+    psycopg2.connect = _gbk_safe_connect  # type: ignore[assignment]
+
+
+_patch_psycopg2_for_gbk()
+
+
 class DatabaseManager:
     _instance: Optional["DatabaseManager"] = None
     _lock = threading.Lock()
@@ -58,29 +106,36 @@ class DatabaseManager:
 
     @staticmethod
     def _sanitize_db_url(url: str) -> str:
-        """Ensure the database URL is a clean ASCII string.
+        """Ensure the database URL is a clean, psycopg2-safe connection string.
 
-        On Windows with a Chinese system locale, environment variables read
-        from a GBK-encoded file may contain raw GBK bytes embedded in a
-        Python ``str``.  psycopg2 (a C extension) then tries to re-encode
-        the DSN as UTF-8 and raises ``UnicodeDecodeError``.
-        Re-encoding through ``latin-1`` round-trips the raw bytes, then
-        we decode with ``utf-8`` to get the intended string.
+        1. Normalises any accidentally GBK-encoded bytes (Windows Chinese locale).
+        2. Appends ``client_encoding=utf8`` so psycopg2 negotiates UTF-8 with
+           the server from the initial handshake.  Without this, on Windows the
+           client inherits the ANSI code page (CP936/GBK) and psycopg2 may fail
+           to decode the server startup response as UTF-8.
         """
+        # --- Byte normalisation ---
         try:
             url.encode("ascii")
-            return url  # already pure ASCII – nothing to do
         except UnicodeEncodeError:
-            pass
-        # Try to recover: encode as latin-1 (identity mapping for byte values
-        # 0-255) then decode as utf-8 (or gb18030 as last resort)
-        raw = url.encode("latin-1")
-        for enc in ("utf-8", "gb18030", "latin-1"):
+            # Try latin-1 round-trip to recover bytes mis-read as latin-1.
             try:
-                return raw.decode(enc)
-            except UnicodeDecodeError:
-                continue
-        return url  # give up – let the driver surface a clear error
+                raw = url.encode("latin-1")
+                for enc in ("utf-8", "gb18030"):
+                    try:
+                        url = raw.decode(enc)
+                        break
+                    except UnicodeDecodeError:
+                        continue
+            except UnicodeEncodeError:
+                pass  # Genuine Unicode chars – leave as-is
+
+        # --- Force UTF-8 client encoding ---
+        if "client_encoding" not in url and url.startswith("postgresql"):
+            sep = "&" if "?" in url else "?"
+            url = f"{url}{sep}client_encoding=utf8"
+
+        return url
 
     def init_db(self, db_url: Optional[str] = None):
         """Initialize database connection and create tables."""
@@ -95,9 +150,16 @@ class DatabaseManager:
                 db_url = "postgresql+psycopg2://postgres:postgres@localhost:5432/uni_admission"
 
         db_url = self._sanitize_db_url(db_url)
-        
+
         try:
-            self.engine = create_engine(db_url)
+            # Force UTF-8 client encoding so psycopg2 negotiates UTF-8 with
+            # the server from the start.  Without this, on Windows (Chinese
+            # locale) psycopg2 may inherit the ANSI code page (CP936/GBK) and
+            # fail to decode the server's startup response as UTF-8.
+            self.engine = create_engine(
+                db_url,
+                connect_args={"client_encoding": "utf8"},
+            )
             
             # Self-healing: Create DB if not exists
             if not database_exists(self.engine.url):

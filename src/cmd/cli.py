@@ -16,7 +16,9 @@ Usage:
 
 import asyncio
 import logging
+import os
 import re
+import signal
 import sys
 from pathlib import Path
 from typing import Optional
@@ -43,6 +45,38 @@ from src.core.environment import install_playwright_browser
 from src.storage.db_manager import DatabaseManager
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+#  PID-file helpers (used by `serve` / `serve-stop`)
+# ---------------------------------------------------------------------------
+
+_PID_DIR = Path.home() / ".adm-agent"
+_PID_FILE = _PID_DIR / "server.pid"
+
+
+def _write_pid_file() -> None:
+    """Persist the current process PID so ``serve-stop`` can find it."""
+    _PID_DIR.mkdir(parents=True, exist_ok=True)
+    _PID_FILE.write_text(str(os.getpid()), encoding="utf-8")
+
+
+def _read_pid_file() -> "Optional[int]":
+    """Return the PID stored in the PID file, or *None* if unavailable."""
+    if not _PID_FILE.exists():
+        return None
+    try:
+        return int(_PID_FILE.read_text(encoding="utf-8").strip())
+    except (ValueError, OSError):
+        return None
+
+
+def _remove_pid_file() -> None:
+    """Delete the PID file, ignoring errors."""
+    try:
+        _PID_FILE.unlink(missing_ok=True)
+    except OSError:
+        pass
+
 
 app = typer.Typer(
     name="uni-admission",
@@ -284,15 +318,47 @@ def serve(
         import uvicorn
 
         typer.echo(f"🚀 Starting server on {host}:{port}")
-        uvicorn.run(
-            "src.api.server:app",
-            host=host,
-            port=port,
-            reload=False,
-            log_level="debug" if verbose else "info",
-        )
+        typer.echo(f"   PID file: {_PID_FILE}")
+        _write_pid_file()
+        try:
+            uvicorn.run(
+                "src.api.server:app",
+                host=host,
+                port=port,
+                reload=False,
+                log_level="debug" if verbose else "info",
+            )
+        finally:
+            _remove_pid_file()
     except ImportError:
         typer.echo("❌ uvicorn not installed. Run: uv add uvicorn[standard]", err=True)
+        raise typer.Exit(code=1)
+
+
+@app.command(name="serve-stop")
+def serve_stop() -> None:
+    """Stop a running server that was started with ``serve``."""
+    pid = _read_pid_file()
+    if pid is None:
+        typer.echo("ℹ️  No running server found (PID file not present).")
+        typer.echo(f"   Expected: {_PID_FILE}")
+        raise typer.Exit(code=0)
+
+    # Verify the process is actually alive
+    try:
+        os.kill(pid, 0)
+    except (ProcessLookupError, OSError):
+        typer.echo(f"ℹ️  Server process (PID {pid}) is not running. Removing stale PID file.")
+        _remove_pid_file()
+        raise typer.Exit(code=0)
+
+    # Send termination signal
+    try:
+        os.kill(pid, signal.SIGTERM)
+        typer.echo(f"✅ Stop signal sent to server (PID {pid})")
+        _remove_pid_file()
+    except (ProcessLookupError, PermissionError, OSError) as exc:
+        typer.echo(f"❌ Failed to stop server (PID {pid}): {exc}", err=True)
         raise typer.Exit(code=1)
 
 

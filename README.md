@@ -58,6 +58,9 @@ Go to the [Releases Page](../../releases) and download the artifact for your OS:
    
    # Start the server
    .\adm-agent.exe serve
+
+   # Stop the running server (from another terminal)
+   .\adm-agent.exe serve-stop
    ```
 
 #### macOS / Linux
@@ -76,6 +79,9 @@ Go to the [Releases Page](../../releases) and download the artifact for your OS:
    
    # Start the server
    ./adm-agent serve
+
+   # Stop the running server (from another terminal)
+   ./adm-agent serve-stop
    ```
    > **macOS Note**: If you see "System cannot verify the developer", go to **Settings > Privacy & Security** and click "Allow Anyway".
 
@@ -167,22 +173,40 @@ If you already have Playwright browsers installed elsewhere, set the environment
 ```bash
 export PLAYWRIGHT_BROWSERS_PATH=/path/to/ms-playwright
 ./adm-agent serve
+```
 
+### Crawling
+
+```bash
 # Crawl a URL and import admission data
-#   --name:      University slug
+#   --name:      University slug (a-z0-9-)
 #   --year:      Academic year
 #   --url:       Starting URL
 #   --continue:  Extra depth for LLM scouting (default: 0)
 uv run src/cmd/cli.py crawl --name hku --year 2026 --url https://admissions.hku.hk/programmes
 uv run src/cmd/cli.py crawl --name hku --year 2026 --url https://admissions.hku.hk/programmes --continue 2
+```
 
-# Database status
+### Database Status
+
+```bash
 uv run src/cmd/cli.py status
+```
 
-# Start API + MCP server (default: 0.0.0.0:8910)
+### Server
+
+```bash
+# Start the API + MCP server (default: 0.0.0.0:8910)
 uv run src/cmd/cli.py serve
 uv run src/cmd/cli.py serve --port 9000
+
+# Stop a running server (from another terminal)
+uv run src/cmd/cli.py serve-stop
 ```
+
+`serve` writes a PID file to `~/.adm-agent/server.pid`. `serve-stop` reads that file 
+and sends a termination signal to the process, then removes the PID file. If the server 
+is not running, `serve-stop` exits cleanly with an informational message.
 
 ### REST API
 
