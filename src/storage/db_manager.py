@@ -12,7 +12,10 @@ from src.models.admission import University, Program
 from src.models.scraper_models import ProgramContext
 from dotenv import load_dotenv
 
-load_dotenv()
+# Windows may default to system locale (e.g. cp936/GBK) when reading .env.
+# Explicitly force UTF-8 so multi-byte chars in passwords/comments
+# don't corrupt the DATABASE_URL passed to psycopg2.
+load_dotenv(encoding="utf-8")
 logger = logging.getLogger(__name__)
 
 
@@ -53,6 +56,32 @@ class DatabaseManager:
                     cls._instance.initialized = False
         return cls._instance
 
+    @staticmethod
+    def _sanitize_db_url(url: str) -> str:
+        """Ensure the database URL is a clean ASCII string.
+
+        On Windows with a Chinese system locale, environment variables read
+        from a GBK-encoded file may contain raw GBK bytes embedded in a
+        Python ``str``.  psycopg2 (a C extension) then tries to re-encode
+        the DSN as UTF-8 and raises ``UnicodeDecodeError``.
+        Re-encoding through ``latin-1`` round-trips the raw bytes, then
+        we decode with ``utf-8`` to get the intended string.
+        """
+        try:
+            url.encode("ascii")
+            return url  # already pure ASCII – nothing to do
+        except UnicodeEncodeError:
+            pass
+        # Try to recover: encode as latin-1 (identity mapping for byte values
+        # 0-255) then decode as utf-8 (or gb18030 as last resort)
+        raw = url.encode("latin-1")
+        for enc in ("utf-8", "gb18030", "latin-1"):
+            try:
+                return raw.decode(enc)
+            except UnicodeDecodeError:
+                continue
+        return url  # give up – let the driver surface a clear error
+
     def init_db(self, db_url: Optional[str] = None):
         """Initialize database connection and create tables."""
         if getattr(self, "engine", None):
@@ -64,6 +93,8 @@ class DatabaseManager:
                 # Default fallback (user should configure .env)
                 # Note: This requires a running Postgres instance
                 db_url = "postgresql+psycopg2://postgres:postgres@localhost:5432/uni_admission"
+
+        db_url = self._sanitize_db_url(db_url)
         
         try:
             self.engine = create_engine(db_url)
