@@ -17,12 +17,23 @@ from urllib.parse import urljoin
 
 from crawl4ai import AsyncWebCrawler, BrowserConfig, CrawlerRunConfig, CacheMode, CrawlResult
 
-from tenacity import retry, stop_after_attempt, wait_exponential
+from tenacity import retry, stop_after_attempt, wait_exponential, RetryError
 
 from src.agents.cleaner_agent import LLMCleanerAgent, ParsedProgramData
 
 from src.agents.factory import RouterAgent, create_router
 from src.core.environment import ScraperError
+
+
+def _unwrap_retry_error(exc: RetryError) -> Exception:
+    """Extract the last underlying exception from a tenacity RetryError.
+
+    tenacity wraps the real cause inside ``RetryError.last_attempt``.  This
+    helper surfaces the original exception so callers can log a concise,
+    human-readable message instead of the verbose ``RetryError[…]`` repr.
+    """
+    cause = exc.last_attempt.exception()
+    return cause if cause is not None else exc
 from src.core.paths import get_prompts_dir
 from src.utils.text import generate_program_group_code
 from src.models.scraper_models import (
@@ -379,9 +390,10 @@ class AdmissionScraper:
         logger.info("Probing entry URL to detect page type: %s", url)
         try:
             probe_result = await self.crawl_page(url)
-        except ScraperError:
-             logger.error("Failed to probe entry URL: %s", url)
-             return 0
+        except (ScraperError, RetryError) as exc:
+            cause = _unwrap_retry_error(exc) if isinstance(exc, RetryError) else exc
+            logger.error("Failed to probe entry URL %s: %s", url, cause)
+            return 0
 
         if not probe_result.markdown:
              logger.error("Entry URL yielded no content: %s", url)
@@ -501,6 +513,10 @@ class AdmissionScraper:
                 else:
                     detail = await self.crawl_page(link)
                     page_results.append(detail)
+            except RetryError as exc:
+                cause = _unwrap_retry_error(exc)
+                logger.warning("Skipping %s after retries: %s", link, cause)
+                self._failed_urls.append(link)
             except (ScraperError, PDFProcessingError) as e:
                 logger.warning("Skipping %s: %s", link, e)
 
