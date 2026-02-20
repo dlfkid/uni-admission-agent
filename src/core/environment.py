@@ -468,50 +468,71 @@ def install_playwright_browser() -> bool:
     import time
     from tqdm import tqdm
     try:
-        from playwright._impl._driver import compute_driver_executable, get_driver_env, compute_browser_download_url
+        from playwright._impl import _driver as playwright_driver
 
-        driver_executable, driver_cli = compute_driver_executable()
+        driver_executable, driver_cli = playwright_driver.compute_driver_executable()
+        get_driver_env = playwright_driver.get_driver_env
         env = get_driver_env()
 
         # Ensure PLAYWRIGHT_BROWSERS_PATH is propagated for frozen mode
         if "PLAYWRIGHT_BROWSERS_PATH" in os.environ:
             env["PLAYWRIGHT_BROWSERS_PATH"] = os.environ["PLAYWRIGHT_BROWSERS_PATH"]
 
-        # Get Chromium download URL
-        chromium_url = compute_browser_download_url("chromium")
-        browsers_dir = os.environ.get("PLAYWRIGHT_BROWSERS_PATH", str(Path.home() / ".cache" / "ms-playwright"))
-        browsers_dir = Path(browsers_dir)
-        browsers_dir.mkdir(parents=True, exist_ok=True)
-        archive_name = chromium_url.split("/")[-1]
-        archive_path = browsers_dir / archive_name
+        compute_browser_download_url = getattr(
+            playwright_driver,
+            "compute_browser_download_url",
+            None,
+        )
 
-        # Download with resume and progress
-        logger.info(f"Downloading Chromium from {chromium_url}")
-        headers = {}
-        mode = "wb"
-        resume_byte_pos = 0
-        if archive_path.exists():
-            resume_byte_pos = archive_path.stat().st_size
-            headers["Range"] = f"bytes={resume_byte_pos}-"
-            mode = "ab"
+        if callable(compute_browser_download_url):
+            chromium_url = str(compute_browser_download_url("chromium"))
+            browsers_dir = os.environ.get(
+                "PLAYWRIGHT_BROWSERS_PATH",
+                str(Path.home() / ".cache" / "ms-playwright"),
+            )
+            browsers_dir = Path(browsers_dir)
+            browsers_dir.mkdir(parents=True, exist_ok=True)
+            archive_name = chromium_url.rsplit("/", maxsplit=1)[-1]
+            archive_path = browsers_dir / archive_name
 
-        with requests.get(chromium_url, stream=True, headers=headers, timeout=60) as r:
-            r.raise_for_status()
-            total_size = int(r.headers.get("Content-Range", r.headers.get("Content-Length", 0)).split("/")[-1])
-            if resume_byte_pos:
-                logger.info(f"Resuming download at {resume_byte_pos} bytes")
-            pbar = tqdm(total=total_size, initial=resume_byte_pos, unit="B", unit_scale=True, desc="Chromium Download")
-            start_time = time.time()
-            with open(archive_path, mode) as f:
-                for chunk in r.iter_content(chunk_size=1024 * 1024):
-                    if chunk:
-                        f.write(chunk)
-                        pbar.update(len(chunk))
-                        elapsed = time.time() - start_time
-                        if elapsed > 1800:  # 30 min timeout
-                            pbar.close()
-                            raise PlaywrightError("Download timed out after 30 minutes.")
-            pbar.close()
+            logger.info("Downloading Chromium from %s", chromium_url)
+            headers = {}
+            mode = "wb"
+            resume_byte_pos = 0
+            if archive_path.exists():
+                resume_byte_pos = archive_path.stat().st_size
+                headers["Range"] = f"bytes={resume_byte_pos}-"
+                mode = "ab"
+
+            with requests.get(chromium_url, stream=True, headers=headers, timeout=60) as response:
+                response.raise_for_status()
+                content_header = response.headers.get(
+                    "Content-Range",
+                    response.headers.get("Content-Length", "0"),
+                )
+                total_size = int(content_header.split("/")[-1])
+                if resume_byte_pos:
+                    logger.info("Resuming download at %d bytes", resume_byte_pos)
+                progress = tqdm(
+                    total=total_size,
+                    initial=resume_byte_pos,
+                    unit="B",
+                    unit_scale=True,
+                    desc="Chromium Download",
+                )
+                start_time = time.time()
+                with open(archive_path, mode) as download_file:
+                    for chunk in response.iter_content(chunk_size=1024 * 1024):
+                        if chunk:
+                            download_file.write(chunk)
+                            progress.update(len(chunk))
+                            elapsed = time.time() - start_time
+                            if elapsed > 1800:
+                                progress.close()
+                                raise PlaywrightError(
+                                    "Download timed out after 30 minutes."
+                                )
+                progress.close()
 
         # Call Playwright driver to extract/install
         completed = subprocess.run(
