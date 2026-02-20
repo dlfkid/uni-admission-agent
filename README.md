@@ -53,6 +53,9 @@ Go to the [Releases Page](../../releases) and download the artifact for your OS:
    # Check environment
    .\adm-agent.exe check
    
+   # Install browser (required for crawling, only needed once)
+   .\adm-agent.exe browser-install
+   
    # Start the server
    .\adm-agent.exe serve
    ```
@@ -67,6 +70,9 @@ Go to the [Releases Page](../../releases) and download the artifact for your OS:
    ```bash
    # Check environment
    ./adm-agent check
+   
+   # Install browser (required for crawling, only needed once)
+   ./adm-agent browser-install
    
    # Start the server
    ./adm-agent serve
@@ -113,6 +119,9 @@ The agent needs a database connection.
 # Environment check
 uv run src/cmd/cli.py check
 
+# Install Playwright browser (only needed once)
+uv run src/cmd/cli.py browser-install
+
 # Import Excel data
 #   --name: University slug (a-z0-9-)
 #   --year: Academic year (e.g., 2026)
@@ -134,16 +143,26 @@ uv run src/cmd/cli.py export --name hku --output hku_export.xlsx --year 2026
 
 **Error: "Playwright browser not found"**
 
-If you see this error when running the executable, it means the required Chrome browser is missing.
+If you see this error when running the executable, it means the required Chromium browser is missing.
 
-**Solution 1: Install Browsers (Recommended)**
+**Solution 1: Run `browser-install` command (Recommended)**
+```bash
+# Windows
+.\adm-agent.exe browser-install
+
+# macOS / Linux
+./adm-agent browser-install
+```
+This will automatically download and install the Chromium browser.
+
+**Solution 2: Install Browsers Manually**
 If you have Python installed:
 ```bash
 pip install playwright
 playwright install chromium
 ```
 
-**Solution 2: Use Custom Path**
+**Solution 3: Use Custom Path**
 If you already have Playwright browsers installed elsewhere, set the environment variable:
 ```bash
 export PLAYWRIGHT_BROWSERS_PATH=/path/to/ms-playwright

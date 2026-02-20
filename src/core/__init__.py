@@ -5,6 +5,6 @@ This package contains core infrastructure modules including environment
 validation, configuration, and shared utilities.
 """
 
-from .environment import ensure_ready
+from .environment import ensure_ready, install_playwright_browser
 
-__all__ = ['ensure_ready']
+__all__ = ['ensure_ready', 'install_playwright_browser']

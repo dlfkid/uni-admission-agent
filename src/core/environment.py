@@ -7,6 +7,7 @@ before starting the application.
 """
 
 import logging
+import os
 import shutil
 import subprocess
 import sys
@@ -245,8 +246,9 @@ def _check_playwright() -> None:
     if is_frozen():
          raise PlaywrightError(
             "Playwright browser not found.\n"
-            "Solution 1 (Recommended): Install a supported browser (Chrome/Edge).\n"
-            "Solution 2: Set 'PLAYWRIGHT_BROWSERS_PATH' env var to your browser's folder."
+            "Solution 1 (Recommended): Run 'browser-install' command to auto-download Chromium.\n"
+            "Solution 2: Install a supported browser (Chrome/Edge) manually.\n"
+            "Solution 3: Set 'PLAYWRIGHT_BROWSERS_PATH' env var to your browser's folder."
         )
 
     # 1. Dev Mode: Try Python module execution
@@ -286,7 +288,8 @@ def _check_playwright() -> None:
     # If all failed
     raise PlaywrightError(
         "Playwright not found via API, module, or CLI.\n"
-        "Ensure it is installed in your python environment:\n"
+        "Solution 1: Run 'browser-install' command to auto-download Chromium.\n"
+        "Solution 2: Ensure it is installed in your python environment:\n"
         "  uv pip install playwright && uv run playwright install\n"
         "Or via npm for CLI:\n"
         "  npm install -g @playwright/cli"
@@ -440,6 +443,65 @@ def _check_ai_services() -> None:
                 "\n   Please run with: uv run src/main.py check"
             )
         raise AIServiceError(error_msg)
+
+
+# ============================================================================
+# Browser Installation
+# ============================================================================
+
+def install_playwright_browser() -> bool:
+    """
+    Install Playwright Chromium browser.
+
+    Uses Playwright's internal driver to download and install the Chromium
+    browser. Works in both dev and frozen (PyInstaller) modes.
+
+    Returns:
+        True if installation succeeded
+
+    Raises:
+        PlaywrightError: If installation fails
+    """
+    logger.info("Installing Playwright Chromium browser...")
+
+    try:
+        from playwright._impl._driver import compute_driver_executable, get_driver_env
+
+        driver_executable, driver_cli = compute_driver_executable()
+        env = get_driver_env()
+
+        # Ensure PLAYWRIGHT_BROWSERS_PATH is propagated for frozen mode
+        if "PLAYWRIGHT_BROWSERS_PATH" in os.environ:
+            env["PLAYWRIGHT_BROWSERS_PATH"] = os.environ["PLAYWRIGHT_BROWSERS_PATH"]
+
+        completed = subprocess.run(
+            [str(driver_executable), str(driver_cli), "install", "chromium"],
+            env=env,
+            timeout=600,  # 10 minutes timeout for slow networks
+        )
+
+        if completed.returncode == 0:
+            logger.info("Playwright Chromium browser installed successfully!")
+            return True
+        else:
+            raise PlaywrightError(
+                "Browser installation failed (exit code %d).\n"
+                "Please check your network connection and try again."
+                % completed.returncode
+            )
+    except ImportError:
+        raise PlaywrightError(
+            "Playwright package not found. Cannot install browser."
+        )
+    except subprocess.TimeoutExpired:
+        raise PlaywrightError(
+            "Browser installation timed out.\n"
+            "Please check your network connection and try again."
+        )
+    except PlaywrightError:
+        raise
+    except Exception as e:
+        raise PlaywrightError(f"Browser installation failed: {e}")
 
 
 # ============================================================================

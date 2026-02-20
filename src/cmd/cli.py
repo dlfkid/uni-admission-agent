@@ -39,6 +39,7 @@ from src.services.crawler import (
     get_db_status,
     import_file,
 )
+from src.core.environment import install_playwright_browser
 from src.storage.db_manager import DatabaseManager
 
 logger = logging.getLogger(__name__)
@@ -112,6 +113,38 @@ def check(
     try:
         check_environment(verbose=verbose)
         typer.echo("✅ All checks passed")
+    except Exception as e:
+        typer.echo(f"❌ {e}", err=True)
+        raise typer.Exit(code=1)
+
+
+@app.command(name="browser-install")
+def browser_install(
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Debug logging"),
+) -> None:
+    """Download and install the Playwright Chromium browser for crawling."""
+    _setup_logging(verbose)
+
+    typer.echo("🔍 Checking browser status...")
+
+    # Check if already installed
+    try:
+        from playwright.sync_api import sync_playwright
+
+        with sync_playwright() as p:
+            browser_path = Path(p.chromium.executable_path)
+            if browser_path.exists():
+                typer.echo(f"✅ Browser already installed at: {browser_path}")
+                typer.echo("No action needed.")
+                return
+    except Exception:
+        pass
+
+    typer.echo("📥 Downloading Chromium browser (this may take a few minutes)...")
+
+    try:
+        install_playwright_browser()
+        typer.echo("✅ Browser installed successfully!")
     except Exception as e:
         typer.echo(f"❌ {e}", err=True)
         raise typer.Exit(code=1)
@@ -237,9 +270,11 @@ def serve(
     except Exception as e:
         typer.echo("❌ Critical Error: Playwright browser not found!", err=True)
         typer.echo(f"   Details: {e}", err=True)
-        typer.echo("\n👉 Solution 1: Install browsers (if you have python/uv installed):", err=True)
+        typer.echo("\n👉 Solution 1 (Recommended): Run the browser-install command:", err=True)
+        typer.echo("   adm-agent browser-install", err=True)
+        typer.echo("\n👉 Solution 2: Install browsers (if you have python/uv installed):", err=True)
         typer.echo("   uv run playwright install chromium", err=True)
-        typer.echo("\n👉 Solution 2: Set custom path via environment variable:", err=True)
+        typer.echo("\n👉 Solution 3: Set custom path via environment variable:", err=True)
         typer.echo("   export PLAYWRIGHT_BROWSERS_PATH=/path/to/ms-playwright", err=True)
         raise typer.Exit(code=1)
 
