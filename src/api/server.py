@@ -36,6 +36,7 @@ from src.api.schemas import (
     ConfigRequest,
     CancelResponse,
     StructuredConfig,
+    UniversityResponse,
 )
 from src.api.task_manager import TaskManager, TaskState
 from src.services.crawler import (
@@ -386,6 +387,26 @@ async def api_programs(
     """Query programs for a university."""
     programs = query_programs(univ_slug=univ_slug, year=year)
     return [ProgramResponse(**p.model_dump()) for p in programs]
+
+
+@app.get("/universities", response_model=List[UniversityResponse])
+async def api_universities() -> List[UniversityResponse]:
+    """Return all universities ordered by most recently updated first."""
+    from src.models.admission import University
+    from sqlmodel import select, col
+
+    db = DatabaseManager()
+    with db.get_session() as session:
+        stmt = select(University).order_by(col(University.updated_at).desc())
+        universities = session.exec(stmt).all()
+        return [
+            UniversityResponse(
+                slug=u.slug,
+                name=u.name,
+                updated_at=u.updated_at.isoformat() if u.updated_at else "",
+            )
+            for u in universities
+        ]
 
 
 @app.get("/config", response_model=ConfigResponse)

@@ -19,7 +19,10 @@
         <div id="input-section">
             <div class="field">
                 <label for="slug">University Slug</label>
-                <input id="slug" type="text" placeholder="e.g. hku" />
+                <div class="autocomplete-wrapper">
+                    <input id="slug" type="text" placeholder="e.g. hku" autocomplete="off" />
+                    <ul id="slug-dropdown" class="slug-dropdown hidden"></ul>
+                </div>
             </div>
 
             <div class="field">

@@ -138,24 +138,25 @@ class DatabaseManager:
         return url
 
     def init_db(self, db_url: Optional[str] = None):
-        """Initialize database connection and create tables."""
+        """Initialize database connection, create tables, and sync schema.
+
+        Performs self-healing: if a table exists but is missing columns that
+        the current SQLModel definition expects, those columns are added
+        automatically via ``ALTER TABLE ... ADD COLUMN``.  This prevents the
+        common failure mode where a model gains a new field but the live
+        database has not been migrated yet.
+        """
         if getattr(self, "engine", None):
             return
 
         if not db_url:
             db_url = os.getenv("DATABASE_URL")
             if not db_url:
-                # Default fallback (user should configure .env)
-                # Note: This requires a running Postgres instance
                 db_url = "postgresql+psycopg2://postgres:postgres@localhost:5432/uni_admission"
 
         db_url = self._sanitize_db_url(db_url)
 
         try:
-            # Force UTF-8 client encoding so psycopg2 negotiates UTF-8 with
-            # the server from the start.  Without this, on Windows (Chinese
-            # locale) psycopg2 may inherit the ANSI code page (CP936/GBK) and
-            # fail to decode the server's startup response as UTF-8.
             self.engine = create_engine(
                 db_url,
                 connect_args={"client_encoding": "utf8"},
@@ -166,12 +167,69 @@ class DatabaseManager:
                 logger.info(f"Database does not exist. Creating: {self.engine.url}")
                 create_database(self.engine.url)
             
-            # Create tables
+            # Create tables (only creates NEW tables; does NOT alter existing)
             SQLModel.metadata.create_all(self.engine)
+
+            # Self-healing: add missing columns to existing tables
+            self._sync_schema()
+
             logger.info("Database initialized successfully.")
         except Exception as e:
             logger.error(f"Failed to initialize database: {e}")
             raise
+
+    # ------------------------------------------------------------------
+    #  Schema self-healing
+    # ------------------------------------------------------------------
+
+    def _sync_schema(self) -> None:
+        """Compare SQLModel metadata with the live database and add any
+        missing columns.  This is a lightweight forward-only migration that
+        covers the most common case (new nullable/defaulted columns) without
+        requiring a full Alembic run.
+        """
+        from sqlalchemy import text, inspect as sa_inspect_engine
+
+        inspector = sa_inspect_engine(self.engine)
+        existing_tables = set(inspector.get_table_names())
+
+        for table in SQLModel.metadata.sorted_tables:
+            if table.name not in existing_tables:
+                continue  # create_all already handled brand-new tables
+
+            db_columns = {col["name"] for col in inspector.get_columns(table.name)}
+
+            for col in table.columns:
+                if col.name in db_columns:
+                    continue
+
+                # Build ALTER TABLE statement
+                col_type = col.type.compile(dialect=self.engine.dialect)
+                nullable = "NULL" if col.nullable else "NOT NULL"
+
+                # Determine a DEFAULT clause so NOT NULL doesn't fail on backfill
+                default_clause = ""
+                if col.server_default is not None:
+                    default_clause = f"DEFAULT {col.server_default.arg}"
+                elif col.default is not None:
+                    # Python-side defaults can't be expressed as SQL DEFAULT
+                    # easily; fall back to a safe literal if possible.
+                    if col.nullable:
+                        default_clause = "DEFAULT NULL"
+                    else:
+                        default_clause = "DEFAULT ''"
+                elif col.nullable:
+                    default_clause = "DEFAULT NULL"
+
+                ddl = (
+                    f'ALTER TABLE "{table.name}" '
+                    f'ADD COLUMN "{col.name}" {col_type} {nullable} {default_clause}'
+                )
+
+                logger.info("Auto-sync schema: %s", ddl.strip())
+                with self.engine.connect() as conn:
+                    conn.execute(text(ddl))
+                    conn.commit()
 
     def get_session(self) -> Session:
         if not getattr(self, "engine", None):
@@ -202,6 +260,12 @@ class DatabaseManager:
             univ = session.exec(select(University).where(University.slug == univ_slug)).first()
             if not univ:
                 univ = University(name=univ_slug, slug=univ_slug)
+                session.add(univ)
+                session.commit()
+                session.refresh(univ)
+            else:
+                # Touch updated_at so the university floats to the top of recent list
+                univ.updated_at = datetime.now(timezone.utc)
                 session.add(univ)
                 session.commit()
                 session.refresh(univ)

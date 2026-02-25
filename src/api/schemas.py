@@ -134,3 +134,11 @@ class CancelResponse(BaseModel):
     task_id: str
     cancelled: bool
     message: str
+
+
+class UniversityResponse(BaseModel):
+    """A university entry for the slug dropdown."""
+
+    slug: str
+    name: str
+    updated_at: str = Field(description="ISO-8601 timestamp of last activity")

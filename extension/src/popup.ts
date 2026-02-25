@@ -38,6 +38,12 @@ interface StructuredConfig {
     providers: Record<string, Record<string, string>>;
 }
 
+interface UniversityOption {
+    slug: string;
+    name: string;
+    updated_at: string;
+}
+
 // ---------------------------------------------------------------------------
 //  DOM Elements
 // ---------------------------------------------------------------------------
@@ -49,6 +55,7 @@ const configModal = document.getElementById("config-modal") as HTMLDivElement;
 
 // Input Form
 const slugInput = document.getElementById("slug") as HTMLInputElement;
+const slugDropdown = document.getElementById("slug-dropdown") as HTMLUListElement;
 const yearInput = document.getElementById("year") as HTMLInputElement;
 const urlDisplay = document.getElementById("current-url") as HTMLParagraphElement;
 const sendBtn = document.getElementById("send-btn") as HTMLButtonElement;
@@ -80,6 +87,10 @@ const statusDiv = document.getElementById("status") as HTMLDivElement;
 let activePollInterval: number | null = null;
 let draggedItem: HTMLElement | null = null;
 const LOGS_EXPANDED_KEY = "logs_expanded";
+
+// Slug autocomplete state
+let cachedUniversities: UniversityOption[] = [];
+let activeDropdownIndex = -1;
 
 // Helper to disable/enable form
 function setFormEnabled(enabled: boolean) {
@@ -188,6 +199,10 @@ async function init() {
     // Initialize logs toggle state
     initLogsToggle();
 
+    // Load university slugs for autocomplete
+    await loadUniversities();
+    initSlugAutocomplete();
+
     try {
         const res = await fetch(`${API_BASE}/tasks/active`);
         if (res.ok) {
@@ -221,6 +236,138 @@ async function init() {
 }
 
 init();
+
+// ---------------------------------------------------------------------------
+//  Slug Autocomplete
+// ---------------------------------------------------------------------------
+
+async function loadUniversities(): Promise<void> {
+    try {
+        const res = await fetch(`${API_BASE}/universities`);
+        if (res.ok) {
+            cachedUniversities = await res.json();
+        }
+    } catch (err) {
+        console.warn("Failed to load universities for autocomplete:", err);
+    }
+}
+
+function initSlugAutocomplete(): void {
+    slugInput.addEventListener("input", () => {
+        renderDropdown(slugInput.value.trim());
+    });
+
+    slugInput.addEventListener("focus", () => {
+        renderDropdown(slugInput.value.trim());
+    });
+
+    slugInput.addEventListener("keydown", (e: KeyboardEvent) => {
+        const items = slugDropdown.querySelectorAll("li");
+        if (!items.length || slugDropdown.classList.contains("hidden")) {
+            return;
+        }
+
+        if (e.key === "ArrowDown") {
+            e.preventDefault();
+            activeDropdownIndex = Math.min(activeDropdownIndex + 1, items.length - 1);
+            highlightItem(items);
+        } else if (e.key === "ArrowUp") {
+            e.preventDefault();
+            activeDropdownIndex = Math.max(activeDropdownIndex - 1, 0);
+            highlightItem(items);
+        } else if (e.key === "Enter") {
+            if (activeDropdownIndex >= 0 && activeDropdownIndex < items.length) {
+                e.preventDefault();
+                const slug = (items[activeDropdownIndex] as HTMLElement).dataset.slug;
+                if (slug) {
+                    slugInput.value = slug;
+                }
+                hideDropdown();
+            }
+        } else if (e.key === "Escape") {
+            hideDropdown();
+        }
+    });
+
+    // Close dropdown when clicking outside
+    document.addEventListener("click", (e: MouseEvent) => {
+        const target = e.target as HTMLElement;
+        if (!target.closest(".autocomplete-wrapper")) {
+            hideDropdown();
+        }
+    });
+}
+
+function renderDropdown(query: string): void {
+    slugDropdown.innerHTML = "";
+    activeDropdownIndex = -1;
+
+    // Always show the full list when empty, filtered when typing
+    const filtered = query
+        ? cachedUniversities.filter(
+            (u) =>
+                u.slug.toLowerCase().includes(query.toLowerCase()) ||
+                u.name.toLowerCase().includes(query.toLowerCase())
+        )
+        : cachedUniversities;
+
+    if (filtered.length === 0) {
+        hideDropdown();
+        return;
+    }
+
+    filtered.forEach((u, idx) => {
+        const li = document.createElement("li");
+        li.dataset.slug = u.slug;
+
+        const nameSpan = document.createElement("span");
+        nameSpan.className = "slug-name";
+        nameSpan.textContent = u.slug;
+
+        const metaSpan = document.createElement("span");
+        metaSpan.className = "slug-meta";
+        metaSpan.textContent = u.name !== u.slug ? u.name : "";
+
+        li.appendChild(nameSpan);
+        li.appendChild(metaSpan);
+
+        li.addEventListener("mouseenter", () => {
+            activeDropdownIndex = idx;
+            highlightItem(slugDropdown.querySelectorAll("li"));
+        });
+
+        li.addEventListener("click", () => {
+            slugInput.value = u.slug;
+            hideDropdown();
+            slugInput.focus();
+        });
+
+        slugDropdown.appendChild(li);
+    });
+
+    slugDropdown.classList.remove("hidden");
+
+    // If query matches exactly one item, pre-select it
+    if (filtered.length === 1 && filtered[0].slug.toLowerCase() === query.toLowerCase()) {
+        activeDropdownIndex = 0;
+        highlightItem(slugDropdown.querySelectorAll("li"));
+    }
+}
+
+function highlightItem(items: NodeListOf<Element>): void {
+    items.forEach((item, idx) => {
+        item.classList.toggle("active", idx === activeDropdownIndex);
+    });
+    // Scroll active item into view
+    if (activeDropdownIndex >= 0 && items[activeDropdownIndex]) {
+        (items[activeDropdownIndex] as HTMLElement).scrollIntoView({ block: "nearest" });
+    }
+}
+
+function hideDropdown(): void {
+    slugDropdown.classList.add("hidden");
+    activeDropdownIndex = -1;
+}
 
 // ---------------------------------------------------------------------------
 //  Input & Monitor Flow (Same as before)

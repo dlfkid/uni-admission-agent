@@ -29,6 +29,7 @@ class University(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     name: str = Field(index=True, unique=True)
     slug: str = Field(index=True, unique=True)
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     
     # Relationships
     programs: List["Program"] = Relationship(back_populates="university")
