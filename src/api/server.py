@@ -37,6 +37,7 @@ from src.api.schemas import (
     CancelResponse,
     StructuredConfig,
     UniversityResponse,
+    ExportRequest,
 )
 from src.api.task_manager import TaskManager, TaskState
 from src.services.crawler import (
@@ -407,6 +408,37 @@ async def api_universities() -> List[UniversityResponse]:
             )
             for u in universities
         ]
+
+
+@app.post("/export")
+async def api_export(body: ExportRequest):
+    """Export programs for a university as a downloadable Excel file."""
+    from io import BytesIO
+    from fastapi.responses import StreamingResponse
+    from src.storage.exporter import ExcelExporter
+
+    slug = body.univ_slug.strip().lower()
+    year = body.year
+
+    # Generate in-memory Excel
+    buf = BytesIO()
+    exporter = ExcelExporter(output_stream=buf)
+    count = exporter.export_data(univ_slug=slug, year=year)
+
+    if count == 0:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No programs found for '{slug}'" + (f" ({year})" if year else ""),
+        )
+
+    buf.seek(0)
+    filename = f"{slug}_{year}.xlsx" if year else f"{slug}_all.xlsx"
+
+    return StreamingResponse(
+        buf,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @app.get("/config", response_model=ConfigResponse)

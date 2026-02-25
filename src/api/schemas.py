@@ -142,3 +142,10 @@ class UniversityResponse(BaseModel):
     slug: str
     name: str
     updated_at: str = Field(description="ISO-8601 timestamp of last activity")
+
+
+class ExportRequest(BaseModel):
+    """Body for ``POST /export``."""
+
+    univ_slug: str = Field(description="University slug (a-z0-9-)")
+    year: Optional[int] = Field(default=None, description="Academic year filter (omit for all years)")

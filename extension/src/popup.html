@@ -12,7 +12,10 @@
     <div class="container">
         <header>
             <h1>🎓 UniAdmission</h1>
-            <button id="config-btn" class="icon-btn" title="Configure .env">⚙️</button>
+            <div class="header-actions">
+                <button id="export-btn" class="icon-btn" title="Export to Excel">📥</button>
+                <button id="config-btn" class="icon-btn" title="Configure .env">⚙️</button>
+            </div>
         </header>
 
         <!-- INPUT FORM MODE -->
@@ -94,6 +97,35 @@
 
             <div class="modal-actions">
                 <button id="save-config-btn" class="primary-btn">Save Changes</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- EXPORT MODAL -->
+    <div id="export-modal" class="modal hidden">
+        <div class="modal-content modal-compact">
+            <div class="modal-header">
+                <h2>Export to Excel</h2>
+                <button id="close-export-btn" class="close-btn">&times;</button>
+            </div>
+
+            <div class="config-body">
+                <div class="field">
+                    <label for="export-slug">University Slug</label>
+                    <div class="autocomplete-wrapper">
+                        <input id="export-slug" type="text" placeholder="e.g. hku" autocomplete="off" />
+                        <ul id="export-slug-dropdown" class="slug-dropdown hidden"></ul>
+                    </div>
+                </div>
+
+                <div class="field">
+                    <label for="export-year">Academic Year (optional)</label>
+                    <input id="export-year" type="number" placeholder="Leave empty for all years" />
+                </div>
+            </div>
+
+            <div class="modal-actions">
+                <button id="do-export-btn" class="primary-btn">📥 Export</button>
             </div>
         </div>
     </div>

@@ -49,6 +49,12 @@ h1 {
   letter-spacing: -0.02em;
 }
 
+.header-actions {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
+
 /* Fields */
 .field {
   display: flex;
@@ -304,6 +310,11 @@ button:active {
   flex-direction: column;
   box-shadow: 0 10px 25px rgba(0, 0, 0, 0.5);
   overflow: hidden;
+}
+
+.modal-content.modal-compact {
+  height: auto;
+  max-height: 80%;
 }
 
 .modal-header {

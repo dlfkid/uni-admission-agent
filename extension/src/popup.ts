@@ -77,6 +77,15 @@ const saveConfigBtn = document.getElementById("save-config-btn") as HTMLButtonEl
 const dbUrlInput = document.getElementById("db-url-input") as HTMLInputElement;
 const llmList = document.getElementById("llm-list") as HTMLUListElement;
 
+// Export
+const exportBtn = document.getElementById("export-btn") as HTMLButtonElement;
+const exportModal = document.getElementById("export-modal") as HTMLDivElement;
+const closeExportBtn = document.getElementById("close-export-btn") as HTMLButtonElement;
+const exportSlugInput = document.getElementById("export-slug") as HTMLInputElement;
+const exportSlugDropdown = document.getElementById("export-slug-dropdown") as HTMLUListElement;
+const exportYearInput = document.getElementById("export-year") as HTMLInputElement;
+const doExportBtn = document.getElementById("do-export-btn") as HTMLButtonElement;
+
 // Status
 const statusDiv = document.getElementById("status") as HTMLDivElement;
 
@@ -91,6 +100,7 @@ const LOGS_EXPANDED_KEY = "logs_expanded";
 // Slug autocomplete state
 let cachedUniversities: UniversityOption[] = [];
 let activeDropdownIndex = -1;
+let activeExportDropdownIndex = -1;
 
 // Helper to disable/enable form
 function setFormEnabled(enabled: boolean) {
@@ -722,3 +732,188 @@ saveConfigBtn.addEventListener("click", async () => {
         saveConfigBtn.textContent = "Save Changes";
     }
 });
+
+// ---------------------------------------------------------------------------
+//  Export Flow
+// ---------------------------------------------------------------------------
+
+exportBtn.addEventListener("click", () => {
+    // Pre-fill from main form if available
+    exportSlugInput.value = slugInput.value.trim();
+    exportYearInput.value = yearInput.value.trim();
+    exportModal.classList.remove("hidden");
+    exportSlugInput.focus();
+});
+
+closeExportBtn.addEventListener("click", () => {
+    exportModal.classList.add("hidden");
+});
+
+// Autocomplete for the export slug input (reuses cachedUniversities)
+function initExportSlugAutocomplete(): void {
+    exportSlugInput.addEventListener("input", () => {
+        renderExportDropdown(exportSlugInput.value.trim());
+    });
+
+    exportSlugInput.addEventListener("focus", () => {
+        renderExportDropdown(exportSlugInput.value.trim());
+    });
+
+    exportSlugInput.addEventListener("keydown", (e: KeyboardEvent) => {
+        const items = exportSlugDropdown.querySelectorAll("li");
+        if (!items.length || exportSlugDropdown.classList.contains("hidden")) {
+            return;
+        }
+
+        if (e.key === "ArrowDown") {
+            e.preventDefault();
+            activeExportDropdownIndex = Math.min(activeExportDropdownIndex + 1, items.length - 1);
+            highlightExportItem(items);
+        } else if (e.key === "ArrowUp") {
+            e.preventDefault();
+            activeExportDropdownIndex = Math.max(activeExportDropdownIndex - 1, 0);
+            highlightExportItem(items);
+        } else if (e.key === "Enter") {
+            if (activeExportDropdownIndex >= 0 && activeExportDropdownIndex < items.length) {
+                e.preventDefault();
+                const slug = (items[activeExportDropdownIndex] as HTMLElement).dataset.slug;
+                if (slug) {
+                    exportSlugInput.value = slug;
+                }
+                hideExportDropdown();
+            }
+        } else if (e.key === "Escape") {
+            hideExportDropdown();
+        }
+    });
+
+    document.addEventListener("click", (e: MouseEvent) => {
+        const target = e.target as HTMLElement;
+        if (!target.closest("#export-modal .autocomplete-wrapper")) {
+            hideExportDropdown();
+        }
+    });
+}
+
+function renderExportDropdown(query: string): void {
+    exportSlugDropdown.innerHTML = "";
+    activeExportDropdownIndex = -1;
+
+    const filtered = query
+        ? cachedUniversities.filter(
+            (u) =>
+                u.slug.toLowerCase().includes(query.toLowerCase()) ||
+                u.name.toLowerCase().includes(query.toLowerCase())
+        )
+        : cachedUniversities;
+
+    if (filtered.length === 0) {
+        hideExportDropdown();
+        return;
+    }
+
+    filtered.forEach((u, idx) => {
+        const li = document.createElement("li");
+        li.dataset.slug = u.slug;
+
+        const nameSpan = document.createElement("span");
+        nameSpan.className = "slug-name";
+        nameSpan.textContent = u.slug;
+
+        const metaSpan = document.createElement("span");
+        metaSpan.className = "slug-meta";
+        metaSpan.textContent = u.name !== u.slug ? u.name : "";
+
+        li.appendChild(nameSpan);
+        li.appendChild(metaSpan);
+
+        li.addEventListener("mouseenter", () => {
+            activeExportDropdownIndex = idx;
+            highlightExportItem(exportSlugDropdown.querySelectorAll("li"));
+        });
+
+        li.addEventListener("click", () => {
+            exportSlugInput.value = u.slug;
+            hideExportDropdown();
+            exportSlugInput.focus();
+        });
+
+        exportSlugDropdown.appendChild(li);
+    });
+
+    exportSlugDropdown.classList.remove("hidden");
+
+    if (filtered.length === 1 && filtered[0].slug.toLowerCase() === query.toLowerCase()) {
+        activeExportDropdownIndex = 0;
+        highlightExportItem(exportSlugDropdown.querySelectorAll("li"));
+    }
+}
+
+function highlightExportItem(items: NodeListOf<Element>): void {
+    items.forEach((item, idx) => {
+        item.classList.toggle("active", idx === activeExportDropdownIndex);
+    });
+    if (activeExportDropdownIndex >= 0 && items[activeExportDropdownIndex]) {
+        (items[activeExportDropdownIndex] as HTMLElement).scrollIntoView({ block: "nearest" });
+    }
+}
+
+function hideExportDropdown(): void {
+    exportSlugDropdown.classList.add("hidden");
+    activeExportDropdownIndex = -1;
+}
+
+// Perform export & download
+doExportBtn.addEventListener("click", async () => {
+    const slug = exportSlugInput.value.trim();
+    if (!slug) {
+        showStatus("University slug is required", "error");
+        return;
+    }
+
+    const yearStr = exportYearInput.value.trim();
+    const year = yearStr ? parseInt(yearStr, 10) : null;
+
+    doExportBtn.disabled = true;
+    doExportBtn.textContent = "Exporting…";
+
+    try {
+        const res = await fetch(`${API_BASE}/export`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ univ_slug: slug, year }),
+        });
+
+        if (!res.ok) {
+            const err = await res.json().catch(() => ({ detail: `HTTP ${res.status}` }));
+            throw new Error(err.detail || `Export failed: ${res.status}`);
+        }
+
+        // Trigger browser download
+        const blob = await res.blob();
+        const disposition = res.headers.get("Content-Disposition") || "";
+        const filenameMatch = disposition.match(/filename="?([^"]+)"?/);
+        const filename = filenameMatch ? filenameMatch[1] : `${slug}_export.xlsx`;
+
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+
+        showStatus(`Exported ${filename}`, "success");
+        exportModal.classList.add("hidden");
+
+    } catch (err) {
+        showStatus(String(err), "error");
+    } finally {
+        doExportBtn.disabled = false;
+        doExportBtn.textContent = "📥 Export";
+    }
+});
+
+// Initialize export autocomplete alongside main autocomplete
+initExportSlugAutocomplete();

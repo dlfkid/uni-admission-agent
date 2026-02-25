@@ -149,16 +149,19 @@ def export_data(
     univ_slug: str,
     output_path: str,
     year: Optional[int] = None,
-) -> None:
+) -> int:
     """Export program data to an Excel file.
 
     Args:
         univ_slug: University identifier.
         output_path: Destination .xlsx path.
         year: If provided, export only that year; otherwise all years.
+
+    Returns:
+        Number of programs exported.
     """
-    exporter = ExcelExporter(output_path)
-    exporter.export_data(univ_slug=univ_slug, year=year)
+    exporter = ExcelExporter(output_path=output_path)
+    return exporter.export_data(univ_slug=univ_slug, year=year)
 
 
 def get_db_status() -> StatusResult:

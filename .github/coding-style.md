@@ -82,7 +82,7 @@ Pydantic 驱动:
 
 * Linter Compliance: 代码必须符合 ruff 的默认规则集。所有未使用的导入（Unused Imports）必须自动清理。
 
-* Validation before Output:
+11. Validation before Output:
 
 * 所有的 SQLModel 必须带有明确的类型注解（Type Hints）。
 
@@ -90,6 +90,8 @@ Pydantic 驱动:
 
 * Self-Correction: 如果代码在静态检查中报错（如 Pyright 报红），AI 必须在输出前自行修正，不应将带红线的代码交付给用户。
 
-11. README.md更新
+* 所有修改都要确保能够通过pylint检测。
+
+12. README.md更新
 * 所有涉及对main.py的输入命令进行改动的操作，都要同步更新最新使用方法到README.md。
 示例: 增加新的命令，如import, export。增加新的参数，如--name，--file, --year。
