@@ -1,7 +1,7 @@
 {
     "manifest_version": 3,
     "name": "UniAdmission Agent",
-    "version": "0.1.0",
+    "version": "0.4.5-alpha-1-ge18c51d",
     "description": "Send the current page URL to UniAdmission Agent for crawling.",
     "permissions": [
         "activeTab"

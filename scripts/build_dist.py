@@ -15,6 +15,7 @@ Usage:
 """
 
 import argparse
+import json
 import logging
 import os
 import platform
@@ -163,10 +164,48 @@ def clean() -> None:
     RELEASE_ROOT.mkdir(parents=True, exist_ok=True)
 
 
-def build_extension() -> Path:
+def update_extension_version(version: str) -> None:
+    """Update extension version in package.json and manifest.json."""
+    logger.info("📝 Updating extension version to %s", version)
+    
+    # Remove 'v' prefix if present for extension version
+    clean_version = version.lstrip('v')
+    
+    # Update package.json
+    package_json_path = EXTENSION_DIR / "package.json"
+    if package_json_path.exists():
+        with open(package_json_path, 'r', encoding='utf-8') as f:
+            package_data = json.load(f)
+        
+        package_data["version"] = clean_version
+        
+        with open(package_json_path, 'w', encoding='utf-8') as f:
+            json.dump(package_data, f, indent=4, ensure_ascii=False)
+        
+        logger.info("  ✅ Updated %s", package_json_path.relative_to(PROJECT_ROOT))
+    
+    # Update manifest.json
+    manifest_path = EXTENSION_DIR / "public" / "manifest.json"
+    if manifest_path.exists():
+        with open(manifest_path, 'r', encoding='utf-8') as f:
+            manifest_data = json.load(f)
+        
+        manifest_data["version"] = clean_version
+        
+        with open(manifest_path, 'w', encoding='utf-8') as f:
+            json.dump(manifest_data, f, indent=4, ensure_ascii=False)
+        
+        logger.info("  ✅ Updated %s", manifest_path.relative_to(PROJECT_ROOT))
+
+
+def build_extension(version: str | None = None) -> Path:
     """Build the Chrome extension and return the path to the zip file."""
     logger.info("🔌 Building Chrome Extension …")
     _ensure_tool("npm", "https://nodejs.org/")
+    
+    # Update extension version if provided
+    if version:
+        update_extension_version(version)
 
     _run(["npm", "install"], cwd=EXTENSION_DIR, label="ext")
     _run(["npm", "run", "build"], cwd=EXTENSION_DIR, label="ext")
@@ -427,7 +466,7 @@ def main() -> None:
         # 2. Extension-only build
         if args.extension_only:
             logger.info("📦 Building Chrome Extension only")
-            extension_zip = build_extension()
+            extension_zip = build_extension(version)
             # Package extension separately
             package_extension_release(extension_zip, version)
             logger.info("✅ Extension build completed")
@@ -456,9 +495,9 @@ def main() -> None:
                         logger.info("  Using existing extension zip")
                     else:
                         logger.warning("  ⚠️ Extension zip not found, will build new one")
-                        extension_zip = build_extension()
+                        extension_zip = build_extension(version)
                 else:
-                    extension_zip = build_extension()
+                    extension_zip = build_extension(version)
                 
                 if extension_zip:
                     package_extension_release(extension_zip, version)
@@ -483,7 +522,7 @@ def main() -> None:
                 else:
                     logger.warning("  ⚠️ Extension zip not found, skipping inclusion")
             else:
-                extension_zip = build_extension()
+                extension_zip = build_extension(version)
 
         # Engine
         engine_dir = build_engine()

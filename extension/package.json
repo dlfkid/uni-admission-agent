@@ -1,7 +1,7 @@
 {
     "name": "uni-admission-extension",
     "private": true,
-    "version": "0.1.0",
+    "version": "0.4.5-alpha-1-ge18c51d",
     "type": "module",
     "scripts": {
         "dev": "vite build --watch",
