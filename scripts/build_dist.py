@@ -164,38 +164,48 @@ def clean() -> None:
     RELEASE_ROOT.mkdir(parents=True, exist_ok=True)
 
 
-def update_extension_version(version: str) -> None:
-    """Update extension version in package.json and manifest.json."""
-    logger.info("📝 Updating extension version to %s", version)
+def prepare_extension_version(version: str) -> Path:
+    """Create a temporary extension directory with updated version numbers."""
+    logger.info("📝 Preparing extension with version %s", version)
     
     # Remove 'v' prefix if present for extension version
     clean_version = version.lstrip('v')
     
-    # Update package.json
-    package_json_path = EXTENSION_DIR / "package.json"
-    if package_json_path.exists():
-        with open(package_json_path, 'r', encoding='utf-8') as f:
+    # Create temporary extension directory
+    temp_ext_dir = PI_DIST / "temp_extension"
+    if temp_ext_dir.exists():
+        shutil.rmtree(temp_ext_dir)
+    
+    # Copy extension source to temp directory
+    shutil.copytree(EXTENSION_DIR, temp_ext_dir, ignore=shutil.ignore_patterns('node_modules', 'dist', '*.zip'))
+    
+    # Update package.json in temp directory
+    temp_package_json = temp_ext_dir / "package.json"
+    if temp_package_json.exists():
+        with open(temp_package_json, 'r', encoding='utf-8') as f:
             package_data = json.load(f)
         
         package_data["version"] = clean_version
         
-        with open(package_json_path, 'w', encoding='utf-8') as f:
+        with open(temp_package_json, 'w', encoding='utf-8') as f:
             json.dump(package_data, f, indent=4, ensure_ascii=False)
         
-        logger.info("  ✅ Updated %s", package_json_path.relative_to(PROJECT_ROOT))
+        logger.info("  ✅ Updated temp package.json")
     
-    # Update manifest.json
-    manifest_path = EXTENSION_DIR / "public" / "manifest.json"
-    if manifest_path.exists():
-        with open(manifest_path, 'r', encoding='utf-8') as f:
+    # Update manifest.json in temp directory
+    temp_manifest = temp_ext_dir / "public" / "manifest.json"
+    if temp_manifest.exists():
+        with open(temp_manifest, 'r', encoding='utf-8') as f:
             manifest_data = json.load(f)
         
         manifest_data["version"] = clean_version
         
-        with open(manifest_path, 'w', encoding='utf-8') as f:
+        with open(temp_manifest, 'w', encoding='utf-8') as f:
             json.dump(manifest_data, f, indent=4, ensure_ascii=False)
         
-        logger.info("  ✅ Updated %s", manifest_path.relative_to(PROJECT_ROOT))
+        logger.info("  ✅ Updated temp manifest.json")
+    
+    return temp_ext_dir
 
 
 def build_extension(version: str | None = None) -> Path:
@@ -203,20 +213,24 @@ def build_extension(version: str | None = None) -> Path:
     logger.info("🔌 Building Chrome Extension …")
     _ensure_tool("npm", "https://nodejs.org/")
     
-    # Update extension version if provided
+    # Determine build directory
     if version:
-        update_extension_version(version)
+        # Use temporary directory with updated version
+        build_dir = prepare_extension_version(version)
+    else:
+        # Use original extension directory
+        build_dir = EXTENSION_DIR
 
-    _run(["npm", "install"], cwd=EXTENSION_DIR, label="ext")
-    _run(["npm", "run", "build"], cwd=EXTENSION_DIR, label="ext")
+    _run(["npm", "install"], cwd=build_dir, label="ext")
+    _run(["npm", "run", "build"], cwd=build_dir, label="ext")
 
     # The package script usually zips it? 
     # If not, we should zip the dist folder. 
     # Current assumption: 'npm run build' creates a 'dist' folder. 
     # Let's create the zip manually to be safe and consistent.
     
-    dist_dir = EXTENSION_DIR / "dist"
-    zip_path = EXTENSION_DIR / "uni-admission-extension.zip"
+    dist_dir = build_dir / "dist"
+    zip_path = build_dir / "uni-admission-extension.zip"
     
     if not dist_dir.exists():
         # Fallback: maybe the build script already made the zip?
@@ -227,6 +241,15 @@ def build_extension(version: str | None = None) -> Path:
 
     logger.info("  Zipping extension dist -> %s", zip_path.name)
     shutil.make_archive(str(zip_path.with_suffix("")), "zip", dist_dir)
+    
+    # Clean up temporary directory if used
+    if version and build_dir != EXTENSION_DIR:
+        # Copy zip back to original extension directory for consistency
+        final_zip_path = EXTENSION_DIR / "uni-admission-extension.zip" 
+        shutil.copy2(zip_path, final_zip_path)
+        logger.info("  📋 Copied zip to %s", final_zip_path.relative_to(PROJECT_ROOT))
+        return final_zip_path
+    
     return zip_path
 
 
