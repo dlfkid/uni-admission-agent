@@ -1,0 +1,48 @@
+#!/bin/bash
+#
+# Pre-push hook to run pylint checks before pushing to remote
+# This hook ensures code quality by running pylint on all Python files
+#
+# To install this hook:
+#   chmod +x .githooks/pre-push
+#   cp .githooks/pre-push .git/hooks/pre-push
+#
+# Or run: bash .githooks/install-hooks.sh
+
+set -e
+
+echo "🔍 Running pylint checks before push..."
+
+# Check if we're in a git repository
+if ! git rev-parse --git-dir > /dev/null 2>&1; then
+    echo "❌ Not in a git repository"
+    exit 1
+fi
+
+# Check if uv is available
+if ! command -v uv &> /dev/null; then
+    echo "❌ uv not found. Please install uv first."
+    exit 1
+fi
+
+# Run pylint on source code and scripts
+echo "🔍 Checking Python code quality with pylint..."
+
+# Change to project root
+cd "$(git rev-parse --show-toplevel)"
+
+# Run pylint on src/ and scripts/ directories
+if ! uv run pylint src/ scripts/ --output-format=text --score=y; then
+    echo ""
+    echo "❌ Pylint checks failed!"
+    echo "💡 Fix the issues above before pushing."
+    echo "💡 You can run 'uv run pylint src/ scripts/' to see detailed errors."
+    echo ""
+    echo "🚫 Push aborted."
+    exit 1
+fi
+
+echo "✅ All pylint checks passed!"
+echo "🚀 Proceeding with push..."
+
+exit 0

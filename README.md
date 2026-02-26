@@ -115,8 +115,7 @@ The agent needs a database connection.
 ## �🚀 Getting Started (Development)
 1. `pyenv local 3.12.0`
 2. `uv sync`
-3. Copy `.env.example` to `.env` and add your API keys.
-
+3. Copy `.env.example` to `.env` and add your API keys.4. Install Git hooks for code quality: `bash .githooks/install-hooks.sh`
 ## 📖 Usage
 
 ### CLI Commands
@@ -159,6 +158,12 @@ The agent needs a database connection.
 
 # Show detailed version information
 ./adm-agent version --verbose
+
+# Show comprehensive help
+./adm-agent help
+
+# Show detailed help with examples  
+./adm-agent help --verbose
 ```
 
 **Windows:**
@@ -192,6 +197,12 @@ The agent needs a database connection.
 
 # Show detailed version information
 .\adm-agent.exe version --verbose
+
+# Show comprehensive help
+.\adm-agent.exe help
+
+# Show detailed help with examples
+.\adm-agent.exe help --verbose
 ```
 
 ### 4. Troubleshooting
@@ -357,3 +368,34 @@ To package the agent for distribution (standalone executable + extension zip):
 - **Stealth First:** Never trigger bot detection; emulate human behavior.
 - **Markdown-Centric:** Convert HTML to Markdown before LLM processing to save tokens.
 - **Verified Output:** All data must pass Pydantic validation before being committed to the database.
+
+## 🔧 Development Tools
+
+### Git Hooks
+The project includes Git hooks to maintain code quality:
+
+```bash
+# Install all Git hooks
+bash .githooks/install-hooks.sh
+
+# Or install manually
+cp .githooks/pre-push .git/hooks/pre-push
+chmod +x .git/hooks/pre-push
+```
+
+**Available Hooks:**
+- **pre-push**: Runs `pylint` checks before pushing to remote repository
+
+**Hook Behavior:**
+- ✅ **Pass**: Push proceeds normally
+- ❌ **Fail**: Push is blocked with error details
+- 🚫 **Bypass**: Use `git push --no-verify` to skip hooks (not recommended)
+
+**Testing Hooks:**
+```bash
+# Test hook directly
+.git/hooks/pre-push
+
+# Check code quality manually
+uv run pylint src/ scripts/
+```

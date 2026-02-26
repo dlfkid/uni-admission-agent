@@ -45,6 +45,52 @@ from src.services.upgrade import check_for_updates, upgrade_backend
 from src.core.environment import install_playwright_browser
 from src.storage.db_manager import DatabaseManager
 
+
+# ---------------------------------------------------------------------------
+#  Help/Usage Information
+# ---------------------------------------------------------------------------
+
+def get_help_text() -> str:
+    """Generate comprehensive CLI help text."""
+    help_text = """
+╔══════════════════════════════════════════════════════════════╗
+║                UniAdmission Agent — CLI Reference           ║
+╚══════════════════════════════════════════════════════════════╝
+
+UNIVERSITY DATA MANAGEMENT:
+    crawl      Crawl university admission pages and import data
+    import     Import data from Excel files 
+    export     Export data to Excel format
+    
+DATABASE & STATUS:
+    status     Show database statistics and connection info
+    check      Run environment and dependency checks
+    
+SERVER OPERATIONS:
+    serve      Start API + MCP server (default: 0.0.0.0:8910)
+    serve-stop Stop running server instance
+    
+SYSTEM MAINTENANCE:
+    upgrade    Check for and install backend updates
+    version    Show current version information
+    browser-install  Install Playwright Chromium browser
+    
+USAGE EXAMPLES:
+    ./adm-agent crawl --name hku --year 2026 --url https://admissions.hku.hk/
+    ./adm-agent import --name hku --year 2026 --file data.xlsx --llm
+    ./adm-agent export --name hku --output report.xlsx --year 2026
+    ./adm-agent serve --port 9000
+    ./adm-agent upgrade --check
+    ./adm-agent status
+    
+For detailed help on any command:
+    ./adm-agent <command> --help
+    
+For current version info:
+    ./adm-agent version --verbose
+"""
+    return help_text.strip()
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -83,6 +129,7 @@ app = typer.Typer(
     name="uni-admission",
     help="UniAdmission Agent — Automated university admission data scraper",
     add_completion=False,
+    context_settings={"help_option_names": ["-h", "--help"]},
 )
 
 
@@ -430,6 +477,48 @@ def version(
     except Exception as e:
         typer.echo(f"❌ Failed to get version: {e}", err=True)
         raise typer.Exit(code=1)
+
+
+@app.command()
+def help(
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Show detailed help with examples"),
+) -> None:
+    """Show comprehensive CLI help and usage information."""
+    help_text = get_help_text()
+    
+    if verbose:
+        help_text += "\n\n" + """
+DETAILED COMMAND OPTIONS:
+
+crawl:
+    --name      University slug (a-z0-9-) 
+    --year      Academic year (e.g., 2026)
+    --url       Starting URL to crawl
+    --continue  Extra depth for LLM scouting (default: 0)
+    
+import:
+    --name      University slug
+    --year      Academic year
+    --file      Path to XLSX file
+    --llm       Enable LLM analysis (optional)
+    
+export:
+    --name      University slug
+    --output    Output file path
+    --year      Academic year (optional)
+    
+serve:
+    --host      Host address (default: 0.0.0.0)
+    --port      Port number (default: 8910)
+    --verbose   Debug logging
+    
+upgrade:
+    --check     Only check for updates, don't install
+    --force     Force upgrade even if already latest
+    --verbose   Show detailed progress
+        """
+    
+    typer.echo(help_text)
 
 
 # ---------------------------------------------------------------------------

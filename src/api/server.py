@@ -556,9 +556,74 @@ try:
         programs = query_programs(univ_slug=univ_slug, year=year)
         return [p.model_dump() for p in programs]
 
+    @mcp.tool()
+    def mcp_help(
+        verbose: bool = False,
+    ) -> dict:
+        """Show comprehensive help for all available CLI commands and usage examples.
+
+        Provides detailed information about university data management, database operations,
+        server controls, system maintenance, and usage examples.
+
+        Args:
+            verbose: Include detailed command options and parameters.
+
+        Returns:
+            Dict with help_text and available_commands.
+        """
+        # Import here to avoid circular imports
+        from src.cmd.cli import get_help_text
+        
+        help_text = get_help_text()
+        
+        if verbose:
+            help_text += "\n\n" + """
+DETAILED COMMAND OPTIONS:
+
+crawl:
+    --name      University slug (a-z0-9-) 
+    --year      Academic year (e.g., 2026)
+    --url       Starting URL to crawl
+    --continue  Extra depth for LLM scouting (default: 0)
+    
+import:
+    --name      University slug
+    --year      Academic year
+    --file      Path to XLSX file
+    --llm       Enable LLM analysis (optional)
+    
+export:
+    --name      University slug
+    --output    Output file path
+    --year      Academic year (optional)
+    
+serve:
+    --host      Host address (default: 0.0.0.0)
+    --port      Port number (default: 8910)
+    --verbose   Debug logging
+    
+upgrade:
+    --check     Only check for updates, don't install
+    --force     Force upgrade even if already latest
+    --verbose   Show detailed progress
+            """
+        
+        available_commands = [
+            "crawl", "import", "export", "status", "check", 
+            "serve", "serve-stop", "upgrade", "version", 
+            "browser-install", "help"
+        ]
+        
+        return {
+            "help_text": help_text,
+            "available_commands": available_commands,
+            "version": "UniAdmission Agent CLI",
+            "description": "Automated university admission data scraper"
+        }
+
     # Mount MCP as a sub-application at /mcp
     app.mount("/mcp", mcp.sse_app())
-    logger.info("MCP tools registered: crawl, db_query")
+    logger.info("MCP tools registered: crawl, db_query, help")
 
 except ImportError:
     logger.info("MCP SDK not installed — MCP tools disabled. Install with: uv add 'mcp[cli]'")
