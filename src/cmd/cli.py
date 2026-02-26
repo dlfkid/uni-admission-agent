@@ -41,6 +41,7 @@ from src.services.crawler import (
     get_db_status,
     import_file,
 )
+from src.services.upgrade import check_for_updates, upgrade_backend
 from src.core.environment import install_playwright_browser
 from src.storage.db_manager import DatabaseManager
 
@@ -359,6 +360,75 @@ def serve_stop() -> None:
         _remove_pid_file()
     except (ProcessLookupError, PermissionError, OSError) as exc:
         typer.echo(f"❌ Failed to stop server (PID {pid}): {exc}", err=True)
+        raise typer.Exit(code=1)
+
+
+@app.command()
+def upgrade(
+    check_only: bool = typer.Option(False, "--check", help="Only check for updates, don't install"),
+    force: bool = typer.Option(False, "--force", help="Force upgrade even if already on latest version"),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Debug logging"),
+) -> None:
+    """Check for and install backend updates from GitHub releases."""
+    _setup_logging(verbose)
+    
+    try:
+        if check_only:
+            # Only check for updates
+            update_info = check_for_updates(verbose=verbose)
+            
+            current = update_info["current_version"]
+            latest = update_info["latest_version"]
+            
+            if "error" in update_info:
+                typer.echo(f"❌ Failed to check for updates: {update_info['error']}", err=True)
+                raise typer.Exit(code=1)
+            
+            typer.echo(f"📋 Current version: {current}")
+            typer.echo(f"📋 Latest version:  {latest}")
+            
+            if update_info["is_newer"]:
+                if update_info["asset_available"]:
+                    typer.echo("🎯 Update available! Run 'upgrade' without --check to install.")
+                else:
+                    typer.echo("⚠️  Update available but no compatible asset found.")
+                    if "release_url" in update_info:
+                        typer.echo(f"   Manual download: {update_info['release_url']}")
+            else:
+                typer.echo("✅ Already on latest version.")
+        else:
+            # Perform upgrade
+            if upgrade_backend(force=force, verbose=verbose):
+                typer.echo("🎉 Upgrade completed successfully!")
+                typer.echo("ℹ️  Restart the server if it's currently running.")
+            else:
+                typer.echo("ℹ️  No upgrade needed.")
+                
+    except Exception as e:
+        typer.echo(f"❌ Upgrade failed: {e}", err=True)
+        raise typer.Exit(code=1)
+
+
+@app.command()
+def version(
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Show detailed version info"),
+) -> None:
+    """Display current version information."""
+    try:
+        from src.services.upgrade import get_current_version
+        current = get_current_version()
+        
+        if verbose:
+            from src.services.upgrade import get_platform_info
+            os_name, arch_name = get_platform_info()
+            typer.echo(f"UniAdmission Agent {current}")
+            typer.echo(f"Platform: {os_name}-{arch_name}")
+            typer.echo(f"Python: {sys.version}")
+            typer.echo(f"Executable: {sys.executable}")
+        else:
+            typer.echo(current)
+    except Exception as e:
+        typer.echo(f"❌ Failed to get version: {e}", err=True)
         raise typer.Exit(code=1)
 
 

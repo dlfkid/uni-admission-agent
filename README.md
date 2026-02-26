@@ -121,28 +121,77 @@ The agent needs a database connection.
 
 ### CLI Commands
 
+**Unix (macOS/Linux):**
 ```bash
 # Environment check
-uv run src/cmd/cli.py check
+./adm-agent check
 
 # Install Playwright browser (only needed once)
-uv run src/cmd/cli.py browser-install
+./adm-agent browser-install
 
 # Import Excel data
 #   --name: University slug (a-z0-9-)
 #   --year: Academic year (e.g., 2026)
 #   --file: Path to XLSX file
 #   --llm:  Enable LLM analysis (optional)
-uv run src/cmd/cli.py import --name hku --year 2026 --file example/hku-26-27.xlsx
+./adm-agent import --name hku --year 2026 --file example/hku-26-27.xlsx
 
 # Import with LLM fallback
-uv run src/cmd/cli.py import --name hku --year 2026 --file example/hku-26-27.xlsx --llm
+./adm-agent import --name hku --year 2026 --file example/hku-26-27.xlsx --llm
 
 # Export data to Excel
 #   --name:   University slug
 #   --output: Output file path
 #   --year:   Academic year (optional)
-uv run src/cmd/cli.py export --name hku --output hku_export.xlsx --year 2026
+./adm-agent export --name hku --output hku_export.xlsx --year 2026
+
+# Check for backend updates
+./adm-agent upgrade --check
+
+# Update backend to latest version
+./adm-agent upgrade
+
+# Force update even if already on latest version
+./adm-agent upgrade --force
+
+# Show current version
+./adm-agent version
+
+# Show detailed version information
+./adm-agent version --verbose
+```
+
+**Windows:**
+```powershell
+# Environment check
+.\adm-agent.exe check
+
+# Install Playwright browser (only needed once)
+.\adm-agent.exe browser-install
+
+# Import Excel data
+.\adm-agent.exe import --name hku --year 2026 --file example/hku-26-27.xlsx
+
+# Import with LLM fallback
+.\adm-agent.exe import --name hku --year 2026 --file example/hku-26-27.xlsx --llm
+
+# Export data to Excel
+.\adm-agent.exe export --name hku --output hku_export.xlsx --year 2026
+
+# Check for backend updates
+.\adm-agent.exe upgrade --check
+
+# Update backend to latest version
+.\adm-agent.exe upgrade
+
+# Force update even if already on latest version
+.\adm-agent.exe upgrade --force
+
+# Show current version
+.\adm-agent.exe version
+
+# Show detailed version information
+.\adm-agent.exe version --verbose
 ```
 
 ### 4. Troubleshooting
@@ -177,31 +226,55 @@ export PLAYWRIGHT_BROWSERS_PATH=/path/to/ms-playwright
 
 ### Crawling
 
+**Unix (macOS/Linux):**
 ```bash
 # Crawl a URL and import admission data
 #   --name:      University slug (a-z0-9-)
 #   --year:      Academic year
 #   --url:       Starting URL
 #   --continue:  Extra depth for LLM scouting (default: 0)
-uv run src/cmd/cli.py crawl --name hku --year 2026 --url https://admissions.hku.hk/programmes
-uv run src/cmd/cli.py crawl --name hku --year 2026 --url https://admissions.hku.hk/programmes --continue 2
+./adm-agent crawl --name hku --year 2026 --url https://admissions.hku.hk/programmes
+./adm-agent crawl --name hku --year 2026 --url https://admissions.hku.hk/programmes --continue 2
+```
+
+**Windows:**
+```powershell
+.\adm-agent.exe crawl --name hku --year 2026 --url https://admissions.hku.hk/programmes
+.\adm-agent.exe crawl --name hku --year 2026 --url https://admissions.hku.hk/programmes --continue 2
 ```
 
 ### Database Status
 
+**Unix (macOS/Linux):**
 ```bash
-uv run src/cmd/cli.py status
+./adm-agent status
+```
+
+**Windows:**
+```powershell
+.\adm-agent.exe status
 ```
 
 ### Server
 
+**Unix (macOS/Linux):**
 ```bash
 # Start the API + MCP server (default: 0.0.0.0:8910)
-uv run src/cmd/cli.py serve
-uv run src/cmd/cli.py serve --port 9000
+./adm-agent serve
+./adm-agent serve --port 9000
 
 # Stop a running server (from another terminal)
-uv run src/cmd/cli.py serve-stop
+./adm-agent serve-stop
+```
+
+**Windows:**
+```powershell
+# Start the API + MCP server (default: 0.0.0.0:8910)
+.\adm-agent.exe serve
+.\adm-agent.exe serve --port 9000
+
+# Stop a running server (from another terminal)
+.\adm-agent.exe serve-stop
 ```
 
 `serve` writes a PID file to `~/.adm-agent/server.pid`. `serve-stop` reads that file 

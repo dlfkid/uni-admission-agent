@@ -307,6 +307,101 @@ def package_release(
     return final_file
 
 
+def package_extension_release(extension_zip: Path, version: str) -> Path:
+    """Create a standalone extension release artifact."""
+    logger.info("📦 Packaging extension release …")
+    
+    # Extension artifact name: uni-admission-extension-{version}.zip
+    final_name = f"uni-admission-extension-{version}.zip"
+    final_file = RELEASE_ROOT / final_name
+    
+    # Simply copy the extension zip with the versioned name
+    shutil.copy2(extension_zip, final_file)
+    
+    logger.info("  ✅ Created extension artifact: %s", final_file)
+    return final_file
+
+
+def package_backend_release(
+    engine_dir: Path, version: str, os_name: str, arch_name: str
+) -> Path:
+    """Create a backend-only release artifact.""" 
+    logger.info("📦 Packaging backend release …")
+    
+    # Artifact name: adm-agent-{version}-{os}-{arch}
+    base_name = f"adm-agent-{version}-{os_name}-{arch_name}"
+    
+    # Staging directory for the archive content
+    staging_dir = PI_DIST / base_name
+    if staging_dir.exists():
+        shutil.rmtree(staging_dir)
+    staging_dir.mkdir()
+    
+    # 1. Copy Engine (all content from engine_dir to staging_dir)
+    shutil.copytree(engine_dir, staging_dir, dirs_exist_ok=True)
+        
+    # 2. Copy .env.example
+    env_example = PROJECT_ROOT / ".env.example"
+    if env_example.exists():
+        shutil.copy2(env_example, staging_dir / ".env.example")
+        
+    # 3. README (backend-only version)
+    exe_name = f"{ENGINE_NAME}.exe" if os_name == "windows" else f"./{ENGINE_NAME}"
+    _write_backend_readme(staging_dir, exe_name)
+    
+    # 4. Archive (same logic as combined package)
+    if os_name == "windows":
+        final_file = RELEASE_ROOT / f"{base_name}.zip"
+        shutil.make_archive(
+            str(RELEASE_ROOT / base_name),
+            "zip", 
+            root_dir=PI_DIST,
+            base_dir=base_name,
+        )
+    else:
+        # .tar.gz for macOS / Linux — use tarfile to preserve permissions
+        final_file = RELEASE_ROOT / f"{base_name}.tar.gz"
+        with tarfile.open(final_file, "w:gz") as tar:
+            tar.add(staging_dir, arcname=base_name)
+
+    logger.info("  ✅ Created backend artifact: %s", final_file)
+    return final_file
+
+
+def _write_backend_readme(dest: Path, exe_name: str) -> None:
+    """Generate a backend-only README with extension download instructions."""
+    content = textwrap.dedent(f"""\
+    ╔══════════════════════════════════════════════════════════════╗
+    ║               UniAdmission Agent Backend  —  Quick Start    ║
+    ╚══════════════════════════════════════════════════════════════╝
+
+    1. PREREQUISITES
+    ────────────────
+    • PostgreSQL 14+ running.
+    • Chrome extension: Download separately from GitHub Releases
+
+    2. SETUP
+    ────────
+    • Copy .env.example to .env and configure DATABASE_URL.
+    • Run:
+        {exe_name} check
+
+    3. USAGE
+    ────────
+    {exe_name} serve                     — Start API + MCP server
+    {exe_name} crawl --help              — Crawl manually
+    {exe_name} upgrade                   — Auto-update backend
+    {exe_name} version                   — Show current version
+
+    4. CHROME EXTENSION
+    ────────────────────
+    • Download uni-admission-extension-vX.X.X.zip from GitHub releases
+    • Unzip and load unpacked in Chrome Developer Mode
+    • Extension and backend can be updated independently
+    """)
+    (dest / "README.txt").write_text(content, encoding="utf-8")
+
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -316,6 +411,9 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="UniAdmission Agent Build Script")
     parser.add_argument("--skip-extension", action="store_true", help="Skip extension build")
     parser.add_argument("--skip-frontend-build", action="store_true", help="Use existing extension zip")
+    parser.add_argument("--extension-only", action="store_true", help="Build only Chrome extension")
+    parser.add_argument("--backend-only", action="store_true", help="Build only backend executable")
+    parser.add_argument("--separate-artifacts", action="store_true", help="Create separate extension and backend artifacts")
     args = parser.parse_args()
 
     try:
@@ -326,7 +424,54 @@ def main() -> None:
 
         clean()
 
-        # 2. Extension
+        # 2. Extension-only build
+        if args.extension_only:
+            logger.info("📦 Building Chrome Extension only")
+            extension_zip = build_extension()
+            # Package extension separately
+            package_extension_release(extension_zip, version)
+            logger.info("✅ Extension build completed")
+            return
+
+        # 3. Backend-only build  
+        if args.backend_only:
+            logger.info("⚙️ Building Backend only")
+            engine_dir = build_engine()
+            # Package backend without extension
+            package_backend_release(engine_dir, version, os_name, arch)
+            logger.info("✅ Backend build completed")
+            return
+
+        # 4. Separate artifacts mode
+        if args.separate_artifacts:
+            logger.info("📦 Building separate artifacts")
+            
+            # Build extension
+            extension_zip = None
+            if not args.skip_extension:
+                if args.skip_frontend_build:
+                    zip_path = EXTENSION_DIR / "uni-admission-extension.zip"
+                    if zip_path.exists():
+                        extension_zip = zip_path
+                        logger.info("  Using existing extension zip")
+                    else:
+                        logger.warning("  ⚠️ Extension zip not found, will build new one")
+                        extension_zip = build_extension()
+                else:
+                    extension_zip = build_extension()
+                
+                if extension_zip:
+                    package_extension_release(extension_zip, version)
+
+            # Build backend
+            engine_dir = build_engine()
+            package_backend_release(engine_dir, version, os_name, arch)
+            logger.info("✅ Separate artifacts build completed")
+            return
+
+        # 5. Legacy combined build (default)
+        logger.info("📦 Building combined artifacts (legacy mode)")
+        # Extension
         extension_zip: Path | None = None
         if not args.skip_extension:
             if args.skip_frontend_build:
@@ -340,11 +485,12 @@ def main() -> None:
             else:
                 extension_zip = build_extension()
 
-        # 3. Engine
+        # Engine
         engine_dir = build_engine()
 
-        # 4. Package
+        # Package (combined)
         package_release(engine_dir, extension_zip, version, os_name, arch)
+        logger.info("✅ Combined build completed")
 
     except Exception as exc:
         logger.error("❌ Build failed: %s", exc)

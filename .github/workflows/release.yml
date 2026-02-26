@@ -10,8 +10,39 @@ permissions:
   contents: write
 
 jobs:
-  build:
-    name: Build on ${{ matrix.os }}
+  build-extension:
+    name: Build Chrome Extension
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Set up Python (for build script)
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install uv
+        run: pip install uv
+
+      - name: Build Extension Artifact
+        run: |
+          uv run python scripts/build_dist.py --extension-only
+
+      - name: Upload Extension Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: chrome-extension
+          path: dist/release/uni-admission-extension-*.zip
+
+  build-backend:
+    name: Build Backend on ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -27,57 +58,48 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-
       - name: Install uv
-        run: |
-          pip install uv
+        run: pip install uv
     
       - name: Install dependencies
-        run: |
-          uv sync --frozen
-          # Install pyinstaller explicitly if not in pyproject.toml dev dependencies (it is in dev group)
-          # uv run ensures we use the venv
+        run: uv sync --frozen
 
-      - name: Build Frontend
-        shell: bash
+      - name: Build Backend Artifact  
         run: |
-          cd extension
-          npm ci
-          npm run build
-          if [ "${{ runner.os }}" == "Windows" ]; then
-            powershell -Command "Compress-Archive -Path 'dist\*' -DestinationPath 'uni-admission-extension.zip'"
-          else
-            cd dist && zip -r ../uni-admission-extension.zip . && cd ..
-          fi
+          uv run python scripts/build_dist.py --backend-only
 
-      - name: Build Backend & Assemble
-        shell: bash
-        run: |
-          # Run build script
-          # The script now automatically detects OS/Arch and creates named artifacts in dist/release/
-          uv run python scripts/build_dist.py --skip-frontend-build
-
-      - name: Handle Permissions (macOS/Linux)
-        if: runner.os != 'Windows'
-        run: |
-          # The tar.gz is already created with permissions by the script, but just in case we need to verify?
-          # Actually, the script creates the tar.gz. We don't need to chmod the artifact itself usually.
-          # But if we want to be safe about the intermediate binary, that's done inside the script before tar-ing?
-          # The script uses tarfile which preserves permissions if added correctly.
-          # If this step was trying to chmod the 'release/' folder content before upload, 
-          # but now we upload archives. So this step might be redundant or just a check.
-          # Let's remove it or just echo.
-          echo "Permissions handled by build script via tarfile."
-
-      - name: Upload Release Artifacts
-        uses: softprops/action-gh-release@v1
-        if: startsWith(github.ref, 'refs/tags/')
+      - name: Upload Backend Artifacts
+        uses: actions/upload-artifact@v4
         with:
-          files: |
-            dist/release/*
+          name: backend-${{ matrix.os }}
+          path: |
+            dist/release/adm-agent-*-windows-*.zip
+            dist/release/adm-agent-*-macos-*.tar.gz
+            dist/release/adm-agent-*-linux-*.tar.gz
+
+  release:
+    name: Create GitHub Release
+    needs: [build-extension, build-backend]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+
+    steps:
+      - name: Download Extension Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: chrome-extension
+          path: artifacts/
+
+      - name: Download Backend Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: backend-*
+          path: artifacts/
+          merge-multiple: true
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: artifacts/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
