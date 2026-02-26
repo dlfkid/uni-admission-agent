@@ -38,6 +38,27 @@
                 <p id="current-url" class="url-display">Loading…</p>
             </div>
 
+            <div class="field">
+                <label for="page-type">Page Type</label>
+                <select id="page-type">
+                    <option value="auto">Auto Detect</option>
+                    <option value="index">Index Page (Program List)</option>
+                    <option value="detail">Detail Page (Single Program)</option>
+                </select>
+            </div>
+
+            <div class="field checkbox-field">
+                <label>
+                    <input id="export-md" type="checkbox" />
+                    Export Markdown Files
+                </label>
+            </div>
+
+            <div class="field" id="export-path-field" style="display: none;">
+                <label for="export-path">Export Path</label>
+                <input id="export-path" type="text" placeholder="e.g. /Users/username/crawl-output" />
+            </div>
+
             <button id="send-btn" type="button" class="primary-btn">Start Crawl</button>
         </div>
 

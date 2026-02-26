@@ -25,6 +25,22 @@ class CrawlRequest(BaseModel):
         default=0,
         description="Extra depth for LLM-driven scouting",
     )
+    page_type_hint: str = Field(
+        default="auto",
+        description="Page type hint: 'auto', 'index', or 'detail'. Used to skip auto-detection.",
+    )
+    export_md: bool = Field(
+        default=False,
+        description="Whether to export crawled markdown files to disk",
+    )
+    export_path: Optional[str] = Field(
+        default=None,
+        description="Path to export markdown files (required if export_md=True)",
+    )
+    html_content: Optional[str] = Field(
+        default=None,
+        description="Pre-rendered HTML content from browser (bypasses crawling)",
+    )
 
 
 class QueryRequest(BaseModel):

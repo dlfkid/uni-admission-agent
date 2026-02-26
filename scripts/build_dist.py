@@ -168,8 +168,22 @@ def prepare_extension_version(version: str) -> Path:
     """Create a temporary extension directory with updated version numbers."""
     logger.info("📝 Preparing extension with version %s", version)
     
-    # Remove 'v' prefix if present for extension version
+    # Remove 'v' prefix if present
     clean_version = version.lstrip('v')
+    
+    # Chrome extension version format: up to 4 dot-separated integers (e.g., 0.4.6 or 0.4.6.1)
+    # Remove any pre-release identifiers (alpha, beta, rc, etc.)
+    import re
+    # Match: digits.digits.digits[.digits] and stop at first non-numeric part
+    match = re.match(r'^(\d+(?:\.\d+){0,3})', clean_version)
+    if match:
+        chrome_version = match.group(1)
+    else:
+        # Fallback: if no valid version found, use a safe default
+        logger.warning("Could not parse version '%s', using 0.0.1", clean_version)
+        chrome_version = "0.0.1"
+    
+    logger.info("  → Chrome-compatible version: %s", chrome_version)
     
     # Create temporary extension directory
     temp_ext_dir = PI_DIST / "temp_extension"
@@ -185,7 +199,7 @@ def prepare_extension_version(version: str) -> Path:
         with open(temp_package_json, 'r', encoding='utf-8') as f:
             package_data = json.load(f)
         
-        package_data["version"] = clean_version
+        package_data["version"] = chrome_version
         
         with open(temp_package_json, 'w', encoding='utf-8') as f:
             json.dump(package_data, f, indent=4, ensure_ascii=False)
@@ -198,7 +212,7 @@ def prepare_extension_version(version: str) -> Path:
         with open(temp_manifest, 'r', encoding='utf-8') as f:
             manifest_data = json.load(f)
         
-        manifest_data["version"] = clean_version
+        manifest_data["version"] = chrome_version
         
         with open(temp_manifest, 'w', encoding='utf-8') as f:
             json.dump(manifest_data, f, indent=4, ensure_ascii=False)

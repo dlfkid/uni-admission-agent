@@ -294,6 +294,10 @@ async def api_crawl(body: CrawlRequest) -> CrawlResponse:
                     univ_slug=body.univ_slug,
                     year=body.year,
                     continue_depth=body.continue_depth,
+                    page_type_hint=body.page_type_hint,
+                    export_md=body.export_md,
+                    export_path=body.export_path,
+                    html_content=body.html_content,
                 )
             finally:
                 stop_event.set()

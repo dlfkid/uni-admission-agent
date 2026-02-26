@@ -9,6 +9,7 @@ node_modules/
 # C extensions
 *.so
 .DS_Store
+*.bak
 
 # Pylint reports
 pylint_report*.txt

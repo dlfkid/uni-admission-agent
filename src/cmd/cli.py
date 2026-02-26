@@ -285,6 +285,15 @@ def crawl(
     continue_depth: int = typer.Option(
         0, "--continue", help="Extra depth for LLM scouting"
     ),
+    page_type: str = typer.Option(
+        "auto", "--page-type", help="Page type: auto, index, or detail"
+    ),
+    export_md: bool = typer.Option(
+        False, "--export-md", help="Export crawled markdown files"
+    ),
+    export_path: str = typer.Option(
+        None, "--export-path", help="Path to export markdown files"
+    ),
     verbose: bool = typer.Option(False, "--verbose", "-v"),
 ) -> None:
     """Crawl a URL and import admission data."""
@@ -293,10 +302,30 @@ def crawl(
     year = _validate_year(year)
     _init_db(verbose)
 
-    typer.echo(f"Crawling: {url}  (univ={name}, year={year}, depth={continue_depth})")
+    if export_md and not export_path:
+        typer.echo("Error: --export-path is required when --export-md is enabled", err=True)
+        raise typer.Exit(code=1)
+    
+    if page_type not in ["auto", "index", "detail"]:
+        typer.echo(f"Error: --page-type must be one of: auto, index, detail", err=True)
+        raise typer.Exit(code=1)
+
+    typer.echo(f"Crawling: {url}  (univ={name}, year={year}, depth={continue_depth}, type={page_type})")
+    if export_md:
+        typer.echo(f"  Export MD: enabled → {export_path}")
+    
     try:
         result = asyncio.run(
-            crawl_url(url=url, univ_slug=name, year=year, continue_depth=continue_depth)
+            crawl_url(
+                url=url, 
+                univ_slug=name, 
+                year=year, 
+                continue_depth=continue_depth,
+                page_type_hint=page_type,
+                export_md=export_md,
+                export_path=export_path,
+                html_content=None,  # CLI doesn't provide pre-rendered HTML
+            )
         )
         typer.echo(f"✅ Crawl complete: {result.imported_count} programs imported")
         tracker.log_summary()

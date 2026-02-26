@@ -58,6 +58,10 @@ const slugInput = document.getElementById("slug") as HTMLInputElement;
 const slugDropdown = document.getElementById("slug-dropdown") as HTMLUListElement;
 const yearInput = document.getElementById("year") as HTMLInputElement;
 const urlDisplay = document.getElementById("current-url") as HTMLParagraphElement;
+const pageTypeSelect = document.getElementById("page-type") as HTMLSelectElement;
+const exportMdCheckbox = document.getElementById("export-md") as HTMLInputElement;
+const exportPathInput = document.getElementById("export-path") as HTMLInputElement;
+const exportPathField = document.getElementById("export-path-field") as HTMLDivElement;
 const sendBtn = document.getElementById("send-btn") as HTMLButtonElement;
 
 // Monitor
@@ -97,6 +101,12 @@ let activePollInterval: number | null = null;
 let draggedItem: HTMLElement | null = null;
 const LOGS_EXPANDED_KEY = "logs_expanded";
 
+// Cache keys for user preferences
+const PAGE_TYPE_KEY = "crawl_page_type";
+const EXPORT_MD_KEY = "crawl_export_md";
+const EXPORT_PATH_KEY = "crawl_export_path";
+const UNIV_SLUG_KEY = "crawl_univ_slug";
+
 // Slug autocomplete state
 let cachedUniversities: UniversityOption[] = [];
 let activeDropdownIndex = -1;
@@ -106,6 +116,9 @@ let activeExportDropdownIndex = -1;
 function setFormEnabled(enabled: boolean) {
     slugInput.disabled = !enabled;
     yearInput.disabled = !enabled;
+    pageTypeSelect.disabled = !enabled;
+    exportMdCheckbox.disabled = !enabled;
+    exportPathInput.disabled = !enabled;
     sendBtn.disabled = !enabled;
     // We don't disable config btn as user might want to check settings?
     // But changing settings while running is risky. Let's leave config enabled for now.
@@ -182,11 +195,68 @@ async function sleep(ms: number): Promise<void> {
     return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function restoreCachedPreferences() {
+    // Restore page type selection
+    const cachedPageType = localStorage.getItem(PAGE_TYPE_KEY);
+    if (cachedPageType && ["auto", "index", "detail"].includes(cachedPageType)) {
+        pageTypeSelect.value = cachedPageType;
+    }
+
+    // Restore export MD checkbox state
+    const cachedExportMd = localStorage.getItem(EXPORT_MD_KEY);
+    if (cachedExportMd === "true") {
+        exportMdCheckbox.checked = true;
+        exportPathField.style.display = "block";
+    } else {
+        exportMdCheckbox.checked = false;
+        exportPathField.style.display = "none";
+    }
+
+    // Restore export path
+    const cachedExportPath = localStorage.getItem(EXPORT_PATH_KEY);
+    if (cachedExportPath) {
+        exportPathInput.value = cachedExportPath;
+    }
+
+    // Restore university slug
+    const cachedUnivSlug = localStorage.getItem(UNIV_SLUG_KEY);
+    if (cachedUnivSlug) {
+        slugInput.value = cachedUnivSlug;
+    }
+}
+
 // ---------------------------------------------------------------------------
 //  Initialization
 // ---------------------------------------------------------------------------
 
+// Handle Export MD checkbox toggle
+exportMdCheckbox.addEventListener("change", () => {
+    const isChecked = exportMdCheckbox.checked;
+    if (isChecked) {
+        exportPathField.style.display = "block";
+    } else {
+        exportPathField.style.display = "none";
+    }
+    // Save to cache
+    localStorage.setItem(EXPORT_MD_KEY, String(isChecked));
+});
+
+// Handle page type selection change
+pageTypeSelect.addEventListener("change", () => {
+    // Save to cache
+    localStorage.setItem(PAGE_TYPE_KEY, pageTypeSelect.value);
+});
+
+// Handle export path input change
+exportPathInput.addEventListener("blur", () => {
+    // Save to cache when user leaves the input
+    localStorage.setItem(EXPORT_PATH_KEY, exportPathInput.value.trim());
+});
+
 async function init() {
+    // Restore cached preferences
+    restoreCachedPreferences();
+
     chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
         const tab = tabs[0];
         if (tab?.url) {
@@ -271,6 +341,14 @@ function initSlugAutocomplete(): void {
         renderDropdown(slugInput.value.trim());
     });
 
+    // Save slug to cache when user finishes typing (on blur)
+    slugInput.addEventListener("blur", () => {
+        const slug = slugInput.value.trim();
+        if (slug) {
+            localStorage.setItem(UNIV_SLUG_KEY, slug);
+        }
+    });
+
     slugInput.addEventListener("keydown", (e: KeyboardEvent) => {
         const items = slugDropdown.querySelectorAll("li");
         if (!items.length || slugDropdown.classList.contains("hidden")) {
@@ -291,6 +369,8 @@ function initSlugAutocomplete(): void {
                 const slug = (items[activeDropdownIndex] as HTMLElement).dataset.slug;
                 if (slug) {
                     slugInput.value = slug;
+                    // Save to cache when user selects via Enter key
+                    localStorage.setItem(UNIV_SLUG_KEY, slug);
                 }
                 hideDropdown();
             }
@@ -348,6 +428,8 @@ function renderDropdown(query: string): void {
 
         li.addEventListener("click", () => {
             slugInput.value = u.slug;
+            // Save to cache when user selects from dropdown
+            localStorage.setItem(UNIV_SLUG_KEY, u.slug);
             hideDropdown();
             slugInput.focus();
         });
@@ -380,27 +462,94 @@ function hideDropdown(): void {
 }
 
 // ---------------------------------------------------------------------------
-//  Input & Monitor Flow (Same as before)
+//  Input & Monitor Flow
 // ---------------------------------------------------------------------------
+
+/**
+ * Get the full HTML content of the current active tab.
+ * This ensures we extract from the rendered page the user sees.
+ */
+async function getCurrentPageHTML(): Promise<string | null> {
+    return new Promise((resolve) => {
+        chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+            const tab = tabs[0];
+            if (!tab || !tab.id) {
+                resolve(null);
+                return;
+            }
+
+            // Execute script in the page to get full HTML
+            chrome.scripting.executeScript(
+                {
+                    target: { tabId: tab.id },
+                    func: () => {
+                        return document.documentElement.outerHTML;
+                    },
+                },
+                (results) => {
+                    if (chrome.runtime.lastError || !results || results.length === 0) {
+                        console.error("Failed to get page HTML:", chrome.runtime.lastError);
+                        resolve(null);
+                        return;
+                    }
+                    resolve(results[0].result as string);
+                }
+            );
+        });
+    });
+}
 
 sendBtn.addEventListener("click", async () => {
     const slug = slugInput.value.trim();
     const year = parseInt(yearInput.value.trim(), 10);
     const url = urlDisplay.textContent ?? "";
+    const pageType = pageTypeSelect.value;
+    const exportMd = exportMdCheckbox.checked;
+    const exportPath = exportPathInput.value.trim();
 
     if (!slug || !year || !url || url.startsWith("(")) {
         showStatus("Invalid input or URL", "error");
         return;
     }
 
+    if (exportMd && !exportPath) {
+        showStatus("Export path is required when export is enabled", "error");
+        return;
+    }
+
     sendBtn.disabled = true;
+    sendBtn.textContent = "Reading page…";
+
+    // Get current page HTML
+    const pageHTML = await getCurrentPageHTML();
+    if (!pageHTML) {
+        showStatus("Failed to read page content. Please refresh and try again.", "error");
+        sendBtn.disabled = false;
+        sendBtn.textContent = "Start Crawl";
+        return;
+    }
+
     sendBtn.textContent = "Starting…";
 
     try {
+        const payload: any = { 
+            url, 
+            univ_slug: slug, 
+            year, 
+            continue_depth: 0,
+            page_type_hint: pageType,
+            html_content: pageHTML  // Send the rendered HTML from browser
+        };
+
+        if (exportMd && exportPath) {
+            payload.export_md = true;
+            payload.export_path = exportPath;
+        }
+
         const res = await fetch(`${API_BASE}/crawl`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ url, univ_slug: slug, year, continue_depth: 0 }),
+            body: JSON.stringify(payload),
         });
 
         // Lock UI immediately

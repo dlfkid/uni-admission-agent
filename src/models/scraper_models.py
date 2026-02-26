@@ -16,6 +16,7 @@ class CrawlPageResult(BaseModel):
     char_count: int = Field(..., description="Character count of the Markdown content")
     links: List[str] = Field(default_factory=list, description="All links found on the page")
     status_code: Optional[int] = Field(default=None, description="HTTP status code")
+    html: Optional[str] = Field(default=None, description="Raw HTML content (fallback for markdown conversion issues)")
 
 
 class ExtractedLinks(BaseModel):

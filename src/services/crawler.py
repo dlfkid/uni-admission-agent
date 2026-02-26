@@ -94,20 +94,29 @@ async def crawl_url(
     univ_slug: str,
     year: int,
     continue_depth: int = 0,
+    page_type_hint: str = "auto",
+    export_md: bool = False,
+    export_path: Optional[str] = None,
+    html_content: Optional[str] = None,
 ) -> CrawlResult:
     """Crawl a university admission page and import structured data.
 
     This is the main crawling pipeline:
-        1. Fetch page with stealth browsing via crawl4ai
-        2. Detect page type (index vs detail)
+        1. Fetch page with stealth browsing via crawl4ai (or use provided HTML)
+        2. Detect page type (index vs detail) - can be overridden by page_type_hint
         3. Extract links / parse program data via LLM
         4. Upsert to database
+        5. Optionally export markdown files to disk
 
     Args:
         url: Starting URL to crawl.
         univ_slug: University identifier (e.g. ``"hku"``).
         year: Academic year (e.g. ``2026``).
         continue_depth: Extra depth for LLM-driven scouting.
+        page_type_hint: Page type hint ('auto', 'index', or 'detail').
+        export_md: Whether to export markdown files.
+        export_path: Path to export markdown files.
+        html_content: Pre-rendered HTML from browser (bypasses crawling).
 
     Returns:
         CrawlResult with the number of programs imported.
@@ -118,6 +127,10 @@ async def crawl_url(
         univ_slug=univ_slug,
         year=year,
         continue_depth=continue_depth,
+        page_type_hint=page_type_hint,
+        export_md=export_md,
+        export_path=export_path,
+        html_content=html_content,
     )
     logger.info("Crawl complete: %d programs imported", imported)
     return CrawlResult(imported_count=imported, univ_slug=univ_slug, year=year)
