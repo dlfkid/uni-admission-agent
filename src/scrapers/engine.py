@@ -6,67 +6,33 @@ and integrates with RouterAgent/LLMCleanerAgent for structured data extraction.
 Supports dynamic crawl depth with LLM-driven heuristic scouting.
 """
 
-
 import asyncio
 import logging
 import random
-import re
-from datetime import datetime
+from pathlib import Path
 from typing import Dict, List, Optional, Set, cast
-from urllib.parse import urljoin
 
 from crawl4ai import AsyncWebCrawler, BrowserConfig, CrawlerRunConfig, CacheMode, CrawlResult
-
 from tenacity import retry, stop_after_attempt, wait_exponential, RetryError
 
-from src.agents.cleaner_agent import LLMCleanerAgent, ParsedProgramData
-
+from src.agents.cleaner_agent import LLMCleanerAgent
 from src.agents.factory import RouterAgent, create_router
 from src.core.environment import ScraperError
-
-
-def _unwrap_retry_error(exc: RetryError) -> Exception:
-    """Extract the last underlying exception from a tenacity RetryError.
-
-    tenacity wraps the real cause inside ``RetryError.last_attempt``.  This
-    helper surfaces the original exception so callers can log a concise,
-    human-readable message instead of the verbose ``RetryError[…]`` repr.
-    """
-    cause = exc.last_attempt.exception()
-    return cause if cause is not None else exc
-from src.core.paths import get_prompts_dir
-from src.utils.text import generate_program_group_code
-from src.models.scraper_models import (
-    CrawlPageResult,
-    PageType,
-    ScoutedLink,
-    ScoutedLinks,
-    ScoutReport,
-)
+from src.models.scraper_models import CrawlPageResult, PageType
+from src.scrapers.helpers import extract_program_name, save_markdown, save_html_debug
+from src.scrapers.link_parser import extract_links, detect_page_type
+from src.scrapers.page_processor import process_page_for_program, process_pages_batch
+from src.scrapers.scout import run_scout, print_scout_report
 from src.storage.db_manager import DatabaseManager
 from src.utils.pdf_processor import PDFProcessor, PDFProcessingError
 
 logger = logging.getLogger(__name__)
 
-# --- Constants ---
 
-MAX_SCOUT_CALLS = 5  # Hard cap on LLM scout calls per crawl session
-MAX_MARKDOWN_CHARS = 30000  # Truncate Markdown before sending to LLM
-
-# --- Prompt Loading ---
-
-_PROMPTS_DIR = get_prompts_dir()
-
-
-def _load_prompt(filename: str) -> str:
-    """Load a prompt template from the prompts directory."""
-    prompt_path = _PROMPTS_DIR / filename
-    if not prompt_path.exists():
-        raise FileNotFoundError(f"Prompt file not found: {prompt_path}")
-    return prompt_path.read_text(encoding="utf-8")
-
-
-# --- Core Scraper ---
+def _unwrap_retry_error(exc: RetryError) -> Exception:
+    """Extract the last underlying exception from a tenacity RetryError."""
+    cause = exc.last_attempt.exception()
+    return cause if cause is not None else exc
 
 
 class AdmissionScraper:
@@ -75,27 +41,18 @@ class AdmissionScraper:
 
     Uses crawl4ai + playwright stealth to fetch pages and convert to Markdown.
     Integrates with RouterAgent for link extraction and LLMCleanerAgent
-    for structured data parsing. Supports dynamic crawl depth with
-    LLM-driven heuristic scouting via --continue.
+    for structured data parsing.
     """
 
-    def __init__(
-        self,
-        router: Optional[RouterAgent] = None,
-    ) -> None:
-        if router is not None:
-            self.router = router
-        else:
-            self.router = create_router()
+    def __init__(self, router: Optional[RouterAgent] = None) -> None:
+        self.router = router if router is not None else create_router()
 
-        # Browser configuration: stealth + headless
         self.browser_config = BrowserConfig(
             enable_stealth=True,
             headless=True,
             verbose=False,
         )
 
-        # Crawler run configuration
         self.crawler_config = CrawlerRunConfig(
             cache_mode=CacheMode.BYPASS,
             simulate_user=True,
@@ -104,53 +61,23 @@ class AdmissionScraper:
             verbose=False,
         )
 
-        # Session state for depth-aware crawling
+        # Session state
         self._visited_urls: Set[str] = set()
         self._scout_call_count: int = 0
-        self._all_scouted_links: List[ScoutedLink] = []
+        self._all_scouted_links: List = []
         self._failed_urls: List[str] = []
-        
-        # Export settings
         self._export_md: bool = False
         self._export_path: Optional[str] = None
 
-    # ------------------------------------------------------------------
-    # Public API
-    # ------------------------------------------------------------------
-
-    @retry(
-        stop=stop_after_attempt(3),
-        wait=wait_exponential(multiplier=2, min=4, max=90),
-    )
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=2, min=4, max=90))
     async def crawl_page(self, url: str) -> CrawlPageResult:
-        """
-        Crawl a single URL and return its content as Markdown.
-
-        Uses crawl4ai AsyncWebCrawler with stealth browsing.
-        Automatically converts HTML → Markdown to reduce token cost.
-
-        Args:
-            url: The URL to crawl.
-
-        Returns:
-            CrawlPageResult with Markdown content, char count, and links.
-
-        Raises:
-            ScraperError: If the page cannot be fetched after retries.
-        """
+        """Crawl a single URL and return its content as Markdown."""
         logger.info("Crawling: %s", url)
 
-        # Human-like delay before request
-        delay = random.uniform(0.5, 2.0)
-        await asyncio.sleep(delay)
+        await asyncio.sleep(random.uniform(0.5, 2.0))
 
         async with AsyncWebCrawler(config=self.browser_config) as crawler:
-            raw_result = await crawler.arun(
-                url=url,
-                config=self.crawler_config,
-            )
-            # arun returns Union[CrawlResultContainer, AsyncGenerator];
-            # single-URL calls always return CrawlResultContainer.
+            raw_result = await crawler.arun(url=url, config=self.crawler_config)
             from crawl4ai.models import CrawlResultContainer
             container = cast("CrawlResultContainer[CrawlResult]", raw_result)
             result: CrawlResult = container[0]
@@ -160,252 +87,41 @@ class AdmissionScraper:
                 logger.error("Crawl failed for %s: %s", url, error_msg)
                 raise ScraperError(f"Failed to crawl {url}: {error_msg}")
 
-            # Debug: Log result properties
-            logger.debug("Crawl result properties:")
-            logger.debug("  - success: %s", result.success)
-            logger.debug("  - status_code: %s", result.status_code)
-            logger.debug("  - has html: %s", bool(result.html))
-            logger.debug("  - html length: %d", len(result.html) if result.html else 0)
-            logger.debug("  - has markdown: %s", result.markdown is not None)
-            if result.markdown is not None:
-                logger.debug("  - raw_markdown length: %d", len(result.markdown.raw_markdown) if result.markdown.raw_markdown else 0)
-                logger.debug("  - markdown_with_citations length: %d", len(result.markdown.markdown_with_citations) if result.markdown.markdown_with_citations else 0)
-            
-            # Debug: Save HTML for inspection if markdown is suspiciously short
-            if result.html and len(result.html) > 1000 and (not result.markdown or len(result.markdown.raw_markdown or "") < 100):
-                logger.warning("HTML is %d bytes but markdown is only %d bytes - possible conversion issue", 
-                              len(result.html), len(result.markdown.raw_markdown) if result.markdown else 0)
-                if self._export_md and self._export_path:
-                    # Save HTML for debugging
-                    from pathlib import Path
-                    import re
-                    filename = url.replace("https://", "").replace("http://", "")
-                    filename = re.sub(r'[^\w\-\_\.]', '_', filename)
-                    filename = filename[:200] + '.html'
-                    filepath = Path(self._export_path) / filename
-                    filepath.write_text(result.html, encoding='utf-8')
-                    logger.info("Saved HTML for debugging: %s", filepath)
+            self._debug_crawl_result(result, url)
 
-            # Extract Markdown (strips scripts/CSS automatically)
-            markdown_result = result.markdown
-            raw_markdown = ""
-            if markdown_result is not None:
-                raw_markdown = markdown_result.raw_markdown
+            raw_markdown = result.markdown.raw_markdown if result.markdown else ""
+            page_links = self._extract_page_links(result)
 
-            # Extract links from crawl result
-            page_links: List[str] = []
-            if result.links:
-                external = result.links.get("external", [])
-                internal = result.links.get("internal", [])
-                for link_item in external + internal:
-                    href = link_item.get("href", "")
-                    if href:
-                        page_links.append(href)
-
-            char_count = len(raw_markdown)
-            logger.info(
-                "Crawled %s: %s chars, %d links found",
-                url, f"{char_count:,}", len(page_links),
-            )
-            
-            # Export markdown if enabled
             if self._export_md and self._export_path and raw_markdown:
-                self._save_markdown(url, raw_markdown)
+                save_markdown(self._export_path, url, raw_markdown)
 
             return CrawlPageResult(
                 url=url,
                 markdown=raw_markdown,
-                char_count=char_count,
+                char_count=len(raw_markdown),
                 links=page_links,
                 status_code=result.status_code,
-                html=result.html,  # Store HTML for fallback
+                html=result.html,
             )
 
-    def _save_markdown(self, url: str, markdown: str) -> None:
-        """Save markdown content to disk with a sanitized filename."""
-        from pathlib import Path
-        import re
-        
-        try:
-            # Create a safe filename from URL
-            # Remove protocol and sanitize
-            filename = url.replace("https://", "").replace("http://", "")
-            filename = re.sub(r'[^\w\-\_\.]', '_', filename)
-            filename = filename[:200]  # Limit length
-            if not filename.endswith('.md'):
-                filename += '.md'
-            
-            filepath = Path(self._export_path) / filename
-            filepath.write_text(markdown, encoding='utf-8')
-            logger.info("Exported markdown to: %s", filepath)
-        except Exception as e:
-            logger.error("Failed to save markdown for %s: %s", url, e)
+    def _debug_crawl_result(self, result: CrawlResult, url: str) -> None:
+        """Log debug info and save HTML if markdown conversion seems poor."""
+        if result.html and len(result.html) > 1000:
+            md_len = len(result.markdown.raw_markdown) if result.markdown else 0
+            if md_len < 100:
+                logger.warning("HTML: %d bytes, markdown: %d bytes", len(result.html), md_len)
+                if self._export_md and self._export_path:
+                    save_html_debug(self._export_path, url, result.html)
 
-    def extract_links(self, markdown: str, base_url: str) -> List[str]:
-        """
-        Extract potential program detail page URLs from Markdown using Regex.
-        
-        Optimized to avoid LLM calls. Finds all [text](url) and raw URLs,
-        then filters for valid absolute URLs.
-
-        Args:
-            markdown: Markdown content of the page.
-            base_url: Base URL for resolving relative links.
-
-        Returns:
-            List of absolute URLs for program detail pages.
-        """
-        logger.info("Extracting links via Regex (heuristic)...")
-        
-        # Regex to find markdown links: [text](href)
-        md_link_pattern = re.compile(r"\[.*?\]\((.*?)\)")
-        # Regex to find raw http(s) links
-        raw_url_pattern = re.compile(r"(https?://[^\s\)]+)")
-
-        found_links: Set[str] = set()
-        
-        # 1. Extract from markdown links
-        for match in md_link_pattern.findall(markdown):
-            # Clean up link (remove title parts like " title")
-            href = match.split(" ")[0].strip()
-            if href:
-                found_links.add(href)
-                
-        # 2. Extract raw URLs
-        for match in raw_url_pattern.findall(markdown):
-            found_links.add(match)
-
-        # 3. Resolve and Filter
-        resolved_links: List[str] = []
-        for link in found_links:
-            # Skip empty or anchor links
-            if not link or link.startswith("#") or link.startswith("mailto:"):
-                continue
-
-            try:
-                absolute = urljoin(base_url, link)
-                
-                # Heuristic: Filter out obviously irrelevant links
-                # (e.g., CSS, JS, images, login pages)
-                lower_link = absolute.lower()
-                if any(ext in lower_link for ext in [".css", ".js", ".png", ".jpg", ".jpeg", ".ico", ".svg", ".woff", ".ttf"]):
-                    continue
-                if "login" in lower_link or "signin" in lower_link or "admin" in lower_link:
-                    continue
-                    
-                # Ensure it's not the base URL itself
-                if absolute.rstrip("/") != base_url.rstrip("/"):
-                    resolved_links.append(absolute)
-            except Exception:
-                continue
-
-        logger.info("Extracted %d unique links via Regex", len(resolved_links))
-        return resolved_links
-
-    def scout_links(
-        self, markdown: str, links: List[str], base_url: str,
-    ) -> List[ScoutedLink]:
-        """
-        Use LLM to evaluate links for high-value admission content.
-
-        Called when a detail page yields no structured data, to identify
-        links worth exploring at a deeper level.
-
-        Args:
-            markdown: Markdown content of the page (truncated).
-            links: All links found on the page.
-            base_url: Base URL for resolution context.
-
-        Returns:
-            Top-3 ScoutedLink candidates sorted by confidence.
-        """
-        if self._scout_call_count >= MAX_SCOUT_CALLS:
-            logger.warning(
-                "Scout call limit reached (%d/%d). Skipping.",
-                self._scout_call_count, MAX_SCOUT_CALLS,
-            )
-            return []
-
-        self._scout_call_count += 1
-
-        # Build link list text for prompt
-        link_list_text = "\n".join(
-            f"- {link}" for link in links[:50]  # Cap at 50 links
-        )
-        markdown_summary = markdown[:3000]  # Limit to save tokens
-
-        prompt_template = _load_prompt("scout_links.txt")
-        prompt = prompt_template.format(
-            base_url=base_url,
-            markdown_summary=markdown_summary,
-            link_list=link_list_text,
-        )
-
-        logger.info(
-            "Scout evaluation (%d/%d): analyzing %d links from %s",
-            self._scout_call_count, MAX_SCOUT_CALLS,
-            len(links), base_url,
-        )
-
-        try:
-            response = self.router.generate(prompt, ScoutedLinks)
-
-            if not response.text:
-                return []
-
-            scouted = ScoutedLinks.model_validate_json(response.text)
-
-            # Resolve relative URLs in scouted links
-            for link in scouted.links:
-                if not link.url.startswith(("http://", "https://")):
-                    link.url = urljoin(base_url, link.url)
-
-            logger.info(
-                "Scout found %d potential links", len(scouted.links),
-            )
-            for sl in scouted.links:
-                logger.info(
-                    "  [%s] %s — %s",
-                    sl.confidence.upper(), sl.url, sl.reason,
-                )
-
-            return scouted.links
-
-        except Exception as e:
-            logger.error("Scout evaluation failed: %s", e)
-            return []
-
-    def detect_page_type(
-        self, markdown: str, link_count: int,
-    ) -> PageType:
-        """Determines if a page is an INDEX or DETAIL page using heuristics.
-        
-        Optimization: Replaced LLM call with content & link density check.
-        Strong content signals ("Tuition", "Deadline") => DETAIL.
-        """
-        # 1. Strong content signals for Detail Page
-        # If these keywords appear, it's likely a program page regardless of links
-        content_lower = markdown.lower()
-        detail_signals = [
-            "tuition fee", "program fee", "application deadline", 
-            "entry requirements", "admission requirements",
-            "course structure", "module list", "what you will study",
-            "program overview", "degree requirements"
-        ]
-        
-        if any(signal in content_lower for signal in detail_signals):
-             logger.info("Page Type Detection: DETAIL (Found content signal)")
-             return PageType.DETAIL
-
-        # 2. Heuristic: Indices usually have many links
-        threshold = 15
-        
-        if link_count > threshold:
-            logger.info(f"Page Type Detection: INDEX (Links={link_count} > {threshold})")
-            return PageType.INDEX
-        
-        logger.info(f"Page Type Detection: DETAIL (Links={link_count} <= {threshold})")
-        return PageType.DETAIL
+    def _extract_page_links(self, result: CrawlResult) -> List[str]:
+        """Extract links from crawl result."""
+        page_links: List[str] = []
+        if result.links:
+            for link_item in result.links.get("external", []) + result.links.get("internal", []):
+                href = link_item.get("href", "")
+                if href:
+                    page_links.append(href)
+        return page_links
 
     async def crawl_and_clean(
         self,
@@ -419,246 +135,33 @@ class AdmissionScraper:
         html_content: Optional[str] = None,
     ) -> int:
         """
-        Full pipeline: crawl page → extract links → crawl detail pages →
-        parse with LLMCleanerAgent → upsert to database.
-
-        Supports dynamic depth via --continue flag. When a detail page
-        yields no data and continue_depth > 0, the Heuristic Scout
-        evaluates links for deeper exploration.
-
-        Args:
-            url: Starting URL (e.g., a program listing page).
-            univ_slug: University slug for DB association.
-            year: Academic year.
-            continue_depth: Extra depth levels allowed (default 0).
-            page_type_hint: Page type hint ('auto', 'index', or 'detail').
-                If not 'auto', skips auto-detection.
-            export_md: Whether to export markdown files.
-            export_path: Path to export markdown files.
-            html_content: Pre-rendered HTML from browser (bypasses crawling).
+        Full pipeline: crawl → extract links → parse → upsert to database.
 
         Returns:
             Number of programs successfully imported.
         """
-        # Reset session state
-        self._visited_urls = set()
-        self._scout_call_count = 0
-        self._all_scouted_links = []
-        self._failed_urls = []
-        
-        # Store export settings
+        self._reset_session_state()
         self._export_md = export_md
         self._export_path = export_path
         
         if export_md and export_path:
-            # Create export directory if it doesn't exist
-            from pathlib import Path
             Path(export_path).mkdir(parents=True, exist_ok=True)
             logger.info("Markdown export enabled: %s", export_path)
 
         if not url:
-             logger.error("No URL provided for crawl.")
-             return 0
+            logger.error("No URL provided for crawl.")
+            return 0
 
-        # If HTML content is provided from browser, use it directly
-        probe_result: Optional[CrawlPageResult] = None
-        if html_content:
-            logger.info("Using pre-rendered HTML from browser (length: %d bytes)", len(html_content))
-            
-            # For browser-provided HTML, we'll use it directly as "markdown"
-            # LLM can process HTML just fine (we have HTML fallback logic in _crawl_depth)
-            # This avoids dependency on specific markdown converter APIs
-            
-            # Try to convert to markdown, but if it fails, use HTML directly
-            raw_markdown = html_content
-            try:
-                from crawl4ai.markdown_generation_strategy import DefaultMarkdownGenerator
-                md_generator = DefaultMarkdownGenerator()
-                # Correct API: pass input_html and base_url
-                markdown_obj = md_generator.generate_markdown(
-                    input_html=html_content,
-                    base_url=url,
-                )
-                if markdown_obj and hasattr(markdown_obj, 'raw_markdown'):
-                    raw_markdown = markdown_obj.raw_markdown
-                    logger.info("Converted browser HTML to markdown: %d chars", len(raw_markdown))
-                else:
-                    logger.warning("Markdown conversion returned empty, using HTML directly")
-            except Exception as e:
-                logger.warning("Failed to convert HTML to markdown, using HTML directly: %s", e)
-                # raw_markdown already set to html_content
-                
-            probe_result = CrawlPageResult(
-                url=url,
-                markdown=raw_markdown,
-                char_count=len(raw_markdown),
-                links=[],  # We'll extract links if needed
-                status_code=200,  # Assume success since HTML was provided
-                html=html_content,
-            )
-            
-            logger.info("Created page result from browser HTML (content length: %d chars)", len(raw_markdown))
-            
-            # Export if enabled
-            if self._export_md and self._export_path:
-                if raw_markdown != html_content:
-                    # We successfully converted to markdown
-                    self._save_markdown(url, raw_markdown)
+        probe_result = await self._prepare_probe_result(url, html_content)
+        if probe_result is None:
+            return 0
 
-        # Determine page type
-        if page_type_hint != "auto":
-            # User manually specified the type
-            if page_type_hint == "index":
-                is_index = True
-                logger.info("Page type manually set to: INDEX")
-            elif page_type_hint == "detail":
-                is_index = False
-                logger.info("Page type manually set to: DETAIL")
-            else:
-                logger.warning("Invalid page_type_hint '%s', falling back to auto-detection", page_type_hint)
-                # Fall through to auto-detection below
-                page_type_hint = "auto"
-        
-        if page_type_hint == "auto":
-            # Probe the entry URL to detect type (if not already done)
-            if probe_result is None:
-                logger.info("Probing entry URL to detect page type: %s", url)
-                try:
-                    probe_result = await self.crawl_page(url)
-                except (ScraperError, RetryError) as exc:
-                    cause = _unwrap_retry_error(exc) if isinstance(exc, RetryError) else exc
-                    logger.error("Failed to probe entry URL %s: %s", url, cause)
-                    return 0
+        is_index = self._determine_page_type(probe_result, page_type_hint)
 
-            if not probe_result.markdown:
-                 logger.error("Entry URL yielded no content: %s", url)
-                 return 0
-
-            # Detect type
-            page_type = self.detect_page_type(
-                markdown=probe_result.markdown,
-                link_count=len(probe_result.links),
-            )
-            
-            # If detected as DETAIL, we set is_index_layer=False
-            # This tells _crawl_depth to skip link extraction and parse the page directly.
-            is_index = (page_type == PageType.INDEX)
-            
-            logger.info(
-                "Entry Point detected as: %s (is_index_layer=%s)", 
-                page_type.value.upper(), is_index
-            )
-        
-        # If we have browser HTML for a DETAIL page, process it directly without re-crawling
+        # Browser HTML + DETAIL page: process directly
         if html_content and probe_result and not is_index:
-            logger.info("Processing browser-provided HTML as DETAIL page (skipping URL crawl)")
-            
-            from src.storage.db_manager import DatabaseManager
-            
-            cleaner = LLMCleanerAgent(router=self.router)
-            db_manager = DatabaseManager()
-            
-            # Determine content to use for LLM extraction
-            content_for_llm = probe_result.markdown
-            content_type = "markdown"
-            
-            # HTML Fallback: If markdown is suspiciously short but HTML exists and is substantial
-            if probe_result.html and len(probe_result.html) > 1000:
-                markdown_length = len(probe_result.markdown)
-                html_length = len(probe_result.html)
-                # If markdown is less than 5% of HTML length, use HTML instead
-                if markdown_length < html_length * 0.05:
-                    logger.warning(
-                        "Markdown conversion poor (MD: %d, HTML: %d). Using HTML for LLM extraction.",
-                        markdown_length, html_length
-                    )
-                    content_for_llm = probe_result.html
-                    content_type = "html"
-            
-            try:
-                parsed = cleaner.clean_markdown(
-                    markdown=content_for_llm,
-                    source_url=probe_result.url,
-                )
-                
-                if content_type == "html":
-                    logger.info("Successfully extracted data from HTML fallback for %s", probe_result.url)
-                
-                if parsed is None:
-                    logger.warning("No structured data from browser HTML (used %s)", content_type)
-                    imported = 0
-                else:
-                    # Build program data for DB
-                    program_data: Dict[str, object] = {
-                        "academic_year": year,
-                        "name_en": _extract_program_name(probe_result.markdown),
-                        "name_zh": "",
-                    }
-
-                    if parsed.faculty:
-                        program_data["faculty"] = parsed.faculty
-
-                    if parsed.tuition:
-                        program_data["tuition_amount"] = parsed.tuition.amount
-                        program_data["currency"] = parsed.tuition.currency
-
-                    if parsed.study_options:
-                        program_data["study_options"] = [
-                            opt.model_dump(mode="json")
-                            for opt in parsed.study_options
-                        ]
-
-                    if parsed.deadlines:
-                        sorted_deadlines = sorted(
-                            parsed.deadlines,
-                            key=lambda x: x.cutoff_date or datetime.max,
-                        )
-                        program_data["deadlines"] = []
-                        for i, d in enumerate(sorted_deadlines, 1):
-                            d_dict = d.model_dump(mode="json")
-                            d_dict["round"] = i
-                            program_data["deadlines"].append(d_dict)
-
-                    # Deterministic program_group_code
-                    name_en = program_data.get("name_en")
-                    if name_en:
-                        code = generate_program_group_code(univ_slug, str(name_en))
-                        program_data["program_group_code"] = code
-                        logger.info(
-                            "[New Program] 检测到新学科: %s，已分配 ID: %s",
-                            name_en, code,
-                        )
-
-                    extra_metadata: Dict[str, object] = {
-                        "source_url": probe_result.url,
-                        "crawl_depth": 0,
-                        "from_browser": True,
-                    }
-                    program_data["extra_metadata"] = extra_metadata
-
-                    if not name_en:
-                        logger.warning("Could not extract program name from %s", probe_result.url)
-                        imported = 0
-                    else:
-                        _, created = db_manager.upsert_program(
-                            program_data,  # type: ignore[arg-type]
-                            univ_slug,
-                        )
-                        imported = 1
-                        action = "Inserted" if created else "Updated"
-                        logger.info(
-                            f"{action}: {program_data['name_en']} ({year}) [Group: {program_data.get('program_group_code')}]",
-                        )
-                        
-            except Exception:
-                logger.exception("Failed to process browser HTML for %s", probe_result.url)
-                imported = 0
+            imported = self._process_browser_html(probe_result, univ_slug, year)
         else:
-            # Normal flow: use _crawl_depth to crawl the URL
-            # This happens when:
-            # 1. No html_content provided (traditional crawling)
-            # 2. Page type is INDEX (need to extract detail links)
-            # 3. Page type is AUTO (need to probe and detect)
             imported = await self._crawl_depth(
                 urls=[url],
                 univ_slug=univ_slug,
@@ -668,24 +171,92 @@ class AdmissionScraper:
                 is_index_layer=is_index,
             )
 
-        # --- Scout Report (Human-in-the-loop) ---
         if imported == 0 and self._all_scouted_links:
-            self._print_scout_report(
-                univ_slug=univ_slug,
-                year=year,
-                depth_reached=2 + continue_depth,
-                imported=imported,
+            print_scout_report(
+                univ_slug, year, 2 + continue_depth, imported,
+                self._visited_urls, self._failed_urls, self._all_scouted_links,
             )
 
-        logger.info(
-            "Crawl pipeline complete: %d programs imported for %s",
-            imported, univ_slug,
-        )
+        logger.info("Crawl pipeline complete: %d programs imported for %s", imported, univ_slug)
         return imported
 
-    # ------------------------------------------------------------------
-    # Internal — Depth-Aware Crawl
-    # ------------------------------------------------------------------
+    def _reset_session_state(self) -> None:
+        """Reset session state for a new crawl."""
+        self._visited_urls = set()
+        self._scout_call_count = 0
+        self._all_scouted_links = []
+        self._failed_urls = []
+
+    async def _prepare_probe_result(
+        self, url: str, html_content: Optional[str]
+    ) -> Optional[CrawlPageResult]:
+        """Prepare probe result from browser HTML or by crawling."""
+        if html_content:
+            return self._create_result_from_browser_html(url, html_content)
+        return None
+
+    def _create_result_from_browser_html(self, url: str, html_content: str) -> CrawlPageResult:
+        """Create CrawlPageResult from browser-provided HTML."""
+        logger.info("Using pre-rendered HTML from browser (length: %d bytes)", len(html_content))
+        
+        raw_markdown = html_content
+        try:
+            from crawl4ai.markdown_generation_strategy import DefaultMarkdownGenerator
+            md_generator = DefaultMarkdownGenerator()
+            markdown_obj = md_generator.generate_markdown(input_html=html_content, base_url=url)
+            if markdown_obj and hasattr(markdown_obj, 'raw_markdown'):
+                raw_markdown = markdown_obj.raw_markdown
+                logger.info("Converted browser HTML to markdown: %d chars", len(raw_markdown))
+        except Exception as e:
+            logger.warning("Failed to convert HTML to markdown: %s", e)
+            
+        result = CrawlPageResult(
+            url=url, markdown=raw_markdown, char_count=len(raw_markdown),
+            links=[], status_code=200, html=html_content,
+        )
+        
+        if self._export_md and self._export_path and raw_markdown != html_content:
+            save_markdown(self._export_path, url, raw_markdown)
+            
+        return result
+
+    def _determine_page_type(
+        self, probe_result: Optional[CrawlPageResult], page_type_hint: str
+    ) -> bool:
+        """Determine if page is index (True) or detail (False)."""
+        if page_type_hint == "index":
+            logger.info("Page type manually set to: INDEX")
+            return True
+        if page_type_hint == "detail":
+            logger.info("Page type manually set to: DETAIL")
+            return False
+        
+        if probe_result and probe_result.markdown:
+            page_type = detect_page_type(probe_result.markdown, len(probe_result.links))
+            is_index = (page_type == PageType.INDEX)
+            logger.info("Entry Point detected as: %s", page_type.value.upper())
+            return is_index
+        return False
+
+    def _process_browser_html(
+        self, probe_result: CrawlPageResult, univ_slug: str, year: int
+    ) -> int:
+        """Process browser-provided HTML as a DETAIL page."""
+        logger.info("Processing browser-provided HTML as DETAIL page (skipping URL crawl)")
+        
+        cleaner = LLMCleanerAgent(router=self.router)
+        db_manager = DatabaseManager()
+        
+        success, _ = process_page_for_program(
+            page=probe_result,
+            cleaner=cleaner,
+            db_manager=db_manager,
+            univ_slug=univ_slug,
+            year=year,
+            current_depth=0,
+            from_browser=True,
+        )
+        return 1 if success else 0
 
     async def _crawl_depth(
         self,
@@ -696,228 +267,116 @@ class AdmissionScraper:
         max_continue: int,
         is_index_layer: bool,
     ) -> int:
-        """
-        Recursively crawl and parse pages with depth tracking.
-
-        Args:
-            urls: URLs to crawl at this depth.
-            univ_slug: University slug.
-            year: Academic year.
-            current_depth: Current recursion depth (0 = index page).
-            max_continue: Remaining continue depth budget.
-            is_index_layer: True if this is the index (L1) layer.
-
-        Returns:
-            Total programs imported across this depth and deeper.
-        """
-        pdf_processor = PDFProcessor()
-        cleaner = LLMCleanerAgent(router=self.router)
-        db_manager = DatabaseManager()
-        total_imported = 0
-
-        # Dedup URLs
-        urls_to_crawl = [
-            u for u in urls if u not in self._visited_urls
-        ]
+        """Recursively crawl and parse pages with depth tracking."""
+        urls_to_crawl = [u for u in urls if u not in self._visited_urls]
         if not urls_to_crawl:
             return 0
 
-        # Mark as visited
         for u in urls_to_crawl:
             self._visited_urls.add(u)
 
-        logger.info(
-            "[Depth %d] Crawling %d pages...",
-            current_depth, len(urls_to_crawl),
+        logger.info("[Depth %d] Crawling %d pages...", current_depth, len(urls_to_crawl))
+
+        page_results = await self._crawl_urls(urls_to_crawl)
+
+        if is_index_layer:
+            return await self._handle_index_layer(
+                page_results, univ_slug, year, current_depth, max_continue
+            )
+
+        return await self._handle_detail_layer(
+            page_results, univ_slug, year, current_depth, max_continue
         )
 
-        # --- Crawl pages ---
+    async def _crawl_urls(self, urls: List[str]) -> List[CrawlPageResult]:
+        """Crawl a list of URLs, handling PDFs and errors."""
+        pdf_processor = PDFProcessor()
         page_results: List[CrawlPageResult] = []
-        for link in urls_to_crawl:
+        
+        for link in urls:
             try:
                 if link.lower().endswith(".pdf"):
                     logger.info("Detected PDF link: %s", link)
                     pdf_result = pdf_processor.convert_to_markdown(link)
-                    page_results.append(
-                        CrawlPageResult(
-                            url=link,
-                            markdown=pdf_result.markdown,
-                            char_count=pdf_result.char_count,
-                        )
-                    )
+                    page_results.append(CrawlPageResult(
+                        url=link, markdown=pdf_result.markdown, char_count=pdf_result.char_count,
+                    ))
                 else:
-                    detail = await self.crawl_page(link)
-                    page_results.append(detail)
+                    page_results.append(await self.crawl_page(link))
             except RetryError as exc:
-                cause = _unwrap_retry_error(exc)
-                logger.warning("Skipping %s after retries: %s", link, cause)
+                logger.warning("Skipping %s after retries: %s", link, _unwrap_retry_error(exc))
                 self._failed_urls.append(link)
             except (ScraperError, PDFProcessingError) as e:
                 logger.warning("Skipping %s: %s", link, e)
+        
+        return page_results
 
-        # --- Index layer: extract detail links ---
-        if is_index_layer:
-            all_detail_links: List[str] = []
-            for page in page_results:
-                if not page.markdown:
-                    continue
-                detail_links = self.extract_links(
-                    markdown=page.markdown,
-                    base_url=page.url,
-                )
-                all_detail_links.extend(detail_links)
-
-            if not all_detail_links:
-                logger.info(
-                    "No detail links extracted. "
-                    "Treating starting page as single program page."
-                )
-                # Fall through to parse the index page itself
-            else:
-                # Recurse into detail pages
-                return await self._crawl_depth(
-                    urls=all_detail_links,
-                    univ_slug=univ_slug,
-                    year=year,
-                    current_depth=current_depth + 1,
-                    max_continue=max_continue,
-                    is_index_layer=False,
-                )
-
-        # --- Detail layer: parse each page ---
-        scout_candidates: List[CrawlPageResult] = []
-
+    async def _handle_index_layer(
+        self,
+        page_results: List[CrawlPageResult],
+        univ_slug: str,
+        year: int,
+        current_depth: int,
+        max_continue: int,
+    ) -> int:
+        """Handle index layer: extract detail links and recurse."""
+        all_detail_links: List[str] = []
         for page in page_results:
-            if not page.markdown:
-                continue
+            if page.markdown:
+                all_detail_links.extend(extract_links(page.markdown, page.url))
 
-            try:
-                # Determine content to use for LLM extraction
-                content_for_llm = page.markdown
-                content_type = "markdown"
-                
-                # HTML Fallback: If markdown is suspiciously short but HTML exists and is substantial
-                if page.html and len(page.html) > 1000:
-                    markdown_length = len(page.markdown)
-                    html_length = len(page.html)
-                    # If markdown is less than 5% of HTML length, use HTML instead
-                    if markdown_length < html_length * 0.05:
-                        logger.warning(
-                            "Markdown conversion poor (MD: %d, HTML: %d). Using HTML for LLM extraction.",
-                            markdown_length, html_length
-                        )
-                        content_for_llm = page.html
-                        content_type = "html"
-                
-                parsed: Optional[ParsedProgramData] = cleaner.clean_markdown(
-                    markdown=content_for_llm,
-                    source_url=page.url,
-                )
-                
-                if content_type == "html":
-                    logger.info("Successfully extracted data from HTML fallback for %s", page.url)
-                
-                if parsed is None:
-                    logger.warning(
-                        "No structured data from %s (used %s)", page.url, content_type
-                    )
-                    self._failed_urls.append(page.url)
-                    scout_candidates.append(page)
-                    continue
+        if all_detail_links:
+            return await self._crawl_depth(
+                urls=all_detail_links,
+                univ_slug=univ_slug,
+                year=year,
+                current_depth=current_depth + 1,
+                max_continue=max_continue,
+                is_index_layer=False,
+            )
+        
+        logger.info("No detail links extracted. Treating starting page as single program page.")
+        return await self._handle_detail_layer(
+            page_results, univ_slug, year, current_depth, max_continue
+        )
 
-                # Build program data for DB
-                program_data: Dict[str, object] = {
-                    "academic_year": year,
-                    "name_en": _extract_program_name(page.markdown), # Re-extract to ensure we use what we passed to DB
-                    "name_zh": "",
-                }
+    async def _handle_detail_layer(
+        self,
+        page_results: List[CrawlPageResult],
+        univ_slug: str,
+        year: int,
+        current_depth: int,
+        max_continue: int,
+    ) -> int:
+        """Handle detail layer: parse pages and optionally scout deeper."""
+        total_imported, scout_candidates, failed_urls = process_pages_batch(
+            pages=page_results,
+            router=self.router,
+            univ_slug=univ_slug,
+            year=year,
+            current_depth=current_depth,
+        )
+        self._failed_urls.extend(failed_urls)
 
-                if parsed.faculty:
-                    program_data["faculty"] = parsed.faculty
-
-                if parsed.tuition:
-                    program_data["tuition_amount"] = parsed.tuition.amount
-                    program_data["currency"] = parsed.tuition.currency
-
-                if parsed.study_options:
-                    program_data["study_options"] = [
-                        opt.model_dump(mode="json")
-                        for opt in parsed.study_options
-                    ]
-
-                if parsed.deadlines:
-                    # Sort by date
-                    sorted_deadlines = sorted(
-                        parsed.deadlines,
-                        key=lambda x: x.cutoff_date or datetime.max,
-                    )
-                    program_data["deadlines"] = []
-                    for i, d in enumerate(sorted_deadlines, 1):
-                        d_dict = d.model_dump(mode="json")
-                        d_dict["round"] = i
-                        program_data["deadlines"].append(d_dict)
-
-                # --- Deterministic program_group_code (local) ---
-                name_en = program_data.get("name_en")
-                if name_en:
-                    code = generate_program_group_code(univ_slug, str(name_en))
-                    program_data["program_group_code"] = code
-                    logger.info(
-                        "[New Program] 检测到新学科: %s，已分配 ID: %s",
-                        name_en, code,
-                    )
-
-                extra_metadata: Dict[str, object] = {
-                    "source_url": page.url,
-                    "crawl_depth": current_depth,
-                }
-                program_data["extra_metadata"] = extra_metadata
-
-                name_en = program_data.get("name_en")
-                if not name_en:
-                    logger.warning(
-                        "Could not extract program name from %s",
-                        page.url,
-                    )
-                    self._failed_urls.append(page.url)
-                    scout_candidates.append(page)
-                    continue
-
-                _, created = db_manager.upsert_program(
-                    program_data,  # type: ignore[arg-type]
-                    univ_slug,
-                )
-                total_imported += 1
-                action = "Inserted" if created else "Updated"
-                logger.info(
-                    f"{action}: {program_data['name_en']} ({year}) [Group: {program_data.get('program_group_code')}]",
-                )
-
-            except Exception:
-                logger.exception("Failed to process %s", page.url)
-                self._failed_urls.append(page.url)
-                scout_candidates.append(page)
-
-        # --- Heuristic Scout: deeper exploration ---
         if max_continue > 0 and scout_candidates:
-            deeper_urls = self._run_scout(scout_candidates)
+            deeper_urls, self._scout_call_count, self._all_scouted_links = run_scout(
+                router=self.router,
+                candidates=scout_candidates,
+                visited_urls=self._visited_urls,
+                scout_call_count=self._scout_call_count,
+                all_scouted_links=self._all_scouted_links,
+            )
+            
             if deeper_urls:
-                # Detect if scouted pages are index or detail
                 first_candidate = scout_candidates[0]
-                detected_type = self.detect_page_type(
-                    markdown=first_candidate.markdown,
-                    link_count=len(first_candidate.links),
-                )
+                detected_type = detect_page_type(first_candidate.markdown, len(first_candidate.links))
                 is_deeper_index = (detected_type == PageType.INDEX)
-
+                
                 logger.info(
-                    "[Scout] Diving deeper with %d links as %s layer "
-                    "(continue budget: %d → %d)",
-                    len(deeper_urls),
-                    "INDEX" if is_deeper_index else "DETAIL",
-                    max_continue, max_continue - 1,
+                    "[Scout] Diving deeper with %d links (continue: %d → %d)",
+                    len(deeper_urls), max_continue, max_continue - 1,
                 )
-                deeper_imported = await self._crawl_depth(
+                total_imported += await self._crawl_depth(
                     urls=deeper_urls,
                     univ_slug=univ_slug,
                     year=year,
@@ -925,154 +384,5 @@ class AdmissionScraper:
                     max_continue=max_continue - 1,
                     is_index_layer=is_deeper_index,
                 )
-                total_imported += deeper_imported
 
         return total_imported
-
-    def _run_scout(
-        self, candidates: List[CrawlPageResult],
-    ) -> List[str]:
-        """Run Heuristic Scout on failed pages and collect deeper URLs."""
-        deeper_urls: List[str] = []
-
-        for page in candidates:
-            if self._scout_call_count >= MAX_SCOUT_CALLS:
-                break
-
-            scouted = self.scout_links(
-                markdown=page.markdown,
-                links=page.links,
-                base_url=page.url,
-            )
-
-            self._all_scouted_links.extend(scouted)
-
-            for sl in scouted:
-                if sl.url not in self._visited_urls:
-                    deeper_urls.append(sl.url)
-
-        return deeper_urls
-
-    def _print_scout_report(
-        self,
-        univ_slug: str,
-        year: int,
-        depth_reached: int,
-        imported: int,
-    ) -> None:
-        """Print a terminal Scout Report for human review."""
-        report = ScoutReport(
-            explored_urls=sorted(self._visited_urls),
-            failed_urls=self._failed_urls,
-            scouted_links=self._all_scouted_links,
-            depth_reached=depth_reached,
-            programs_imported=imported,
-        )
-
-        separator = "=" * 60
-        print(f"\n{separator}")
-        print("📋 SCOUT REPORT — Human Decision Required")
-        print(separator)
-        print(f"University:       {univ_slug}")
-        print(f"Year:             {year}")
-        print(f"Depth Reached:    {report.depth_reached}")
-        print(f"Programs Found:   {report.programs_imported}")
-        print(f"Pages Explored:   {len(report.explored_urls)}")
-        print(f"Pages Failed:     {len(report.failed_urls)}")
-
-        if report.scouted_links:
-            unexplored = [
-                sl for sl in report.scouted_links
-                if sl.url not in self._visited_urls
-            ]
-            if unexplored:
-                print(f"\n🔍 Unexplored High-Potential Links ({len(unexplored)}):")
-                for i, sl in enumerate(unexplored, 1):
-                    print(f"  {i}. [{sl.confidence.upper()}] {sl.url}")
-                    print(f"     Reason: {sl.reason}")
-            else:
-                print("\n✅ All scouted links were explored.")
-        else:
-            print("\n⚠️  No high-potential links were identified by scout.")
-
-        if report.failed_urls:
-            print(f"\n❌ Failed Pages ({len(report.failed_urls)}):")
-            for url in report.failed_urls:
-                print(f"  - {url}")
-
-        print(separator)
-        print(
-            "💡 Tip: Try running with a deeper --continue value, "
-            "or manually visit the links above."
-        )
-        print(f"{separator}\n")
-
-
-# --- Helpers ---
-
-
-def _split_markdown_chunks(
-    markdown: str, max_chars: int,
-) -> List[str]:
-    """Split Markdown into chunks that fit within the LLM context window.
-
-    Splits on double-newline (paragraph) boundaries to avoid cutting
-    mid-link or mid-sentence. Falls back to hard split if no paragraph
-    break is found within the chunk.
-
-    Args:
-        markdown: Full Markdown content.
-        max_chars: Maximum characters per chunk.
-
-    Returns:
-        List of Markdown chunks, each ≤ max_chars.
-    """
-    if len(markdown) <= max_chars:
-        return [markdown]
-
-    chunks: List[str] = []
-    remaining = markdown
-
-    while remaining:
-        if len(remaining) <= max_chars:
-            chunks.append(remaining)
-            break
-
-        # Find a paragraph break near the end of the chunk
-        slice_end = remaining[:max_chars]
-        split_pos = slice_end.rfind("\n\n")
-
-        if split_pos < max_chars // 2:
-            # No good paragraph break found — try single newline
-            split_pos = slice_end.rfind("\n")
-
-        if split_pos < max_chars // 2:
-            # No newline at all — hard split
-            split_pos = max_chars
-
-        chunks.append(remaining[:split_pos])
-        remaining = remaining[split_pos:].lstrip("\n")
-
-    logger.info(
-        "Split %s chars into %d chunks",
-        f"{len(markdown):,}", len(chunks),
-    )
-    return chunks
-
-
-
-
-
-def _extract_program_name(markdown: str) -> str:
-    """
-    Best-effort extraction of program name from Markdown.
-
-    Looks for the first H1 or H2 heading as a heuristic.
-    """
-    for line in markdown.split("\n"):
-        stripped = line.strip()
-        if stripped.startswith("# "):
-            return stripped.lstrip("# ").strip()
-        if stripped.startswith("## "):
-            return stripped.lstrip("# ").strip()
-    return ""
