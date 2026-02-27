@@ -18,12 +18,18 @@
   padding: 0;
 }
 
+html,
+body {
+  height: 100%;
+  overflow: hidden;
+}
+
 body {
   font-family: "Inter", "Segoe UI", system-ui, -apple-system, sans-serif;
   background: var(--bg);
   color: var(--text);
   min-width: 360px;
-  /* No fixed min-height — let Chrome auto-size the popup to content */
+  /* Side panel: fill available height */
 }
 
 /* Layout */
@@ -33,6 +39,7 @@ body {
   flex-direction: column;
   gap: 16px;
   height: 100%;
+  overflow-y: auto;
 }
 
 header {
@@ -563,4 +570,332 @@ button:disabled {
   margin: 0 !important;
   border: none !important;
   opacity: 0;
+}
+
+/* Link Selection Section */
+.link-selection-header h3 {
+  font-size: 15px;
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+
+.link-selection-subtext {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-bottom: 10px;
+  line-height: 1.4;
+}
+
+.link-actions-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 10px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.select-all-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text);
+  cursor: pointer;
+  text-transform: none;
+  letter-spacing: normal;
+}
+
+.select-all-label input[type="checkbox"] {
+  width: auto;
+  cursor: pointer;
+}
+
+.link-count-badge {
+  font-size: 11px;
+  color: var(--accent);
+  background: rgba(108, 99, 255, 0.12);
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-weight: 600;
+}
+
+.link-list {
+  list-style: none;
+  padding: 0;
+  margin: 0 0 12px;
+  max-height: 400px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.link-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 8px 10px;
+  background: var(--surface);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 8px;
+  transition: border-color 0.15s, background 0.15s;
+  cursor: pointer;
+}
+
+.link-item:hover {
+  border-color: rgba(108, 99, 255, 0.3);
+  background: rgba(108, 99, 255, 0.06);
+}
+
+.link-item.selected {
+  border-color: rgba(108, 99, 255, 0.4);
+  background: rgba(108, 99, 255, 0.08);
+}
+
+.link-item input[type="checkbox"] {
+  width: auto;
+  margin-top: 2px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.link-item-content {
+  flex: 1;
+  min-width: 0;
+}
+
+.link-item-text {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text);
+  line-height: 1.3;
+  word-break: break-word;
+}
+
+.link-item-url {
+  font-size: 11px;
+  color: var(--text-muted);
+  word-break: break-all;
+  line-height: 1.3;
+  margin-top: 2px;
+}
+
+.link-actions-bottom {
+  display: flex;
+  gap: 8px;
+}
+
+.link-actions-bottom .primary-btn {
+  flex: 1;
+}
+
+.secondary-btn {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-muted);
+  padding: 12px 16px;
+  font-size: 13px;
+  font-weight: 600;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.secondary-btn:hover {
+  background: rgba(255, 255, 255, 0.12);
+  color: var(--text);
+}
+
+/* Preview Modal */
+.preview-filters {
+  padding: 12px 20px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  background: var(--surface);
+  flex-shrink: 0;
+}
+
+.preview-filter-row {
+  display: flex;
+  gap: 10px;
+  align-items: flex-end;
+}
+
+.preview-field {
+  flex: 1;
+  min-width: 150px;
+  margin-bottom: 0;
+}
+
+.preview-field input {
+  min-width: 120px;
+}
+
+.preview-search-btn {
+  padding: 10px 16px !important;
+  white-space: nowrap;
+  flex-shrink: 0;
+  width: auto !important;
+  height: 41px;
+  min-width: 80px;
+}
+
+.preview-summary {
+  display: flex;
+  align-items: center;
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.preview-count-badge {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent);
+  background: rgba(108, 99, 255, 0.12);
+  padding: 3px 10px;
+  border-radius: 10px;
+}
+
+.preview-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.preview-empty {
+  text-align: center;
+  color: var(--text-muted);
+  padding: 40px 20px;
+  font-size: 13px;
+}
+
+/* Program Card */
+.program-card {
+  background: var(--surface);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: var(--radius);
+  padding: 12px 14px;
+  transition: border-color 0.15s;
+}
+
+.program-card:hover {
+  border-color: rgba(108, 99, 255, 0.25);
+}
+
+.program-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.program-card-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+  line-height: 1.35;
+  word-break: break-word;
+  flex: 1;
+}
+
+.program-card-id {
+  font-size: 10px;
+  color: var(--text-muted);
+  background: rgba(255, 255, 255, 0.06);
+  padding: 2px 6px;
+  border-radius: 6px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.program-card-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.program-tag {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.program-tag.faculty {
+  background: rgba(108, 99, 255, 0.10);
+  color: var(--accent);
+}
+
+.program-tag.tuition {
+  background: rgba(74, 222, 128, 0.10);
+  color: var(--success);
+}
+
+.program-tag.mode {
+  background: rgba(251, 191, 36, 0.10);
+  color: #fbbf24;
+}
+
+.program-card-deadlines {
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid rgba(255, 255, 255, 0.04);
+}
+
+.program-card-deadlines summary {
+  font-size: 11px;
+  color: var(--text-muted);
+  cursor: pointer;
+  user-select: none;
+}
+
+.program-card-deadlines summary:hover {
+  color: var(--text);
+}
+
+.deadline-list {
+  list-style: none;
+  padding: 4px 0 0 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.deadline-item {
+  font-size: 11px;
+  color: var(--text-muted);
+  display: flex;
+  gap: 6px;
+}
+
+.deadline-item .dl-round {
+  color: var(--accent);
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+.deadline-item .dl-date {
+  color: var(--text);
+}
+
+.program-card-url {
+  display: block;
+  margin-top: 6px;
+  font-size: 10px;
+  color: var(--text-muted);
+  text-decoration: none;
+  word-break: break-all;
+  opacity: 0.7;
+  transition: opacity 0.15s;
+}
+
+.program-card-url:hover {
+  opacity: 1;
+  color: var(--accent);
 }

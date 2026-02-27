@@ -104,16 +104,87 @@ def split_markdown_chunks(
     return chunks
 
 
-def extract_program_name(markdown: str) -> str:
-    """
-    Best-effort extraction of program name from Markdown.
+# --- Program Name Extraction ---
 
-    Looks for the first H1 or H2 heading as a heuristic.
+# Degree-type keywords that strongly indicate a program heading
+_DEGREE_KEYWORDS_RE = re.compile(
+    r"\b(?:MSc|MA|MBA|MPhil|MEng|MRes|MFA|MLitt|MChem|MComp|MMath"
+    r"|BSc|BA|BEng|BBA|LLB|LLM|PhD|DPhil|EdD|DBA|PGDip|PGCert"
+    r"|Master|Bachelor|Doctor|Diploma|Certificate"
+    r"|Masters|Postgraduate|Undergraduate)\b",
+    re.IGNORECASE,
+)
+
+# Headings that are obviously NOT program names (boilerplate / navigation)
+_NOISE_HEADING_RE = re.compile(
+    r"(?:cookie|privacy|navigation|menu|search|skip to|accept|"
+    r"your .* options|tell us|changes to our|"
+    r"related content|course terms|how to apply|"
+    r"footer|header|breadcrumb|sidebar)",
+    re.IGNORECASE,
+)
+
+
+def _parse_heading(line: str) -> tuple[int, str]:
+    """Return (level, text) for a Markdown heading line, or (0, '')."""
+    stripped = line.strip()
+    if not stripped.startswith("#"):
+        return 0, ""
+    # Count the heading level
+    level = 0
+    for char in stripped:
+        if char == "#":
+            level += 1
+        else:
+            break
+    # Must have a space after the '#' characters (standard Markdown)
+    if 0 < level < len(stripped) and stripped[level] == " ":
+        text = stripped[level:].strip()
+        return level, text
+    return 0, ""
+
+
+def extract_program_name(markdown: str) -> str:
+    """Extract the most likely program / course name from Markdown.
+
+    Uses a multi-pass strategy:
+
+    1. **Degree-keyword match** — scan all H1-H3 headings for degree
+       keywords (MSc, BA, PhD …). Return the first match.
+    2. **First clean H1** — if no keyword match, return the first H1
+       that is not obvious boilerplate (cookie / privacy banners).
+    3. **First clean H2** — same logic for H2.
+    4. **Fallback** — return the first heading of any level, or ``""``.
     """
+    headings: list[tuple[int, str]] = []
     for line in markdown.split("\n"):
-        stripped = line.strip()
-        if stripped.startswith("# "):
-            return stripped.lstrip("# ").strip()
-        if stripped.startswith("## "):
-            return stripped.lstrip("# ").strip()
-    return ""
+        level, text = _parse_heading(line)
+        if level > 0 and text:
+            headings.append((level, text))
+
+    if not headings:
+        return ""
+
+    # Pass 1: heading with a degree keyword (strongest signal)
+    for level, text in headings:
+        if level <= 3 and _DEGREE_KEYWORDS_RE.search(text):
+            if not _NOISE_HEADING_RE.search(text):
+                return text
+
+    # Pass 2: first non-noise H1
+    for level, text in headings:
+        if level == 1 and not _NOISE_HEADING_RE.search(text):
+            return text
+
+    # Pass 3: first non-noise H2
+    for level, text in headings:
+        if level == 2 and not _NOISE_HEADING_RE.search(text):
+            return text
+
+    # Pass 4: absolute fallback — first heading that isn't noise
+    for _level, text in headings:
+        if not _NOISE_HEADING_RE.search(text):
+            return text
+
+    # Everything was noise — return first heading anyway
+    return headings[0][1]

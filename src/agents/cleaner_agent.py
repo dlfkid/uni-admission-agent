@@ -10,7 +10,7 @@ from typing import Dict, List, Optional, Any
 
 from datetime import datetime
 from decimal import Decimal
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from src.agents.factory import RouterAgent, create_router
 from src.core.paths import get_prompts_dir
@@ -55,6 +55,12 @@ class ParsedProgramData(BaseModel):
     tuition: Optional[ParsedTuition] = Field(default=None, description="Tuition fee structure")
     study_options: List[ParsedStudyOption] = Field(default_factory=list, description="List of study options")
     deadlines: List[ParsedDeadline] = Field(default_factory=list, description="List of application deadlines")
+
+    @field_validator("study_options", "deadlines", mode="before")
+    @classmethod
+    def _none_to_list(cls, v: object) -> object:
+        """LLMs sometimes return ``null`` for list fields; coerce to ``[]``."""
+        return v if v is not None else []
 
 
 class ParsedProgramBatch(BaseModel):

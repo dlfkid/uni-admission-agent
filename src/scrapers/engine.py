@@ -20,7 +20,11 @@ from src.agents.factory import RouterAgent, create_router
 from src.core.environment import ScraperError
 from src.models.scraper_models import CrawlPageResult, PageType
 from src.scrapers.helpers import extract_program_name, save_markdown, save_html_debug
-from src.scrapers.link_parser import extract_links, detect_page_type
+from src.scrapers.link_parser import (
+    extract_links_with_text,
+    filter_links_by_llm,
+    detect_page_type,
+)
 from src.scrapers.page_processor import process_page_for_program, process_pages_batch
 from src.scrapers.scout import run_scout, print_scout_report
 from src.storage.db_manager import DatabaseManager
@@ -53,10 +57,36 @@ class AdmissionScraper:
             verbose=False,
         )
 
+        # JS snippet to auto-dismiss cookie-consent overlays
+        # before they can redirect the browser away from the target page.
+        _dismiss_cookie_js = """
+        (function() {
+            const sels = [
+                'button[id*="cookie" i]', 'button[class*="cookie" i]',
+                'a[id*="cookie" i]',     'a[class*="cookie" i]',
+                'button[id*="consent" i]','button[class*="consent" i]',
+                'button[id*="accept" i]', 'button[class*="accept" i]',
+                '[data-cookiebanner] button',
+                '.cookie-banner button', '#cookie-banner button',
+            ];
+            for (const sel of sels) {
+                for (const el of document.querySelectorAll(sel)) {
+                    const txt = (el.textContent || '').toLowerCase();
+                    if (/accept|agree|ok|got it|i.m ok/i.test(txt)) {
+                        el.click(); return;
+                    }
+                }
+            }
+        })();
+        """
+
         self.crawler_config = CrawlerRunConfig(
             cache_mode=CacheMode.BYPASS,
-            simulate_user=True,
+            simulate_user=False,
+            remove_overlay_elements=True,
             wait_until="domcontentloaded",
+            delay_before_return_html=2.0,
+            js_code=_dismiss_cookie_js,
             page_timeout=60000,
             verbose=False,
         )
@@ -159,8 +189,11 @@ class AdmissionScraper:
         is_index = self._determine_page_type(probe_result, page_type_hint)
 
         # Browser HTML + DETAIL page: process directly
+        # Use asyncio.to_thread to avoid blocking the event loop during LLM calls
         if html_content and probe_result and not is_index:
-            imported = self._process_browser_html(probe_result, univ_slug, year)
+            imported = await asyncio.to_thread(
+                self._process_browser_html, probe_result, univ_slug, year
+            )
         else:
             imported = await self._crawl_depth(
                 urls=[url],
@@ -179,6 +212,69 @@ class AdmissionScraper:
 
         logger.info("Crawl pipeline complete: %d programs imported for %s", imported, univ_slug)
         return imported
+
+    def analyze_page_links(
+        self, url: str, html_content: str, page_type_hint: str = "auto",
+    ) -> Dict:
+        """Analyze an index page and return candidate detail-page links.
+
+        Returns a dict with ``page_type`` (``'index'`` | ``'detail'``) and
+        a ``links`` list of ``{url, text}`` dicts.  ``total_found`` gives the
+        count of links before LLM filtering.
+        """
+        probe = self._create_result_from_browser_html(url, html_content)
+        is_index = self._determine_page_type(probe, page_type_hint)
+
+        if not is_index:
+            return {"page_type": "detail", "links": [], "total_found": 0}
+
+        link_pairs = extract_links_with_text(probe.markdown, url)
+        total_found = len(link_pairs)
+
+        if not link_pairs:
+            return {"page_type": "index", "links": [], "total_found": 0}
+
+        filtered_urls = filter_links_by_llm(self.router, link_pairs, url)
+
+        url_to_text: Dict[str, str] = {u: t for u, t in link_pairs}
+        links = [
+            {"url": u, "text": url_to_text.get(u, "")}
+            for u in filtered_urls
+        ]
+        return {"page_type": "index", "links": links, "total_found": total_found}
+
+    async def crawl_selected_urls(
+        self,
+        urls: List[str],
+        univ_slug: str,
+        year: int,
+        export_md: bool = False,
+        export_path: Optional[str] = None,
+    ) -> int:
+        """Crawl a user-curated list of URLs as detail pages.
+
+        Each page is parsed and inserted into the database immediately.
+        """
+        self._reset_session_state()
+        self._export_md = export_md
+        self._export_path = export_path
+
+        if export_md and export_path:
+            Path(export_path).mkdir(parents=True, exist_ok=True)
+            logger.info("Markdown export enabled: %s", export_path)
+
+        logger.info(
+            "Crawling %d user-selected detail URLs for %s/%d",
+            len(urls), univ_slug, year,
+        )
+        return await self._crawl_depth(
+            urls=urls,
+            univ_slug=univ_slug,
+            year=year,
+            current_depth=0,
+            max_continue=0,
+            is_index_layer=False,
+        )
 
     def _reset_session_state(self) -> None:
         """Reset session state for a new crawl."""
@@ -319,25 +415,51 @@ class AdmissionScraper:
         current_depth: int,
         max_continue: int,
     ) -> int:
-        """Handle index layer: extract detail links and recurse."""
-        all_detail_links: List[str] = []
+        """Handle index layer: extract links, filter via LLM, then recurse."""
+        all_link_pairs: list[tuple[str, str]] = []
         for page in page_results:
             if page.markdown:
-                all_detail_links.extend(extract_links(page.markdown, page.url))
+                all_link_pairs.extend(
+                    extract_links_with_text(page.markdown, page.url),
+                )
 
-        if all_detail_links:
-            return await self._crawl_depth(
-                urls=all_detail_links,
-                univ_slug=univ_slug,
-                year=year,
-                current_depth=current_depth + 1,
-                max_continue=max_continue,
-                is_index_layer=False,
+        if not all_link_pairs:
+            logger.info("No links extracted from index. Treating as single program page.")
+            return await self._handle_detail_layer(
+                page_results, univ_slug, year, current_depth, max_continue,
             )
-        
-        logger.info("No detail links extracted. Treating starting page as single program page.")
-        return await self._handle_detail_layer(
-            page_results, univ_slug, year, current_depth, max_continue
+
+        # Ask the LLM which links are likely course detail pages
+        # Use asyncio.to_thread to avoid blocking the event loop during LLM calls
+        base_url = page_results[0].url if page_results else ""
+        detail_links = await asyncio.to_thread(
+            filter_links_by_llm,
+            self.router,
+            all_link_pairs,
+            base_url,
+        )
+
+        if not detail_links:
+            # Fallback: if LLM returned nothing, use all regex-extracted links
+            logger.warning(
+                "LLM filter returned 0 links. "
+                "Falling back to all %d regex-extracted links.",
+                len(all_link_pairs),
+            )
+            detail_links = [u for u, _ in all_link_pairs]
+
+        logger.info(
+            "[Index] LLM selected %d/%d links as course detail pages",
+            len(detail_links), len(all_link_pairs),
+        )
+
+        return await self._crawl_depth(
+            urls=detail_links,
+            univ_slug=univ_slug,
+            year=year,
+            current_depth=current_depth + 1,
+            max_continue=max_continue,
+            is_index_layer=False,
         )
 
     async def _handle_detail_layer(
@@ -349,22 +471,26 @@ class AdmissionScraper:
         max_continue: int,
     ) -> int:
         """Handle detail layer: parse pages and optionally scout deeper."""
-        total_imported, scout_candidates, failed_urls = process_pages_batch(
-            pages=page_results,
-            router=self.router,
-            univ_slug=univ_slug,
-            year=year,
-            current_depth=current_depth,
+        # Use asyncio.to_thread to avoid blocking the event loop during LLM calls
+        total_imported, scout_candidates, failed_urls = await asyncio.to_thread(
+            process_pages_batch,
+            page_results,
+            self.router,
+            univ_slug,
+            year,
+            current_depth,
         )
         self._failed_urls.extend(failed_urls)
 
         if max_continue > 0 and scout_candidates:
-            deeper_urls, self._scout_call_count, self._all_scouted_links = run_scout(
-                router=self.router,
-                candidates=scout_candidates,
-                visited_urls=self._visited_urls,
-                scout_call_count=self._scout_call_count,
-                all_scouted_links=self._all_scouted_links,
+            # Use asyncio.to_thread to avoid blocking the event loop during LLM calls
+            deeper_urls, self._scout_call_count, self._all_scouted_links = await asyncio.to_thread(
+                run_scout,
+                self.router,
+                scout_candidates,
+                self._visited_urls,
+                self._scout_call_count,
+                self._all_scouted_links,
             )
             
             if deeper_urls:

@@ -3,16 +3,22 @@ Link parser module for URL extraction and page type detection.
 
 Contains functionality for extracting links from markdown content
 and determining whether a page is an index or detail page.
+Includes LLM-powered link filtering for index pages.
 """
 
 import logging
 import re
-from typing import List
+from typing import List, Tuple
 from urllib.parse import urljoin
 
-from src.models.scraper_models import PageType
+from src.agents.factory import RouterAgent
+from src.models.scraper_models import FilteredLinks, PageType
+from src.scrapers.helpers import load_prompt
 
 logger = logging.getLogger(__name__)
+
+# Maximum number of link items to send to the LLM in one call
+_MAX_LINKS_FOR_LLM = 80
 
 
 def extract_links(markdown: str, base_url: str) -> List[str]:
@@ -79,6 +85,130 @@ def extract_links(markdown: str, base_url: str) -> List[str]:
 
     logger.info("Extracted %d unique links via Regex", len(resolved_links))
     return resolved_links
+
+
+def extract_links_with_text(
+    markdown: str, base_url: str,
+) -> List[Tuple[str, str]]:
+    """Extract links together with their anchor (display) text.
+
+    Returns a deduplicated list of ``(absolute_url, anchor_text)`` tuples,
+    applying the same basic filters as :func:`extract_links`.
+    """
+    md_link_pattern = re.compile(r"\[([^\]]*?)\]\(([^)]+?)\)")
+
+    seen: set[str] = set()
+    pairs: List[Tuple[str, str]] = []
+
+    skip_extensions = (
+        ".css", ".js", ".png", ".jpg", ".jpeg",
+        ".ico", ".svg", ".woff", ".ttf",
+    )
+
+    for text, href in md_link_pattern.findall(markdown):
+        href = href.split(" ")[0].strip()
+        if not href or href.startswith("#") or href.startswith("mailto:"):
+            continue
+
+        try:
+            absolute = urljoin(base_url, href)
+        except Exception:  # pylint: disable=broad-except
+            continue
+
+        lower = absolute.lower()
+        if any(ext in lower for ext in skip_extensions):
+            continue
+        if "login" in lower or "signin" in lower or "admin" in lower:
+            continue
+        if absolute.rstrip("/") == base_url.rstrip("/"):
+            continue
+
+        if absolute not in seen:
+            seen.add(absolute)
+            pairs.append((absolute, text.strip()))
+
+    logger.info(
+        "Extracted %d links with anchor text from %s",
+        len(pairs), base_url,
+    )
+    return pairs
+
+
+def filter_links_by_llm(
+    router: RouterAgent,
+    link_pairs: List[Tuple[str, str]],
+    base_url: str,
+) -> List[str]:
+    """Use the LLM to identify which links are likely course detail pages.
+
+    Sends the anchor text + URL list to the LLM in a single call.
+    Returns only the URLs that the LLM considers course-related.
+
+    Args:
+        router: LLM router agent.
+        link_pairs: ``(url, anchor_text)`` tuples from
+            :func:`extract_links_with_text`.
+        base_url: The index page URL (for context).
+
+    Returns:
+        Filtered list of absolute URLs that are likely course pages.
+    """
+    if not link_pairs:
+        return []
+
+    # Truncate if too many links
+    truncated = link_pairs[:_MAX_LINKS_FOR_LLM]
+    if len(link_pairs) > _MAX_LINKS_FOR_LLM:
+        logger.warning(
+            "Truncated link list from %d to %d for LLM filtering",
+            len(link_pairs), _MAX_LINKS_FOR_LLM,
+        )
+
+    # Build numbered link list for prompt
+    lines: List[str] = []
+    for idx, (url, text) in enumerate(truncated, 1):
+        display = text if text else "(no text)"
+        lines.append(f"{idx}. [{display}]({url})")
+    link_list_text = "\n".join(lines)
+
+    prompt_template = load_prompt("filter_index_links.txt")
+    prompt = prompt_template.format(
+        base_url=base_url,
+        link_count=len(truncated),
+        link_list=link_list_text,
+    )
+
+    logger.info(
+        "[LLM Filter] Asking LLM to evaluate %d links from %s",
+        len(truncated), base_url,
+    )
+
+    try:
+        response = router.generate(prompt, FilteredLinks)
+
+        if not response.text:
+            logger.warning("LLM returned empty response for link filtering")
+            return [u for u, _ in truncated]
+
+        result = FilteredLinks.model_validate_json(response.text)
+
+        # Build url set from original pairs for validation
+        valid_urls = {u for u, _ in truncated}
+        filtered = [u for u in result.urls if u in valid_urls]
+
+        logger.info(
+            "[LLM Filter] Selected %d/%d links as course detail pages",
+            len(filtered), len(truncated),
+        )
+        return filtered
+
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.error(
+            "LLM link filtering failed (%s). "
+            "Falling back to all %d links.",
+            exc, len(truncated),
+        )
+        return [u for u, _ in truncated]
 
 
 def detect_page_type(markdown: str, link_count: int) -> PageType:

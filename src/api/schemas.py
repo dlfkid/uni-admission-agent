@@ -41,6 +41,21 @@ class CrawlRequest(BaseModel):
         default=None,
         description="Pre-rendered HTML content from browser (bypasses crawling)",
     )
+    selected_urls: Optional[List[str]] = Field(
+        default=None,
+        description="User-selected URLs to crawl (from index page analysis)",
+    )
+
+
+class AnalyzeRequest(BaseModel):
+    """Body for ``POST /analyze``."""
+
+    url: str = Field(description="Page URL to analyze")
+    html_content: str = Field(description="Pre-rendered HTML content from browser")
+    page_type_hint: str = Field(
+        default="auto",
+        description="Page type hint: 'auto', 'index', or 'detail'",
+    )
 
 
 class QueryRequest(BaseModel):
@@ -77,6 +92,27 @@ class StructuredConfig(BaseModel):
 # ---------------------------------------------------------------------------
 #  Responses
 # ---------------------------------------------------------------------------
+
+
+class LinkCandidate(BaseModel):
+    """A candidate link found on an index page."""
+
+    url: str = Field(description="Absolute URL")
+    text: str = Field(description="Anchor / display text")
+
+
+class AnalyzeResponse(BaseModel):
+    """Response for ``POST /analyze``."""
+
+    page_type: str = Field(description="'index' or 'detail'")
+    links: List[LinkCandidate] = Field(
+        default_factory=list,
+        description="Candidate course detail links (only for index pages)",
+    )
+    total_found: int = Field(
+        default=0,
+        description="Total links found before LLM filtering",
+    )
 
 
 class CrawlResponse(BaseModel):
@@ -136,6 +172,9 @@ class ProgramResponse(BaseModel):
     program_group_code: Optional[str] = None
     tuition_amount: Optional[float] = None
     currency: Optional[str] = None
+    study_options: list = []
+    deadlines: list = []
+    source_url: Optional[str] = None
 
 
 class ConfigResponse(BaseModel):

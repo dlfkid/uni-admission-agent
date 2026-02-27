@@ -38,10 +38,14 @@ from src.api.schemas import (
     StructuredConfig,
     UniversityResponse,
     ExportRequest,
+    AnalyzeRequest,
+    AnalyzeResponse,
+    LinkCandidate,
 )
 from src.api.task_manager import TaskManager, TaskState
 from src.services.crawler import (
     CrawlResult,
+    analyze_page,
     crawl_url,
     get_db_status,
     query_programs,
@@ -227,6 +231,24 @@ task_manager = TaskManager()
 # ---------------------------------------------------------------------------
 
 
+@app.post("/analyze", response_model=AnalyzeResponse)
+async def api_analyze(body: AnalyzeRequest) -> AnalyzeResponse:
+    """Analyze a page to determine its type and extract candidate links.
+
+    For **index** pages the response contains an LLM-filtered list of
+    likely course-detail links so the client can present a selection UI.
+    For **detail** pages the ``links`` list is empty.
+    """
+    result = await asyncio.to_thread(
+        analyze_page, body.url, body.html_content, body.page_type_hint,
+    )
+    return AnalyzeResponse(
+        page_type=result["page_type"],
+        links=[LinkCandidate(**lk) for lk in result["links"]],
+        total_found=result.get("total_found", 0),
+    )
+
+
 @app.post("/crawl", response_model=CrawlResponse)
 async def api_crawl(body: CrawlRequest) -> CrawlResponse:
     """Submit a crawl job.
@@ -236,7 +258,7 @@ async def api_crawl(body: CrawlRequest) -> CrawlResponse:
     Enforces singleton execution (only one crawl at a time).
     """
     try:
-        task_id = task_manager.create_task(params=body.model_dump())
+        task_id = task_manager.create_task(params=body.model_dump(exclude={"html_content"}))
     except RuntimeError as e:
         # Task already running
         raise HTTPException(status_code=409, detail=str(e))
@@ -298,6 +320,7 @@ async def api_crawl(body: CrawlRequest) -> CrawlResponse:
                     export_md=body.export_md,
                     export_path=body.export_path,
                     html_content=body.html_content,
+                    selected_urls=body.selected_urls,
                 )
             finally:
                 stop_event.set()

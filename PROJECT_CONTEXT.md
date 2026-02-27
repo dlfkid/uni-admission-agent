@@ -10,7 +10,9 @@ Build a trusted, self-updating database of university admission requirements.
 - Rolling window sequential chunking for context preservation on large pages
 - Multi-provider LLM routing (Google Gemini, DeepSeek, OpenAI, VolcEngine)
 - Stealth browsing with anti-detection mechanisms
-- **Chrome Extension** for interactive control and monitoring
+- **Cookie consent auto-dismissal** with JS injection to prevent navigation hijacking
+- **Resilient Pydantic validation** with field validators for LLM response edge cases
+- **Chrome Extension** with interactive control, real-time monitoring, and database preview
 - **Stand-alone Executable** build for easy distribution
 
 ---
@@ -55,10 +57,13 @@ L3+: Scout-recommended pages
 The system exposes a REST API and MCP server for external control.
 -   **Server**: `src/api/server.py` (FastAPI)
 -   **Protocol**: HTTP + SSE (Server-Sent Events) for real-time logs
--   **Extension**: React/Vite-based UI in `extension/` directory.
+-   **Extension**: Vite/TypeScript-based UI in `extension/` directory.
     -   Connects to `http://localhost:8910`
     -   Displays real-time logs and token usage
     -   Manages crawler configuration
+    -   **Database Preview**: Browse stored programs with filtering by university/year
+    -   **Two-phase crawl**: Analyze index pages → select links → crawl detail pages
+    -   **Export to Excel**: Download program data via REST API
 
 ### 3.3 Data Flow
 
@@ -161,3 +166,103 @@ LLM_PROVIDER_PRIORITY=deepseek,google,openai,volcengine
 # Database
 DATABASE_URL=postgresql+psycopg2://user:pass@localhost:5432/uni_admission
 ```
+
+---
+
+## 8. Recent Updates & Bug Fixes
+
+### 8.1 Anti-Crawling Resilience (2026-02-27)
+
+**Problem**: Cookie consent banners caused navigation interference during crawling.
+- `simulate_user=True` in crawl4ai triggered clicks on cookie "Options" buttons
+- Browser navigated away from target pages to privacy policies
+- Result: 0 programs extracted from valid detail pages
+
+**Solution** (`src/scrapers/engine.py`):
+- Disabled `simulate_user` to prevent unintended interactions
+- Enabled `remove_overlay_elements=True` to auto-remove cookie banners
+- Injected custom JS to dismiss consent dialogs by clicking "Accept/OK" buttons
+- Added `delay_before_return_html=2.0` to wait for page stabilization
+
+### 8.2 LLM Response Validation (2026-02-27)
+
+**Problem**: LLM occasionally returned `null` for list fields, causing Pydantic validation errors.
+- `ParsedProgramData.study_options` and `deadlines` expected `List[...]`
+- LLM returned `null` instead of `[]` when no data found
+- Validation failed: `Input should be a valid array [type=list_type]`
+
+**Solution** (`src/agents/cleaner_agent.py`):
+- Added `@field_validator` for `study_options` and `deadlines`
+- Automatically coerces `None` → `[]` during validation
+- Prevents downstream crashes while maintaining type safety
+
+### 8.3 Database Preview UI (2026-02-27)
+
+**New Feature**: Chrome Extension now includes a database preview modal.
+
+**API Enhancements**:
+- `ProgramResponse` enriched with `study_options`, `deadlines`, `source_url`
+- `GET /programs` returns complete program details for preview
+- Supports filtering by `univ_slug` and `year` parameters
+
+**Extension Features**:
+- Preview button (👁) in header beside Export
+- Filter panel: University slug (autocomplete) + Year + Search button
+- Program count badge displays total results
+- Card-based list with:
+  - Program name + group code
+  - Faculty, tuition, study mode/duration tags
+  - Collapsible deadline list (round, date, description)
+  - Clickable source URL link
+
+# Database
+DATABASE_URL=postgresql+psycopg2://user:pass@localhost:5432/uni_admission
+```
+
+---
+
+## 8. Recent Updates & Bug Fixes
+
+### 8.1 Anti-Crawling Resilience (2026-02-27)
+
+**Problem**: Cookie consent banners caused navigation interference during crawling.
+- `simulate_user=True` in crawl4ai triggered clicks on cookie "Options" buttons
+- Browser navigated away from target pages to privacy policies
+- Result: 0 programs extracted from valid detail pages
+
+**Solution** (`src/scrapers/engine.py`):
+- Disabled `simulate_user` to prevent unintended interactions
+- Enabled `remove_overlay_elements=True` to auto-remove cookie banners
+- Injected custom JS to dismiss consent dialogs by clicking "Accept/OK" buttons
+- Added `delay_before_return_html=2.0` to wait for page stabilization
+
+### 8.2 LLM Response Validation (2026-02-27)
+
+**Problem**: LLM occasionally returned `null` for list fields, causing Pydantic validation errors.
+- `ParsedProgramData.study_options` and `deadlines` expected `List[...]`
+- LLM returned `null` instead of `[]` when no data found
+- Validation failed: `Input should be a valid array [type=list_type]`
+
+**Solution** (`src/agents/cleaner_agent.py`):
+- Added `@field_validator` for `study_options` and `deadlines`
+- Automatically coerces `None` → `[]` during validation
+- Prevents downstream crashes while maintaining type safety
+
+### 8.3 Database Preview UI (2026-02-27)
+
+**New Feature**: Chrome Extension now includes a database preview modal.
+
+**API Enhancements**:
+- `ProgramResponse` enriched with `study_options`, `deadlines`, `source_url`
+- `GET /programs` returns complete program details for preview
+- Supports filtering by `univ_slug` and `year` parameters
+
+**Extension Features**:
+- Preview button (👁) in header beside Export
+- Filter panel: University slug (autocomplete) + Year + Search button
+- Program count badge displays total results
+- Card-based list with:
+  - Program name + group code
+  - Faculty, tuition, study mode/duration tags
+  - Collapsible deadline list (round, date, description)
+  - Clickable source URL link

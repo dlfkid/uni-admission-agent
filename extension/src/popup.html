@@ -13,6 +13,7 @@
         <header>
             <h1>🎓 UniAdmission</h1>
             <div class="header-actions">
+                <button id="preview-btn" class="icon-btn" title="Preview Database">👁</button>
                 <button id="export-btn" class="icon-btn" title="Export to Excel">📥</button>
                 <button id="config-btn" class="icon-btn" title="Configure .env">⚙️</button>
             </div>
@@ -60,6 +61,28 @@
             </div>
 
             <button id="send-btn" type="button" class="primary-btn">Start Crawl</button>
+        </div>
+
+        <!-- LINK SELECTION MODE -->
+        <div id="link-selection-section" class="hidden">
+            <div class="link-selection-header">
+                <h3>Select Programs to Crawl</h3>
+                <p class="link-selection-subtext">
+                    LLM identified potential program pages. Select the ones you want to crawl.
+                </p>
+            </div>
+            <div class="link-actions-top">
+                <label class="select-all-label">
+                    <input id="select-all-links" type="checkbox" checked />
+                    <span>Select All</span>
+                </label>
+                <span id="link-count" class="link-count-badge">0 selected</span>
+            </div>
+            <ul id="link-list" class="link-list"></ul>
+            <div class="link-actions-bottom">
+                <button id="confirm-links-btn" type="button" class="primary-btn">Crawl Selected</button>
+                <button id="cancel-links-btn" type="button" class="secondary-btn">Cancel</button>
+            </div>
         </div>
 
         <!-- MONITOR MODE -->
@@ -147,6 +170,40 @@
 
             <div class="modal-actions">
                 <button id="do-export-btn" class="primary-btn">📥 Export</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- PREVIEW MODAL -->
+    <div id="preview-modal" class="modal hidden">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>Database Preview</h2>
+                <button id="close-preview-btn" class="close-btn">&times;</button>
+            </div>
+
+            <div class="preview-filters">
+                <div class="preview-filter-row">
+                    <div class="field preview-field">
+                        <label for="preview-slug">University</label>
+                        <div class="autocomplete-wrapper">
+                            <input id="preview-slug" type="text" placeholder="e.g. hku" autocomplete="off" />
+                            <ul id="preview-slug-dropdown" class="slug-dropdown hidden"></ul>
+                        </div>
+                    </div>
+                    <div class="field preview-field">
+                        <label for="preview-year">Year</label>
+                        <input id="preview-year" type="number" placeholder="All" />
+                    </div>
+                    <button id="preview-search-btn" class="primary-btn preview-search-btn">Search</button>
+                </div>
+                <div id="preview-summary" class="preview-summary hidden">
+                    <span id="preview-count-badge" class="preview-count-badge">0 programs</span>
+                </div>
+            </div>
+
+            <div id="preview-list" class="preview-list">
+                <div class="preview-empty">Select a university and click Search</div>
             </div>
         </div>
     </div>

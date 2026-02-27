@@ -82,11 +82,30 @@ class ProgramSummary(BaseModel):
     program_group_code: Optional[str] = None
     tuition_amount: Optional[float] = None
     currency: Optional[str] = None
+    study_options: list = []
+    deadlines: list = []
+    source_url: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------
 #  Business logic
 # ---------------------------------------------------------------------------
+
+
+def analyze_page(
+    url: str,
+    html_content: str,
+    page_type_hint: str = "auto",
+) -> dict:
+    """Analyze a page's HTML to determine type and extract candidate links.
+
+    Synchronous wrapper around :pymethod:`AdmissionScraper.analyze_page_links`.
+
+    Returns:
+        dict with ``page_type``, ``links`` and ``total_found``.
+    """
+    scraper = AdmissionScraper()
+    return scraper.analyze_page_links(url, html_content, page_type_hint)
 
 
 async def crawl_url(
@@ -98,6 +117,7 @@ async def crawl_url(
     export_md: bool = False,
     export_path: Optional[str] = None,
     html_content: Optional[str] = None,
+    selected_urls: Optional[list[str]] = None,
 ) -> CrawlResult:
     """Crawl a university admission page and import structured data.
 
@@ -117,21 +137,32 @@ async def crawl_url(
         export_md: Whether to export markdown files.
         export_path: Path to export markdown files.
         html_content: Pre-rendered HTML from browser (bypasses crawling).
+        selected_urls: User-selected detail URLs (skips index analysis).
 
     Returns:
         CrawlResult with the number of programs imported.
     """
     scraper = AdmissionScraper()
-    imported = await scraper.crawl_and_clean(
-        url=url,
-        univ_slug=univ_slug,
-        year=year,
-        continue_depth=continue_depth,
-        page_type_hint=page_type_hint,
-        export_md=export_md,
-        export_path=export_path,
-        html_content=html_content,
-    )
+
+    if selected_urls:
+        imported = await scraper.crawl_selected_urls(
+            urls=selected_urls,
+            univ_slug=univ_slug,
+            year=year,
+            export_md=export_md,
+            export_path=export_path,
+        )
+    else:
+        imported = await scraper.crawl_and_clean(
+            url=url,
+            univ_slug=univ_slug,
+            year=year,
+            continue_depth=continue_depth,
+            page_type_hint=page_type_hint,
+            export_md=export_md,
+            export_path=export_path,
+            html_content=html_content,
+        )
     logger.info("Crawl complete: %d programs imported", imported)
     return CrawlResult(imported_count=imported, univ_slug=univ_slug, year=year)
 
@@ -253,6 +284,9 @@ def query_programs(
                 program_group_code=p.program_group_code,
                 tuition_amount=float(p.tuition_amount) if p.tuition_amount else None,
                 currency=p.currency.value if p.currency else None,
+                study_options=p.study_options or [],
+                deadlines=p.deadlines or [],
+                source_url=(p.extra_metadata or {}).get("source_url"),
             )
             for p in programs
         ]

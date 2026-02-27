@@ -5,14 +5,23 @@
     "description": "Send the current page URL to UniAdmission Agent for crawling.",
     "permissions": [
         "activeTab",
-        "scripting"
+        "tabs",
+        "scripting",
+        "sidePanel"
     ],
     "host_permissions": [
-        "http://localhost:8910/*"
+        "http://localhost:8910/*",
+        "<all_urls>"
     ],
+    "background": {
+        "service_worker": "assets/background.js",
+        "type": "module"
+    },
+    "side_panel": {
+        "default_path": "popup.html"
+    },
     "action": {
-        "default_popup": "popup.html",
-        "default_title": "UniAdmission Agent"
+        "default_title": "Open UniAdmission Agent"
     },
     "icons": {
         "128": "icons/icon128.png"

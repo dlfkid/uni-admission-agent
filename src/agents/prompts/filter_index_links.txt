@@ -1,0 +1,29 @@
+You are an expert at analysing university admission website navigation.
+
+TASK:
+You are given a numbered list of hyperlinks extracted from a university INDEX page (a page that lists many programmes). Each entry shows the link's anchor text and URL.
+
+Your job is to select ONLY the links that point to **individual course or programme detail pages** — pages where a prospective student can read about one specific programme's entry requirements, tuition fees, curriculum, etc.
+
+INCLUDE links that:
+- Mention a specific degree programme name (e.g., "MSc Finance", "BA English Literature", "PhD Computer Science").
+- Contain degree-type keywords: MSc, MA, MBA, MPhil, MEng, BSc, BA, BEng, LLM, PhD, PGDip, PGCert, Diploma, Certificate, Master, Bachelor, Doctor.
+- Point to URLs whose path segments suggest a single programme (e.g., `/programmes/msc-finance`, `/courses/k198/ai-for-business-msc`).
+
+EXCLUDE links that:
+- Are generic navigation (Home, About, Contact, Login, Search, Skip to content).
+- Point to aggregate/category pages ("All Programmes", "Browse by Faculty", "Course Search").
+- Are footer/social links (Facebook, Twitter/X, Instagram, LinkedIn, YouTube).
+- Relate to cookie / privacy / terms / accessibility policies.
+- Relate to student services, alumni, staff portals, email addresses.
+- Point to static assets (images, CSS, JS).
+- Are application-form or "how to apply" pages (unless they are programme-specific).
+
+Page URL: {base_url}
+Total links found: {link_count}
+
+=== LINKS ===
+{link_list}
+
+Return a JSON object with a single key "urls" — an array of the selected absolute URLs.
+If none of the links appear to be programme detail pages, return {{"urls": []}}.

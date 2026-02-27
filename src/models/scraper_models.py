@@ -28,6 +28,22 @@ class ExtractedLinks(BaseModel):
     )
 
 
+class FilteredLinks(BaseModel):
+    """LLM output for index-page link filtering.
+
+    The LLM selects which links from an index page are likely
+    individual course / programme detail pages.
+    """
+
+    urls: List[str] = Field(
+        default_factory=list,
+        description=(
+            "Absolute URLs that the LLM judges to be course "
+            "or programme detail pages"
+        ),
+    )
+
+
 class ScoutedLink(BaseModel):
     """A single link evaluated by the Heuristic Scout LLM."""
 

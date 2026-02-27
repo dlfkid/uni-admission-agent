@@ -302,14 +302,28 @@ curl -X POST http://localhost:8910/crawl \
   -H "Content-Type: application/json" \
   -d '{"url": "https://admissions.hku.hk/programmes", "univ_slug": "hku", "year": 2026}'
 
+# Analyze page for link selection (two-phase crawl)
+curl -X POST http://localhost:8910/analyze \
+  -H "Content-Type: application/json" \
+  -d '{"url": "https://example.com/courses", "html_content": "<html>...</html>"}'
+
 # Check task status
 curl http://localhost:8910/tasks/{task_id}
 
 # Database statistics
 curl http://localhost:8910/status
 
-# Query programs
+# Query programs (with detailed fields: study_options, deadlines, source_url)
 curl "http://localhost:8910/programs?univ_slug=hku&year=2026"
+
+# List all universities
+curl http://localhost:8910/universities
+
+# Export programs to Excel
+curl -X POST http://localhost:8910/export \
+  -H "Content-Type: application/json" \
+  -d '{"univ_slug": "hku", "year": 2026}' \
+  --output hku_export.xlsx
 ```
 
 ### MCP Server
@@ -343,6 +357,8 @@ The extension provides a UI to interact with the agent.
 - Click the extension icon in your browser toolbar.
 - Configure settings (database URL, LLM keys) via the gear icon.
 - Enter a university slug (e.g., `hku`) and year, then start crawling.
+- **Preview Database** (👁 icon): Browse stored programs with filters by university and year.
+- **Export to Excel** (📥 icon): Download program data as XLSX files.
 
 ## 📦 Build & Distribution
 

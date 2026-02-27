@@ -125,6 +125,46 @@ def _remove_pid_file() -> None:
         pass
 
 
+def _find_pid_by_port(port: int) -> "Optional[int]":
+    """Find the PID of a process listening on the given port.
+
+    Works on macOS/Linux (via lsof) and Windows (via netstat).
+    Returns None if no process is found or the lookup fails.
+    """
+    import subprocess
+    import platform
+
+    try:
+        if platform.system() == "Windows":
+            # Windows: netstat -ano | findstr :PORT
+            result = subprocess.run(
+                ["netstat", "-ano"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            for line in result.stdout.splitlines():
+                if f":{port}" in line and "LISTENING" in line:
+                    parts = line.split()
+                    if parts:
+                        return int(parts[-1])
+        else:
+            # macOS/Linux: lsof -ti:PORT
+            result = subprocess.run(
+                ["lsof", f"-ti:{port}"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                # May return multiple PIDs; take the first
+                first_pid = result.stdout.strip().split()[0]
+                return int(first_pid)
+    except (subprocess.SubprocessError, ValueError, OSError):
+        pass
+    return None
+
+
 app = typer.Typer(
     name="uni-admission",
     help="UniAdmission Agent — Automated university admission data scraper",
@@ -413,13 +453,28 @@ def serve(
 
 
 @app.command(name="serve-stop")
-def serve_stop() -> None:
-    """Stop a running server that was started with ``serve``."""
+def serve_stop(
+    port: int = typer.Option(8910, help="Port to check if PID file is missing"),
+    force: bool = typer.Option(False, "--force", "-f", help="Force kill (SIGKILL) if SIGTERM fails"),
+) -> None:
+    """Stop a running server that was started with ``serve``.
+
+    First checks the PID file. If the PID file is missing or stale,
+    falls back to searching for a process listening on the given port.
+    Use --force to send SIGKILL instead of SIGTERM.
+    """
     pid = _read_pid_file()
+    source = "PID file"
+
+    # Fallback: find by port if PID file is missing
     if pid is None:
-        typer.echo("ℹ️  No running server found (PID file not present).")
-        typer.echo(f"   Expected: {_PID_FILE}")
-        raise typer.Exit(code=0)
+        pid = _find_pid_by_port(port)
+        source = f"port {port}"
+        if pid is None:
+            typer.echo("ℹ️  No running server found.")
+            typer.echo(f"   Checked: {_PID_FILE} (not present)")
+            typer.echo(f"   Checked: port {port} (no process listening)")
+            raise typer.Exit(code=0)
 
     # Verify the process is actually alive
     try:
@@ -430,9 +485,11 @@ def serve_stop() -> None:
         raise typer.Exit(code=0)
 
     # Send termination signal
+    sig = signal.SIGKILL if force else signal.SIGTERM
+    sig_name = "SIGKILL" if force else "SIGTERM"
     try:
-        os.kill(pid, signal.SIGTERM)
-        typer.echo(f"✅ Stop signal sent to server (PID {pid})")
+        os.kill(pid, sig)
+        typer.echo(f"✅ {sig_name} sent to server (PID {pid}, found via {source})")
         _remove_pid_file()
     except (ProcessLookupError, PermissionError, OSError) as exc:
         typer.echo(f"❌ Failed to stop server (PID {pid}): {exc}", err=True)

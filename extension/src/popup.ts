@@ -44,12 +44,24 @@ interface UniversityOption {
     updated_at: string;
 }
 
+interface LinkCandidate {
+    url: string;
+    text: string;
+}
+
+interface AnalyzeResult {
+    page_type: string;
+    links: LinkCandidate[];
+    total_found: number;
+}
+
 // ---------------------------------------------------------------------------
 //  DOM Elements
 // ---------------------------------------------------------------------------
 
 // Sections
 const inputSection = document.getElementById("input-section") as HTMLDivElement;
+const linkSelectionSection = document.getElementById("link-selection-section") as HTMLDivElement;
 const monitorSection = document.getElementById("monitor-section") as HTMLDivElement;
 const configModal = document.getElementById("config-modal") as HTMLDivElement;
 
@@ -90,14 +102,36 @@ const exportSlugDropdown = document.getElementById("export-slug-dropdown") as HT
 const exportYearInput = document.getElementById("export-year") as HTMLInputElement;
 const doExportBtn = document.getElementById("do-export-btn") as HTMLButtonElement;
 
+// Preview
+const previewBtn = document.getElementById("preview-btn") as HTMLButtonElement;
+const previewModal = document.getElementById("preview-modal") as HTMLDivElement;
+const closePreviewBtn = document.getElementById("close-preview-btn") as HTMLButtonElement;
+const previewSlugInput = document.getElementById("preview-slug") as HTMLInputElement;
+const previewSlugDropdown = document.getElementById("preview-slug-dropdown") as HTMLUListElement;
+const previewYearInput = document.getElementById("preview-year") as HTMLInputElement;
+const previewSearchBtn = document.getElementById("preview-search-btn") as HTMLButtonElement;
+const previewSummary = document.getElementById("preview-summary") as HTMLDivElement;
+const previewCountBadge = document.getElementById("preview-count-badge") as HTMLSpanElement;
+const previewList = document.getElementById("preview-list") as HTMLDivElement;
+
 // Status
 const statusDiv = document.getElementById("status") as HTMLDivElement;
+
+// Link Selection
+const selectAllLinksCheckbox = document.getElementById("select-all-links") as HTMLInputElement;
+const linkCountBadge = document.getElementById("link-count") as HTMLSpanElement;
+const linkListEl = document.getElementById("link-list") as HTMLUListElement;
+const confirmLinksBtn = document.getElementById("confirm-links-btn") as HTMLButtonElement;
+const cancelLinksBtn = document.getElementById("cancel-links-btn") as HTMLButtonElement;
 
 // ---------------------------------------------------------------------------
 //  State & Utils
 // ---------------------------------------------------------------------------
 
 let activePollInterval: number | null = null;
+let currentWindowId: number | null = null;
+let candidateLinks: LinkCandidate[] = [];
+let lastPageHTML: string | null = null;
 let draggedItem: HTMLElement | null = null;
 const LOGS_EXPANDED_KEY = "logs_expanded";
 
@@ -111,6 +145,7 @@ const UNIV_SLUG_KEY = "crawl_univ_slug";
 let cachedUniversities: UniversityOption[] = [];
 let activeDropdownIndex = -1;
 let activeExportDropdownIndex = -1;
+let activePreviewDropdownIndex = -1;
 
 // Helper to disable/enable form
 function setFormEnabled(enabled: boolean) {
@@ -180,13 +215,18 @@ function showStatus(msg: string, type: "success" | "error" | "info"): void {
     }
 }
 
-function switchView(view: "input" | "monitor") {
+function switchView(view: "input" | "link-selection" | "monitor") {
+    inputSection.classList.add("hidden");
+    linkSelectionSection.classList.add("hidden");
+    monitorSection.classList.add("hidden");
+    statusDiv.classList.add("hidden");
+
     if (view === "input") {
         inputSection.classList.remove("hidden");
-        monitorSection.classList.add("hidden");
         stopPolling();
+    } else if (view === "link-selection") {
+        linkSelectionSection.classList.remove("hidden");
     } else {
-        inputSection.classList.add("hidden");
         monitorSection.classList.remove("hidden");
     }
 }
@@ -253,28 +293,54 @@ exportPathInput.addEventListener("blur", () => {
     localStorage.setItem(EXPORT_PATH_KEY, exportPathInput.value.trim());
 });
 
-async function init() {
-    // Restore cached preferences
-    restoreCachedPreferences();
-
+/**
+ * Update the displayed URL from the current active tab.
+ * Called on init and whenever tab changes.
+ */
+function updateCurrentUrl() {
     chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
         const tab = tabs[0];
         if (tab?.url) {
             urlDisplay.textContent = tab.url;
-
-            // Auto-fill slug from URL if possible (simple heuristic)
-            // e.g. https://admissions.hku.hk/... -> hku
-            try {
-                const urlObj = new URL(tab.url);
-                const hostname = urlObj.hostname;
-                const parts = hostname.split('.');
-                // find part that looks like university name?
-                // For now, just leave it manual or use simple regex if requested
-            } catch (e) { }
         } else {
             urlDisplay.textContent = "(unable to read URL)";
         }
+        // Store window ID for filtering events
+        if (tab?.windowId) {
+            currentWindowId = tab.windowId;
+        }
     });
+}
+
+/**
+ * Setup listeners to auto-update URL when user switches tabs or navigates.
+ */
+function setupTabListeners() {
+    // When user switches to a different tab
+    chrome.tabs.onActivated.addListener((activeInfo) => {
+        // Only update if it's in our window
+        if (currentWindowId === null || activeInfo.windowId === currentWindowId) {
+            updateCurrentUrl();
+        }
+    });
+
+    // When a tab's URL changes (navigation)
+    chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+        // Only care about URL changes in the active tab of our window
+        if (changeInfo.url && tab.active &&
+            (currentWindowId === null || tab.windowId === currentWindowId)) {
+            urlDisplay.textContent = changeInfo.url;
+        }
+    });
+}
+
+async function init() {
+    // Restore cached preferences
+    restoreCachedPreferences();
+
+    // Get current URL and setup auto-tracking for side panel
+    updateCurrentUrl();
+    setupTabListeners();
 
     // Initialize logs toggle state
     initLogsToggle();
@@ -528,52 +594,227 @@ sendBtn.addEventListener("click", async () => {
         sendBtn.textContent = "Start Crawl";
         return;
     }
+    lastPageHTML = pageHTML;
 
-    sendBtn.textContent = "Starting…";
+    sendBtn.textContent = "Analyzing…";
 
     try {
-        const payload: any = { 
-            url, 
-            univ_slug: slug, 
-            year, 
-            continue_depth: 0,
-            page_type_hint: pageType,
-            html_content: pageHTML  // Send the rendered HTML from browser
-        };
-
-        if (exportMd && exportPath) {
-            payload.export_md = true;
-            payload.export_path = exportPath;
-        }
-
-        const res = await fetch(`${API_BASE}/crawl`, {
+        // Step 1: Analyze the page
+        const analyzeRes = await fetch(`${API_BASE}/analyze`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(payload),
+            body: JSON.stringify({
+                url,
+                html_content: pageHTML,
+                page_type_hint: pageType,
+            }),
         });
 
-        // Lock UI immediately
-        setFormEnabled(false);
-
-        if (res.status === 409) {
-            showStatus("A task is already running!", "error");
-            init();
-            return;
+        if (!analyzeRes.ok) {
+            throw new Error(`Analysis failed: ${analyzeRes.status}`);
         }
 
-        if (!res.ok) {
-            throw new Error(`Server error: ${res.status}`);
+        const analyzeData: AnalyzeResult = await analyzeRes.json();
+
+        if (analyzeData.page_type === "detail") {
+            // Detail page: start crawl directly with browser HTML
+            await submitCrawl({ url, slug, year, pageType, exportMd, exportPath, htmlContent: pageHTML });
+        } else {
+            // Index page: show link selection UI
+            if (analyzeData.links.length === 0) {
+                showStatus("No program links found on this page.", "error");
+                return;
+            }
+            candidateLinks = analyzeData.links;
+            renderLinkSelection(analyzeData.links, analyzeData.total_found);
+            switchView("link-selection");
         }
-
-        const data = await res.json();
-        startMonitoring(data.task_id);
-
     } catch (err) {
         showStatus(String(err), "error");
     } finally {
         sendBtn.disabled = false;
         sendBtn.textContent = "Start Crawl";
     }
+});
+
+/**
+ * Submit a crawl job to the server and switch to the monitor view.
+ */
+async function submitCrawl(opts: {
+    url: string;
+    slug: string;
+    year: number;
+    pageType: string;
+    exportMd: boolean;
+    exportPath: string;
+    htmlContent?: string;
+    selectedUrls?: string[];
+}) {
+    const payload: any = {
+        url: opts.url,
+        univ_slug: opts.slug,
+        year: opts.year,
+        continue_depth: 0,
+        page_type_hint: opts.pageType,
+    };
+
+    if (opts.htmlContent) {
+        payload.html_content = opts.htmlContent;
+    }
+    if (opts.selectedUrls) {
+        payload.selected_urls = opts.selectedUrls;
+    }
+    if (opts.exportMd && opts.exportPath) {
+        payload.export_md = true;
+        payload.export_path = opts.exportPath;
+    }
+
+    const res = await fetch(`${API_BASE}/crawl`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+    });
+
+    setFormEnabled(false);
+
+    if (res.status === 409) {
+        showStatus("A task is already running!", "error");
+        init();
+        return;
+    }
+
+    if (!res.ok) {
+        throw new Error(`Server error: ${res.status}`);
+    }
+
+    const data = await res.json();
+    startMonitoring(data.task_id);
+}
+
+// ---------------------------------------------------------------------------
+//  Link Selection
+// ---------------------------------------------------------------------------
+
+function renderLinkSelection(links: LinkCandidate[], totalFound: number) {
+    linkListEl.innerHTML = "";
+    selectAllLinksCheckbox.checked = true;
+
+    links.forEach((link, idx) => {
+        const li = document.createElement("li");
+        li.className = "link-item selected";
+
+        const cb = document.createElement("input");
+        cb.type = "checkbox";
+        cb.checked = true;
+        cb.dataset.idx = String(idx);
+
+        const content = document.createElement("div");
+        content.className = "link-item-content";
+
+        const textSpan = document.createElement("div");
+        textSpan.className = "link-item-text";
+        textSpan.textContent = link.text || "(no text)";
+
+        const urlSpan = document.createElement("div");
+        urlSpan.className = "link-item-url";
+        urlSpan.textContent = link.url;
+
+        content.appendChild(textSpan);
+        content.appendChild(urlSpan);
+
+        li.appendChild(cb);
+        li.appendChild(content);
+
+        // Click anywhere on the item to toggle
+        li.addEventListener("click", (e) => {
+            if ((e.target as HTMLElement).tagName !== "INPUT") {
+                cb.checked = !cb.checked;
+            }
+            li.classList.toggle("selected", cb.checked);
+            updateLinkCount();
+        });
+
+        cb.addEventListener("change", () => {
+            li.classList.toggle("selected", cb.checked);
+            updateLinkCount();
+        });
+
+        linkListEl.appendChild(li);
+    });
+
+    updateLinkCount();
+}
+
+function updateLinkCount() {
+    const checkboxes = linkListEl.querySelectorAll<HTMLInputElement>("input[type=checkbox]");
+    const checked = Array.from(checkboxes).filter(cb => cb.checked).length;
+    linkCountBadge.textContent = `${checked}/${checkboxes.length} selected`;
+
+    // Sync "Select All" state
+    selectAllLinksCheckbox.checked = checked === checkboxes.length;
+    selectAllLinksCheckbox.indeterminate = checked > 0 && checked < checkboxes.length;
+
+    confirmLinksBtn.disabled = checked === 0;
+}
+
+selectAllLinksCheckbox.addEventListener("change", () => {
+    const isChecked = selectAllLinksCheckbox.checked;
+    linkListEl.querySelectorAll<HTMLInputElement>("input[type=checkbox]").forEach(cb => {
+        cb.checked = isChecked;
+        const li = cb.closest(".link-item");
+        if (li) li.classList.toggle("selected", isChecked);
+    });
+    updateLinkCount();
+});
+
+confirmLinksBtn.addEventListener("click", async () => {
+    const checkboxes = linkListEl.querySelectorAll<HTMLInputElement>("input[type=checkbox]");
+    const selectedUrls: string[] = [];
+    checkboxes.forEach(cb => {
+        if (cb.checked) {
+            const idx = parseInt(cb.dataset.idx!, 10);
+            if (candidateLinks[idx]) {
+                selectedUrls.push(candidateLinks[idx].url);
+            }
+        }
+    });
+
+    if (selectedUrls.length === 0) {
+        showStatus("No links selected", "error");
+        return;
+    }
+
+    confirmLinksBtn.disabled = true;
+    confirmLinksBtn.textContent = "Starting…";
+
+    try {
+        const url = urlDisplay.textContent ?? "";
+        const slug = slugInput.value.trim();
+        const year = parseInt(yearInput.value.trim(), 10);
+        const exportMd = exportMdCheckbox.checked;
+        const exportPath = exportPathInput.value.trim();
+
+        await submitCrawl({
+            url,
+            slug,
+            year,
+            pageType: "detail",
+            exportMd,
+            exportPath,
+            selectedUrls,
+        });
+    } catch (err) {
+        showStatus(String(err), "error");
+    } finally {
+        confirmLinksBtn.disabled = false;
+        confirmLinksBtn.textContent = "Crawl Selected";
+    }
+});
+
+cancelLinksBtn.addEventListener("click", () => {
+    candidateLinks = [];
+    switchView("input");
+    setFormEnabled(true);
 });
 
 function startMonitoring(taskId: string) {
@@ -1066,3 +1307,293 @@ doExportBtn.addEventListener("click", async () => {
 
 // Initialize export autocomplete alongside main autocomplete
 initExportSlugAutocomplete();
+
+// ---------------------------------------------------------------------------
+//  Preview Flow
+// ---------------------------------------------------------------------------
+
+interface ProgramRecord {
+    id: number | null;
+    name_en: string;
+    name_zh: string | null;
+    academic_year: number;
+    faculty: string | null;
+    program_group_code: string | null;
+    tuition_amount: number | null;
+    currency: string | null;
+    study_options: { mode: string; duration_months: number }[];
+    deadlines: { round?: number; description?: string; cutoff_date?: string }[];
+    source_url: string | null;
+}
+
+previewBtn.addEventListener("click", () => {
+    previewSlugInput.value = slugInput.value.trim();
+    previewYearInput.value = yearInput.value.trim();
+    previewModal.classList.remove("hidden");
+    previewSlugInput.focus();
+});
+
+closePreviewBtn.addEventListener("click", () => {
+    previewModal.classList.add("hidden");
+});
+
+previewSearchBtn.addEventListener("click", () => loadPreview());
+
+// Allow Enter in the inputs to trigger search
+previewSlugInput.addEventListener("keydown", (e: KeyboardEvent) => {
+    if (e.key === "Enter" && previewSlugDropdown.classList.contains("hidden")) {
+        e.preventDefault();
+        loadPreview();
+    }
+});
+previewYearInput.addEventListener("keydown", (e: KeyboardEvent) => {
+    if (e.key === "Enter") {
+        e.preventDefault();
+        loadPreview();
+    }
+});
+
+async function loadPreview() {
+    const slug = previewSlugInput.value.trim();
+    if (!slug) {
+        showStatus("University slug is required", "error");
+        return;
+    }
+    const yearStr = previewYearInput.value.trim();
+    const yearParam = yearStr ? `&year=${parseInt(yearStr, 10)}` : "";
+
+    previewSearchBtn.disabled = true;
+    previewSearchBtn.textContent = "Loading…";
+    previewList.innerHTML = '<div class="preview-empty">Loading…</div>';
+
+    try {
+        const res = await fetch(`${API_BASE}/programs?univ_slug=${encodeURIComponent(slug)}${yearParam}`);
+        if (!res.ok) {
+            const err = await res.json().catch(() => ({ detail: `HTTP ${res.status}` }));
+            throw new Error(err.detail || `Query failed: ${res.status}`);
+        }
+        const programs: ProgramRecord[] = await res.json();
+        renderPreviewResults(programs);
+    } catch (err) {
+        previewList.innerHTML = `<div class="preview-empty" style="color:var(--error)">${String(err)}</div>`;
+        previewSummary.classList.add("hidden");
+    } finally {
+        previewSearchBtn.disabled = false;
+        previewSearchBtn.textContent = "Search";
+    }
+}
+
+function renderPreviewResults(programs: ProgramRecord[]) {
+    previewCountBadge.textContent = `${programs.length} program${programs.length !== 1 ? "s" : ""}`;
+    previewSummary.classList.remove("hidden");
+
+    if (programs.length === 0) {
+        previewList.innerHTML = '<div class="preview-empty">No programs found</div>';
+        return;
+    }
+
+    previewList.innerHTML = "";
+    for (const p of programs) {
+        const card = document.createElement("div");
+        card.className = "program-card";
+
+        // Header: name + ID
+        const header = document.createElement("div");
+        header.className = "program-card-header";
+
+        const nameEl = document.createElement("div");
+        nameEl.className = "program-card-name";
+        nameEl.textContent = p.name_en || "(unnamed)";
+        header.appendChild(nameEl);
+
+        if (p.program_group_code) {
+            const idEl = document.createElement("span");
+            idEl.className = "program-card-id";
+            idEl.textContent = p.program_group_code;
+            header.appendChild(idEl);
+        }
+        card.appendChild(header);
+
+        // Tags row
+        const meta = document.createElement("div");
+        meta.className = "program-card-meta";
+
+        if (p.faculty) {
+            const t = document.createElement("span");
+            t.className = "program-tag faculty";
+            t.textContent = p.faculty;
+            meta.appendChild(t);
+        }
+
+        if (p.tuition_amount != null) {
+            const t = document.createElement("span");
+            t.className = "program-tag tuition";
+            const cur = p.currency ?? "";
+            t.textContent = `${cur} ${p.tuition_amount.toLocaleString()}`;
+            meta.appendChild(t);
+        }
+
+        if (p.study_options?.length) {
+            for (const opt of p.study_options) {
+                const t = document.createElement("span");
+                t.className = "program-tag mode";
+                const months = opt.duration_months;
+                const dur = months >= 12 ? `${(months / 12).toFixed(months % 12 ? 1 : 0)}yr` : `${months}mo`;
+                t.textContent = `${opt.mode} · ${dur}`;
+                meta.appendChild(t);
+            }
+        }
+
+        if (meta.children.length > 0) {
+            card.appendChild(meta);
+        }
+
+        // Deadlines
+        if (p.deadlines?.length) {
+            const details = document.createElement("details");
+            details.className = "program-card-deadlines";
+            const summary = document.createElement("summary");
+            summary.textContent = `${p.deadlines.length} deadline${p.deadlines.length > 1 ? "s" : ""}`;
+            details.appendChild(summary);
+
+            const ul = document.createElement("ul");
+            ul.className = "deadline-list";
+            for (const d of p.deadlines) {
+                const li = document.createElement("li");
+                li.className = "deadline-item";
+
+                const roundEl = document.createElement("span");
+                roundEl.className = "dl-round";
+                roundEl.textContent = d.round ? `R${d.round}` : "—";
+                li.appendChild(roundEl);
+
+                const dateEl = document.createElement("span");
+                dateEl.className = "dl-date";
+                dateEl.textContent = d.cutoff_date ? new Date(d.cutoff_date).toLocaleDateString() : "TBD";
+                li.appendChild(dateEl);
+
+                if (d.description) {
+                    const descEl = document.createElement("span");
+                    descEl.textContent = d.description;
+                    li.appendChild(descEl);
+                }
+                ul.appendChild(li);
+            }
+            details.appendChild(ul);
+            card.appendChild(details);
+        }
+
+        // Source URL
+        if (p.source_url) {
+            const a = document.createElement("a");
+            a.className = "program-card-url";
+            a.href = p.source_url;
+            a.target = "_blank";
+            a.rel = "noopener";
+            // Show only the pathname for brevity
+            try {
+                const u = new URL(p.source_url);
+                a.textContent = u.host + u.pathname;
+            } catch {
+                a.textContent = p.source_url;
+            }
+            card.appendChild(a);
+        }
+
+        previewList.appendChild(card);
+    }
+}
+
+// Preview slug autocomplete (reuses cachedUniversities)
+function initPreviewSlugAutocomplete(): void {
+    previewSlugInput.addEventListener("input", () => {
+        renderPreviewDropdown(previewSlugInput.value.trim());
+    });
+    previewSlugInput.addEventListener("focus", () => {
+        renderPreviewDropdown(previewSlugInput.value.trim());
+    });
+    previewSlugInput.addEventListener("keydown", (e: KeyboardEvent) => {
+        const items = previewSlugDropdown.querySelectorAll("li");
+        if (!items.length || previewSlugDropdown.classList.contains("hidden")) return;
+        if (e.key === "ArrowDown") {
+            e.preventDefault();
+            activePreviewDropdownIndex = Math.min(activePreviewDropdownIndex + 1, items.length - 1);
+            highlightPreviewItem(items);
+        } else if (e.key === "ArrowUp") {
+            e.preventDefault();
+            activePreviewDropdownIndex = Math.max(activePreviewDropdownIndex - 1, 0);
+            highlightPreviewItem(items);
+        } else if (e.key === "Enter") {
+            if (activePreviewDropdownIndex >= 0 && activePreviewDropdownIndex < items.length) {
+                e.preventDefault();
+                const slug = (items[activePreviewDropdownIndex] as HTMLElement).dataset.slug;
+                if (slug) previewSlugInput.value = slug;
+                hidePreviewDropdown();
+            }
+        } else if (e.key === "Escape") {
+            hidePreviewDropdown();
+        }
+    });
+    document.addEventListener("click", (e: MouseEvent) => {
+        const target = e.target as HTMLElement;
+        if (!target.closest("#preview-modal .autocomplete-wrapper")) {
+            hidePreviewDropdown();
+        }
+    });
+}
+
+function renderPreviewDropdown(query: string): void {
+    previewSlugDropdown.innerHTML = "";
+    activePreviewDropdownIndex = -1;
+    const filtered = query
+        ? cachedUniversities.filter(
+            (u) =>
+                u.slug.toLowerCase().includes(query.toLowerCase()) ||
+                u.name.toLowerCase().includes(query.toLowerCase())
+        )
+        : cachedUniversities;
+    if (filtered.length === 0) { hidePreviewDropdown(); return; }
+    filtered.forEach((u, idx) => {
+        const li = document.createElement("li");
+        li.dataset.slug = u.slug;
+        const nameSpan = document.createElement("span");
+        nameSpan.className = "slug-name";
+        nameSpan.textContent = u.slug;
+        const metaSpan = document.createElement("span");
+        metaSpan.className = "slug-meta";
+        metaSpan.textContent = u.name !== u.slug ? u.name : "";
+        li.appendChild(nameSpan);
+        li.appendChild(metaSpan);
+        li.addEventListener("mouseenter", () => {
+            activePreviewDropdownIndex = idx;
+            highlightPreviewItem(previewSlugDropdown.querySelectorAll("li"));
+        });
+        li.addEventListener("click", () => {
+            previewSlugInput.value = u.slug;
+            hidePreviewDropdown();
+            previewSlugInput.focus();
+        });
+        previewSlugDropdown.appendChild(li);
+    });
+    previewSlugDropdown.classList.remove("hidden");
+    if (filtered.length === 1 && filtered[0].slug.toLowerCase() === query.toLowerCase()) {
+        activePreviewDropdownIndex = 0;
+        highlightPreviewItem(previewSlugDropdown.querySelectorAll("li"));
+    }
+}
+
+function highlightPreviewItem(items: NodeListOf<Element>): void {
+    items.forEach((item, idx) => {
+        item.classList.toggle("active", idx === activePreviewDropdownIndex);
+    });
+    if (activePreviewDropdownIndex >= 0 && items[activePreviewDropdownIndex]) {
+        (items[activePreviewDropdownIndex] as HTMLElement).scrollIntoView({ block: "nearest" });
+    }
+}
+
+function hidePreviewDropdown(): void {
+    previewSlugDropdown.classList.add("hidden");
+    activePreviewDropdownIndex = -1;
+}
+
+initPreviewSlugAutocomplete();
