@@ -236,7 +236,7 @@ class AdmissionScraper:
 
         filtered_urls = filter_links_by_llm(self.router, link_pairs, url)
 
-        url_to_text: Dict[str, str] = {u: t for u, t in link_pairs}
+        url_to_text: Dict[str, str] = dict(link_pairs)
         links = [
             {"url": u, "text": url_to_text.get(u, "")}
             for u in filtered_urls
