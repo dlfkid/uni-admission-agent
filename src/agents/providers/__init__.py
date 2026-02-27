@@ -15,6 +15,7 @@ from .base import LLMProvider, LLMResponse, RateLimitError
 from .gemini import GeminiProvider
 from .deepseek import DeepSeekProvider
 from .volcengine import VolcEngineProvider
+from .custom import CustomLLMProvider
 
 # --- Provider Registry ---
 
@@ -22,6 +23,7 @@ PROVIDER_REGISTRY: dict[str, Type[LLMProvider]] = {
     "gemini": GeminiProvider,
     "deepseek": DeepSeekProvider,
     "volcengine": VolcEngineProvider,
+    "custom": CustomLLMProvider,
 }
 
 __all__ = [
@@ -31,5 +33,6 @@ __all__ = [
     "GeminiProvider",
     "DeepSeekProvider",
     "VolcEngineProvider",
+    "CustomLLMProvider",
     "PROVIDER_REGISTRY",
 ]

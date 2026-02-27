@@ -953,12 +953,23 @@ function renderConfigForm(config: StructuredConfig) {
     dbUrlInput.value = config.database_url;
     llmList.innerHTML = "";
 
+    // Ensure custom provider is always available
+    const allProviders = { ...config.providers };
+    if (!allProviders.custom) {
+        // Add default empty custom provider if not configured
+        allProviders.custom = {
+            "CUSTOM_LLM_BASE_URL": "",
+            "CUSTOM_LLM_API_KEY": "",
+            "CUSTOM_LLM_MODEL_NAME": "gpt-4o-mini",
+        };
+    }
+
     // Merge priority list with any providers that might be missing from it
     const orderedKeys = [...config.llm_priority];
-    const allProviders = Object.keys(config.providers);
+    const providerNames = Object.keys(allProviders);
 
-    // Add missing providers to the end
-    for (const p of allProviders) {
+    // Add missing providers to the end (including custom)
+    for (const p of providerNames) {
         if (!orderedKeys.includes(p)) {
             orderedKeys.push(p);
         }
@@ -966,8 +977,8 @@ function renderConfigForm(config: StructuredConfig) {
 
     // Render items
     orderedKeys.forEach(providerName => {
-        const settings = config.providers[providerName];
-        if (!settings) return; // Should not happen based on schema logic
+        const settings = allProviders[providerName];
+        if (!settings) return;
 
         const li = createProviderItem(providerName, settings);
         llmList.appendChild(li);
@@ -1022,13 +1033,37 @@ function createProviderItem(name: string, settings: Record<string, string>): HTM
         row.className = "setting-row";
 
         const label = document.createElement("label");
-        // Simplify label: VOLC_API_KEY -> API KEY
-        label.textContent = key.replace(`${name.toUpperCase()}_`, "").replace(/_/g, " ");
+        // Special handling for custom provider
+        if (name === "custom") {
+            // CUSTOM_LLM_BASE_URL -> Base URL
+            const cleanKey = key.replace("CUSTOM_LLM_", "").replace(/_/g, " ");
+            label.textContent = cleanKey;
+        } else {
+            // VOLC_API_KEY -> API KEY
+            label.textContent = key.replace(`${name.toUpperCase()}_`, "").replace(/_/g, " ");
+        }
 
         const input = document.createElement("input");
-        input.type = "text";
-        input.value = settings[key];
+        // Use password type for API keys
+        if (key.includes("API_KEY")) {
+            input.type = "password";
+            input.autocomplete = "off";
+        } else {
+            input.type = "text";
+        }
+        input.value = settings[key] || "";
         input.dataset.key = key; // Store original key
+        
+        // Add placeholder hints for custom provider
+        if (name === "custom") {
+            if (key === "CUSTOM_LLM_BASE_URL") {
+                input.placeholder = "https://api.openai.com/v1";
+            } else if (key === "CUSTOM_LLM_API_KEY") {
+                input.placeholder = "sk-...";
+            } else if (key === "CUSTOM_LLM_MODEL_NAME") {
+                input.placeholder = "gpt-4o-mini";
+            }
+        }
 
         row.appendChild(label);
         row.appendChild(input);
@@ -1087,20 +1122,31 @@ saveConfigBtn.addEventListener("click", async () => {
         items.forEach((item) => {
             const li = item as HTMLElement;
             const name = li.dataset.provider!;
-            newPriority.push(name);
 
             const settings: Record<string, string> = {};
             const inputs = li.querySelectorAll("input");
             inputs.forEach(inp => {
-                settings[inp.dataset.key!] = inp.value;
+                settings[inp.dataset.key!] = inp.value.trim();
             });
-            newProviders[name] = settings;
+            
+            // For custom provider, only include if BASE_URL is configured
+            if (name === "custom") {
+                const baseUrl = settings["CUSTOM_LLM_BASE_URL"];
+                if (baseUrl) {
+                    newPriority.push(name);
+                    newProviders[name] = settings;
+                }
+                // Skip custom if not configured
+            } else {
+                newPriority.push(name);
+                newProviders[name] = settings;
+            }
         });
 
         const payload: StructuredConfig = {
             database_url: dbUrlInput.value.trim(),
             llm_priority: newPriority,
-            providers: newProviders
+            providers: newProviders,
         };
 
         const res = await fetch(`${API_BASE}/config/structured`, {

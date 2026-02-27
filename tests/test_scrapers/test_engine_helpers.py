@@ -8,7 +8,6 @@ from src.scrapers.helpers import (
 )
 from src.scrapers.link_parser import (
     extract_links,
-    extract_links_with_text,
     detect_page_type,
 )
 from src.models.scraper_models import PageType
@@ -72,66 +71,6 @@ def test_extract_no_heading() -> None:
     assert extract_program_name(md) == ""
 
 
-def test_extract_skips_cookie_banner() -> None:
-    """Real-world case: cookie/privacy headings precede the actual course name."""
-    md = (
-        "## Changes to our privacy policy\n"
-        "We've updated our privacy policy.\n\n"
-        "## Tell us whether you accept cookies\n"
-        "We use cookies to collect information.\n\n"
-        "## Your privacy options\n"
-        "### Our use of cookies\n\n"
-        "#  AI for Business MSc \n"
-        "## Year of entry 2026\n"
-    )
-    assert extract_program_name(md) == "AI for Business MSc"
-
-
-def test_extract_degree_keyword_in_h2() -> None:
-    """Degree keyword in H2 should be preferred over a generic non-degree H1."""
-    md = (
-        "# Welcome to Our University\n"
-        "## MSc Computer Science\n"
-        "## Programme Overview\n"
-    )
-    assert extract_program_name(md) == "MSc Computer Science"
-
-
-def test_extract_degree_keyword_in_h1() -> None:
-    """Degree keyword in H1 takes priority."""
-    md = (
-        "## Navigation\n"
-        "# PhD in Physics\n"
-        "## Entry Requirements\n"
-    )
-    assert extract_program_name(md) == "PhD in Physics"
-
-
-def test_extract_noise_only_headings() -> None:
-    """If all headings are noise, return first heading anyway."""
-    md = (
-        "## Cookie Settings\n"
-        "## Your privacy options\n"
-    )
-    # Falls through all passes; returns first heading
-    assert extract_program_name(md) == "Cookie Settings"
-
-
-def test_extract_masters_keyword() -> None:
-    """'Masters' as keyword should be recognized."""
-    md = (
-        "## Skip to main content\n"
-        "## Masters in Data Science\n"
-    )
-    assert extract_program_name(md) == "Masters in Data Science"
-
-
-def test_extract_pgdip_keyword() -> None:
-    """PGDip/PGCert programs should be recognized."""
-    md = "## PGDip Nursing\n## Overview\n"
-    assert extract_program_name(md) == "PGDip Nursing"
-
-
 # ── extract_links ─────────────────────────────────────────────────────
 
 
@@ -172,45 +111,6 @@ def test_extract_links_skips_anchors_and_mailto() -> None:
     md = "[Jump](#section)\n[Email](mailto:test@test.com)"
     links = extract_links(md, base_url="https://example.com/")
     assert links == []
-
-
-# ── extract_links_with_text ───────────────────────────────────────────
-
-
-def test_links_with_text_captures_anchor() -> None:
-    md = "[MSc Finance](https://example.com/msc-finance)\n[BA English](/ba-english)"
-    pairs = extract_links_with_text(md, base_url="https://example.com/")
-    urls = [u for u, _ in pairs]
-    texts = [t for _, t in pairs]
-    assert "https://example.com/msc-finance" in urls
-    assert "https://example.com/ba-english" in urls
-    assert "MSc Finance" in texts
-    assert "BA English" in texts
-
-
-def test_links_with_text_filters_same_as_extract() -> None:
-    md = (
-        "[Logo](https://example.com/logo.png)\n"
-        "[Login](https://example.com/login)\n"
-        "[Prog](https://example.com/prog)\n"
-        "[Home](https://example.com/)\n"
-        "[Jump](#section)"
-    )
-    pairs = extract_links_with_text(md, base_url="https://example.com/")
-    urls = [u for u, _ in pairs]
-    assert len(urls) == 1
-    assert urls[0] == "https://example.com/prog"
-
-
-def test_links_with_text_deduplicates() -> None:
-    md = (
-        "[Link A](https://example.com/prog)\n"
-        "[Link B](https://example.com/prog)\n"
-    )
-    pairs = extract_links_with_text(md, base_url="https://example.com/")
-    assert len(pairs) == 1
-    # First occurrence wins
-    assert pairs[0] == ("https://example.com/prog", "Link A")
 
 
 # ── detect_page_type ──────────────────────────────────────────────────

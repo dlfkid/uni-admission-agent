@@ -89,6 +89,23 @@ class StructuredConfig(BaseModel):
     )
 
 
+class TestConnectionRequest(BaseModel):
+    """Body for ``POST /config/test-connection``."""
+
+    base_url: str = Field(description="LLM API base URL")
+    api_key: str = Field(default="", description="API key (may be empty for local models)")
+    model_name: str = Field(default="", description="Model name to test with")
+    temperature: float = Field(default=0.3, description="Sampling temperature")
+    max_tokens: int = Field(default=64, description="Max tokens for test request")
+
+
+class TestConnectionResponse(BaseModel):
+    """Response for ``POST /config/test-connection``."""
+
+    success: bool = Field(description="Whether the connection test passed")
+    message: str = Field(description="Human-readable result")
+
+
 # ---------------------------------------------------------------------------
 #  Responses
 # ---------------------------------------------------------------------------

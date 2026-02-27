@@ -41,6 +41,8 @@ from src.api.schemas import (
     AnalyzeRequest,
     AnalyzeResponse,
     LinkCandidate,
+    TestConnectionRequest,
+    TestConnectionResponse,
 )
 from src.api.task_manager import TaskManager, TaskState
 from src.services.crawler import (
@@ -85,6 +87,7 @@ PROVIDER_PREFIXES = {
     "volcengine": "VOLC_",
     "deepseek": "DEEPSEEK_",
     "gemini": "GEMINI_",
+    "custom": "CUSTOM_LLM_",
 }
 
 def _get_env_path() -> Path:
@@ -120,7 +123,11 @@ def _parse_structured_config() -> StructuredConfig:
         providers[name] = {}
         
     for key, value in config_dict.items():
-        if not value: continue
+        # For custom provider, include keys even if empty (for UI editing)
+        # For other providers, skip empty values
+        is_custom_key = key.startswith("CUSTOM_LLM_")
+        if not value and not is_custom_key:
+            continue
         
         # Match against prefixes
         for name, prefix in PROVIDER_PREFIXES.items():
@@ -128,12 +135,12 @@ def _parse_structured_config() -> StructuredConfig:
                 # Strip prefix? No, users expect full keys in env usually, 
                 # but for UI it might be cleaner to show 'API_KEY'.
                 # Let's keep full keys for robust mapping back to .env
-                providers[name][key] = value
+                providers[name][key] = value or ""
                 
     return StructuredConfig(
         database_url=db_url,
         llm_priority=priority_list,
-        providers=providers
+        providers=providers,
     )
 
 def _update_env_file_structured(config: StructuredConfig) -> None:
@@ -518,6 +525,46 @@ async def api_update_structured_config(body: StructuredConfig) -> StructuredConf
     except Exception as e:
         logger.exception("Failed to update config")
         raise HTTPException(status_code=500, detail=f"Failed to update .env: {e}")
+
+
+@app.post("/config/test-connection", response_model=TestConnectionResponse)
+async def api_test_connection(body: TestConnectionRequest) -> TestConnectionResponse:
+    """Test connectivity to an OpenAI-compatible LLM endpoint."""
+    try:
+        from openai import OpenAI
+
+        client = OpenAI(
+            api_key=body.api_key or "no-key",
+            base_url=body.base_url,
+            timeout=15.0,
+        )
+
+        model = body.model_name or "gpt-4o-mini"
+        response = client.chat.completions.create(
+            model=model,
+            messages=[{"role": "user", "content": "Say hello in one word."}],
+            max_tokens=body.max_tokens if body.max_tokens <= 64 else 64,
+            temperature=body.temperature,
+        )
+
+        text = ""
+        if response.choices:
+            text = (response.choices[0].message.content or "").strip()
+
+        return TestConnectionResponse(
+            success=True,
+            message=f"OK — {model} replied: \"{text[:60]}\"",
+        )
+
+    except Exception as e:
+        err_msg = str(e)
+        # Truncate long error messages
+        if len(err_msg) > 200:
+            err_msg = err_msg[:200] + "…"
+        return TestConnectionResponse(
+            success=False,
+            message=err_msg,
+        )
 
 
 # ---------------------------------------------------------------------------

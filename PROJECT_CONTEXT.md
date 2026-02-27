@@ -151,27 +151,70 @@ uv run src/cmd/cli.py check
 
 ## 7. Configuration
 
-Managed via `.env` (loaded at runtime).
+Managed via `.env` (loaded at runtime). Use the interactive wizard for easy setup:
+
+```bash
+# Interactive LLM configuration wizard
+uv run src/cmd/cli.py llm-config
+```
+
+Manual `.env` configuration:
 
 ```bash
 # LLM Credentials
-GOOGLE_GENAI_API_KEY=...
-DEEPSEEK_API_KEY=...
-OPENAI_API_KEY=...
-VOLC_API_KEY=...
+GEMINI_API_KEY=...
+GEMINI_MODEL=gemini-2.0-flash-exp
 
-# Provider Priority
-LLM_PROVIDER_PRIORITY=deepseek,google,openai,volcengine
+DEEPSEEK_API_KEY=...
+DEEPSEEK_BASE_URL=https://api.deepseek.com
+DEEPSEEK_MODEL_NAME=deepseek-chat
+
+VOLC_API_KEY=...
+VOLC_MODEL_ID=...
+VOLC_BASE_URL=https://ark.cn-beijing.volces.com/api/v3
+
+CUSTOM_LLM_BASE_URL=https://api.openai.com/v1
+CUSTOM_LLM_API_KEY=...
+CUSTOM_LLM_MODEL_NAME=gpt-4o-mini
+
+# Provider Priority (comma-separated, highest first)
+# Supported: deepseek, gemini, volcengine, custom
+LLM_PRIORITY_LIST=deepseek,gemini,volcengine,custom
 
 # Database
 DATABASE_URL=postgresql+psycopg2://user:pass@localhost:5432/uni_admission
 ```
 
+**Chrome Extension Configuration:**
+- Open extension popup → Click ⚙️ Config button
+- Database URL: Set PostgreSQL connection string
+- LLM Priority: Drag providers to reorder (including custom)
+- Custom provider fields automatically expand in the list
+
 ---
 
 ## 8. Recent Updates & Bug Fixes
 
-### 8.1 Anti-Crawling Resilience (2026-02-27)
+### 8.1 Custom LLM Provider Integration (2026-02-28)
+
+**Feature**: Support for any OpenAI-compatible API endpoint as a custom LLM provider.
+- Added `CustomLLMProvider` class implementing the `LLMProvider` interface
+- Registered `custom` in `PROVIDER_REGISTRY` alongside deepseek/gemini/volcengine
+- Custom can be positioned anywhere in priority list via drag-and-drop in Chrome extension
+- Configuration fields: `CUSTOM_LLM_BASE_URL`, `CUSTOM_LLM_API_KEY`, `CUSTOM_LLM_MODEL_NAME`
+
+**CLI Wizard** (`uv run src/cmd/cli.py llm-config`):
+- Interactive prompt to select provider (DeepSeek/Gemini/Volcengine/Custom)
+- Collects provider-specific parameters
+- Saves to `.env` and automatically sets new provider as highest priority
+- Supports Ollama, OpenRouter, or any OpenAI-compatible local/remote endpoint
+
+**Architecture Changes**:
+- `custom` is now a first-class provider in `RouterAgent` priority routing
+- Frontend unified: custom provider appears in llm-list alongside built-in providers
+- Backend `.env` parsing handles `CUSTOM_LLM_*` keys via `PROVIDER_PREFIXES`
+
+### 8.2 Anti-Crawling Resilience (2026-02-27)
 
 **Problem**: Cookie consent banners caused navigation interference during crawling.
 - `simulate_user=True` in crawl4ai triggered clicks on cookie "Options" buttons

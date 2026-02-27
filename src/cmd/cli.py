@@ -66,6 +66,9 @@ DATABASE & STATUS:
     status     Show database statistics and connection info
     check      Run environment and dependency checks
     
+LLM CONFIGURATION:
+    llm-config Interactive wizard to configure LLM providers
+    
 SERVER OPERATIONS:
     serve      Start API + MCP server (default: 0.0.0.0:8910)
     serve-stop Stop running server instance
@@ -539,6 +542,155 @@ def upgrade(
                 
     except Exception as e:
         typer.echo(f"❌ Upgrade failed: {e}", err=True)
+        raise typer.Exit(code=1)
+
+
+@app.command(name="llm-config")
+def llm_config() -> None:
+    """Interactive LLM provider configuration wizard."""
+    from dotenv import dotenv_values
+    from pathlib import Path
+    
+    typer.echo("╔══════════════════════════════════════════╗")
+    typer.echo("║   LLM Provider Configuration Wizard     ║")
+    typer.echo("╚══════════════════════════════════════════╝\n")
+    
+    # Step 1: Choose provider
+    typer.echo("Available LLM providers:")
+    typer.echo("  1. DeepSeek")
+    typer.echo("  2. Gemini")
+    typer.echo("  3. Volcengine (Doubao)")
+    typer.echo("  4. Custom (OpenAI-compatible API)\n")
+    
+    choice = typer.prompt("Select a provider (1-4)", type=int)
+    
+    if choice not in [1, 2, 3, 4]:
+        typer.echo("❌ Invalid choice", err=True)
+        raise typer.Exit(code=1)
+    
+    provider_map = {
+        1: ("deepseek", "DeepSeek"),
+        2: ("gemini", "Gemini"),
+        3: ("volcengine", "Volcengine"),
+        4: ("custom", "Custom"),
+    }
+    
+    provider_key, provider_name = provider_map[choice]
+    
+    typer.echo(f"\n📝 Configuring {provider_name}...\n")
+    
+    # Step 2: Collect provider-specific parameters
+    config_updates = {}
+    
+    if provider_key == "deepseek":
+        api_key = typer.prompt("DeepSeek API Key")
+        model = typer.prompt("Model name", default="deepseek-chat")
+        base_url = typer.prompt("Base URL", default="https://api.deepseek.com")
+        
+        config_updates["DEEPSEEK_API_KEY"] = api_key
+        config_updates["DEEPSEEK_MODEL_NAME"] = model
+        config_updates["DEEPSEEK_BASE_URL"] = base_url
+        
+    elif provider_key == "gemini":
+        api_key = typer.prompt("Google Gemini API Key")
+        model = typer.prompt("Model name", default="gemini-2.0-flash-exp")
+        
+        config_updates["GEMINI_API_KEY"] = api_key
+        config_updates["GEMINI_MODEL"] = model
+        
+    elif provider_key == "volcengine":
+        api_key = typer.prompt("Volcengine API Key")
+        model_id = typer.prompt("Model ID (endpoint ID)")
+        base_url = typer.prompt("Base URL", default="https://ark.cn-beijing.volces.com/api/v3")
+        region = typer.prompt("Region", default="cn-beijing")
+        
+        config_updates["VOLC_API_KEY"] = api_key
+        config_updates["VOLC_MODEL_ID"] = model_id
+        config_updates["VOLC_BASE_URL"] = base_url
+        config_updates["VOLC_REGION"] = region
+        
+    elif provider_key == "custom":
+        base_url = typer.prompt("Base URL (e.g., https://api.openai.com/v1)")
+        api_key = typer.prompt("API Key (leave empty if not required)", default="")
+        model_name = typer.prompt("Model name", default="gpt-4o-mini")
+        
+        config_updates["CUSTOM_LLM_BASE_URL"] = base_url
+        config_updates["CUSTOM_LLM_API_KEY"] = api_key
+        config_updates["CUSTOM_LLM_MODEL_NAME"] = model_name
+    
+    # Step 3: Update .env file
+    typer.echo("\n💾 Saving configuration to .env...")
+    
+    try:
+        from dotenv import find_dotenv
+        env_path = Path(find_dotenv() or ".env")
+        
+        # Read existing content
+        if env_path.exists():
+            existing = dotenv_values(env_path)
+            lines = env_path.read_text(encoding="utf-8").splitlines()
+        else:
+            existing = {}
+            lines = []
+        
+        # Update config values
+        updated_keys = set()
+        new_lines = []
+        
+        for line in lines:
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#"):
+                new_lines.append(line)
+                continue
+            
+            if "=" in stripped:
+                key = stripped.split("=", 1)[0].strip()
+                if key in config_updates:
+                    new_lines.append(f"{key}={config_updates[key]}")
+                    updated_keys.add(key)
+                else:
+                    new_lines.append(line)
+            else:
+                new_lines.append(line)
+        
+        # Add new keys
+        for key, value in config_updates.items():
+            if key not in updated_keys:
+                new_lines.append(f"{key}={value}")
+        
+        # Step 4: Update LLM_PRIORITY_LIST (put new provider first)
+        current_priority = existing.get("LLM_PRIORITY_LIST", "deepseek,gemini")
+        priority_list = [p.strip() for p in current_priority.split(",") if p.strip()]
+        
+        # Remove provider if already in list
+        if provider_key in priority_list:
+            priority_list.remove(provider_key)
+        
+        # Add to front
+        priority_list.insert(0, provider_key)
+        new_priority = ", ".join(priority_list)
+        
+        # Update priority in lines
+        priority_updated = False
+        for i, line in enumerate(new_lines):
+            if line.strip().startswith("LLM_PRIORITY_LIST="):
+                new_lines[i] = f"LLM_PRIORITY_LIST={new_priority}"
+                priority_updated = True
+                break
+        
+        if not priority_updated:
+            new_lines.append(f"LLM_PRIORITY_LIST={new_priority}")
+        
+        # Write back
+        env_path.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
+        
+        typer.echo(f"✅ Configuration saved successfully!")
+        typer.echo(f"✅ {provider_name} set as highest priority")
+        typer.echo(f"\nLLM Priority Order: {new_priority}")
+        typer.echo("\n💡 Tip: Restart the server for changes to take effect.")
+        
+    except Exception as e:
+        typer.echo(f"❌ Failed to save configuration: {e}", err=True)
         raise typer.Exit(code=1)
 
 

@@ -71,6 +71,10 @@ Go to the [Releases Page](../../releases) and download the artifact for your OS:
    ```
 2. Run via terminal:
    ```bash
+   
+   # For Mac OS you need run this first to override the safety control
+   xattr -cr /path/to/your/adm-agent
+
    # Check environment
    ./adm-agent check
    
@@ -107,8 +111,14 @@ The agent needs a database connection.
    VOLC_API_KEY=your_volc_api_key_here
    VOLC_MODEL_ID=your_model_endpoint_id
 
-   # LLM Priority config
-   LLM_PRIORITY_LIST=deepseek, gemini, volcengine
+   # Custom LLM Provider (OpenAI-compatible API)
+   CUSTOM_LLM_BASE_URL=https://api.openai.com/v1
+   CUSTOM_LLM_API_KEY=your_openai_api_key_here
+   CUSTOM_LLM_MODEL_NAME=gpt-4o-mini
+
+   # LLM Priority config (drag to reorder in Chrome extension)
+   # Supported providers: deepseek, gemini, volcengine, custom
+   LLM_PRIORITY_LIST=deepseek, gemini, volcengine, custom
    ```
 3. Set your `DATABASE_URL` and API keys in `.env`.
 
@@ -124,6 +134,9 @@ The agent needs a database connection.
 ```bash
 # Environment check
 ./adm-agent check
+
+# Configure LLM provider (interactive wizard)
+./adm-agent llm-config
 
 # Install Playwright browser (only needed once)
 ./adm-agent browser-install
