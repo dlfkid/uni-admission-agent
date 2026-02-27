@@ -17,6 +17,7 @@ import logging
 import os
 import platform
 import shutil
+import ssl
 import subprocess
 import sys
 import tarfile
@@ -24,7 +25,14 @@ import tempfile
 import zipfile
 from pathlib import Path
 from urllib.parse import urljoin
-from urllib.request import urlopen, urlretrieve
+from urllib.request import urlopen, Request
+
+try:
+    import certifi
+    _SSL_CONTEXT = ssl.create_default_context(cafile=certifi.where())
+except ImportError:
+    # Fallback: use default context (may fail on macOS PyInstaller builds)
+    _SSL_CONTEXT = ssl.create_default_context()
 
 logger = logging.getLogger(__name__)
 
@@ -40,30 +48,18 @@ class UpgradeError(Exception):
 
 
 def get_current_version() -> str:
-    """Get the current version of the backend executable."""
+    """Get the current version of the backend executable.
+
+    The build script injects the git-tag version into ``src/__init__.__version__``
+    before PyInstaller bundles the package, so a simple import works in both
+    frozen (PyInstaller) and normal development contexts.
+    """
     try:
-        # If running as compiled executable, try --version flag
-        if getattr(sys, 'frozen', False):
-            result = subprocess.run(
-                [sys.executable, "--version"],
-                capture_output=True,
-                text=True,
-                timeout=10
-            )
-            if result.returncode == 0:
-                version = result.stdout.strip()
-                return version if version.startswith('v') else f"v{version}"
-        else:
-            # Import version from package
-            try:
-                from src import __version__
-                return f"v{__version__}"
-            except ImportError:
-                pass
-            
-    except (subprocess.TimeoutExpired, FileNotFoundError):
+        from src import __version__
+        ver = __version__
+        return ver if ver.startswith("v") else f"v{ver}"
+    except ImportError:
         pass
-    
     return "v0.0.0-dev"
 
 
@@ -96,12 +92,14 @@ def get_latest_release() -> dict:
     api_url = f"{GITHUB_RELEASE_API}/latest"
     
     try:
-        with urlopen(api_url, timeout=30) as response:
+        with urlopen(api_url, timeout=30, context=_SSL_CONTEXT) as response:
             if response.status != 200:
                 raise UpgradeError(f"GitHub API returned status {response.status}")
             
             data = json.loads(response.read().decode())
             return data
+    except UpgradeError:
+        raise
     except Exception as e:
         raise UpgradeError(f"Failed to fetch release information: {e}")
 
@@ -136,7 +134,10 @@ def download_and_extract(asset: dict, target_dir: Path) -> Path:
         
         # Download
         try:
-            urlretrieve(download_url, download_file)
+            req = Request(download_url)
+            with urlopen(req, timeout=300, context=_SSL_CONTEXT) as resp:
+                with open(download_file, "wb") as fh:
+                    shutil.copyfileobj(resp, fh)
         except Exception as e:
             raise UpgradeError(f"Failed to download {filename}: {e}")
         

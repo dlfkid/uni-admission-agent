@@ -57,6 +57,8 @@ _COLLECT_PKGS = [
     "mcp",
     # --- PDF ---
     "pymupdf4llm",
+    # --- SSL certs (needed for macOS PyInstaller builds) ---
+    "certifi",
 ]
 
 all_datas = []
