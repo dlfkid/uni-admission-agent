@@ -99,11 +99,17 @@ def process_page_for_program(
             ]
 
         if parsed.deadlines:
-            # Sort by date
-            sorted_deadlines = sorted(
-                parsed.deadlines,
-                key=lambda x: x.cutoff_date or datetime.max,
-            )
+            # Sort by date (handle both offset-aware and offset-naive datetimes)
+            def sort_key(deadline):
+                if deadline.cutoff_date is None:
+                    return datetime.max
+                # Convert to naive datetime if offset-aware
+                dt = deadline.cutoff_date
+                if dt.tzinfo is not None:
+                    dt = dt.replace(tzinfo=None)
+                return dt
+            
+            sorted_deadlines = sorted(parsed.deadlines, key=sort_key)
             program_data["deadlines"] = []
             for i, d in enumerate(sorted_deadlines, 1):
                 d_dict = d.model_dump(mode="json")

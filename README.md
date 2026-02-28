@@ -428,3 +428,46 @@ chmod +x .git/hooks/pre-push
 # Check code quality manually
 uv run pylint src/ scripts/
 ```
+
+### Testing & Coverage
+
+**Run Tests:**
+```bash
+# Run all tests (excluding integration tests)
+uv run pytest
+
+# Run with verbose output
+uv run pytest -v
+
+# Run specific test file
+uv run pytest tests/test_cleaner_validators.py
+
+# Stop at first failure
+uv run pytest -x
+```
+
+**Test Coverage:**
+```bash
+# Run tests with coverage report
+uv run pytest --cov=src --cov-report=term
+
+# Generate HTML coverage report
+uv run pytest --cov=src --cov-report=html
+# Open htmlcov/index.html in browser
+
+# Show missing lines in terminal
+uv run pytest --cov=src --cov-report=term-missing
+
+# Generate multiple reports (XML for CI, HTML for local)
+uv run pytest --cov=src --cov-report=term --cov-report=xml --cov-report=html
+```
+
+**Coverage Configuration:**
+- Source: `src/` directory
+- Excluded: `tests/`, `__pycache__/`
+- Configuration: See `[tool.coverage]` in `pyproject.toml`
+
+**CI/CD:**
+- GitHub Actions automatically runs tests with coverage on every push
+- Coverage reports are uploaded to Codecov (if configured)
+- View coverage summary in GitHub Actions job summary

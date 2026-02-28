@@ -21,6 +21,7 @@ logger = logging.getLogger(__name__)
 # --- Constants ---
 
 MAX_DETAIL_CHARS = 20000  # Max chars per chunk for detail page parsing
+CHUNK_OVERLAP_RATIO = 0.20  # 20% overlap between consecutive chunks to prevent context truncation
 PROMPTS_DIR = get_prompts_dir()
 
 
@@ -38,6 +39,41 @@ def _load_prompt(filename: str) -> str:
 class ParsedTuition(BaseModel):
     amount: Decimal = Field(..., description="Tuition amount in numbers, e.g., 350000.00")
     currency: CurrencyCode = Field(..., description="Currency code, e.g., HKD, USD")
+
+    @field_validator("amount", mode="before")
+    @classmethod
+    def _parse_amount(cls, v: object) -> object:
+        """Parse shorthand formats like '14k', '1.5m', '350K' into Decimal.
+        
+        LLMs sometimes return abbreviated amounts. Convert to full numbers:
+        - '14k' or '14K' → 14000
+        - '1.5m' or '1.5M' → 1500000
+        - '350,000' → 350000 (strip commas)
+        """
+        if not isinstance(v, str):
+            return v
+        
+        # Remove commas and spaces
+        v_clean = v.replace(",", "").replace(" ", "").strip()
+        
+        # Handle 'k' or 'K' suffix (thousands)
+        if v_clean.lower().endswith("k"):
+            try:
+                base = float(v_clean[:-1])
+                return Decimal(str(base * 1000))
+            except (ValueError, TypeError):
+                pass
+        
+        # Handle 'm' or 'M' suffix (millions)
+        if v_clean.lower().endswith("m"):
+            try:
+                base = float(v_clean[:-1])
+                return Decimal(str(base * 1_000_000))
+            except (ValueError, TypeError):
+                pass
+        
+        # Return cleaned string for normal Decimal parsing
+        return v_clean
 
 
 class ParsedStudyOption(BaseModel):
@@ -235,9 +271,10 @@ class LLMCleanerAgent:
         """
         chunks = self._split_chunks(markdown, MAX_DETAIL_CHARS)
         total_chunks = len(chunks)
+        overlap_chars = int(MAX_DETAIL_CHARS * CHUNK_OVERLAP_RATIO)
         logger.info(
-            "Large detail page (%s chars) split into %d chunks: %s",
-            f"{len(markdown):,}", total_chunks, source_url,
+            "Large detail page (%s chars) split into %d overlapping chunks (overlap: %d chars, %.0f%%): %s",
+            f"{len(markdown):,}", total_chunks, overlap_chars, CHUNK_OVERLAP_RATIO * 100, source_url,
         )
 
         prompt_template = _load_prompt("clean_chunk.txt")
@@ -287,38 +324,74 @@ class LLMCleanerAgent:
         return accumulated
 
     @staticmethod
-    def _split_chunks(text: str, max_chars: int) -> List[str]:
-        """Split text into chunks on paragraph boundaries.
+    def _split_chunks(text: str, max_chars: int, overlap_ratio: float = CHUNK_OVERLAP_RATIO) -> List[str]:
+        """Split text into overlapping chunks on paragraph boundaries.
+
+        Chunks overlap by `overlap_ratio` (default 20%) to prevent context truncation
+        when critical information spans chunk boundaries. The deduplication logic
+        in `_merge_parsed_data` automatically handles duplicate data from overlaps.
 
         Args:
             text: Full text to split.
             max_chars: Maximum characters per chunk.
+            overlap_ratio: Fraction of overlap between consecutive chunks (0.0-0.5).
 
         Returns:
-            List of text chunks.
+            List of overlapping text chunks.
+
+        Example:
+            For max_chars=20000 and overlap_ratio=0.2:
+            - Chunk 1: chars 0-20000
+            - Chunk 2: chars 16000-36000 (4000 char overlap)
+            - Chunk 3: chars 32000-52000 (4000 char overlap)
         """
         if len(text) <= max_chars:
             return [text]
 
-        chunks: List[str] = []
-        remaining = text
+        # Clamp overlap ratio to reasonable range
+        overlap_ratio = max(0.0, min(0.5, overlap_ratio))
+        overlap_chars = int(max_chars * overlap_ratio)
+        step_size = max_chars - overlap_chars
 
-        while remaining:
-            if len(remaining) <= max_chars:
-                chunks.append(remaining)
+        chunks: List[str] = []
+        start = 0
+
+        while start < len(text):
+            end = min(start + max_chars, len(text))
+
+            # If this is the last chunk, just take the remaining text
+            if end == len(text):
+                chunks.append(text[start:])
                 break
 
-            slice_end = remaining[:max_chars]
-            split_pos = slice_end.rfind("\n\n")
+            # Find a good paragraph break near the end of the chunk
+            slice_text = text[start:end]
+            split_pos = slice_text.rfind("\n\n")
 
-            if split_pos < max_chars // 2:
-                split_pos = slice_end.rfind("\n")
+            # If no good paragraph break, try single newline
+            if split_pos < len(slice_text) // 2:
+                split_pos = slice_text.rfind("\n")
 
-            if split_pos < max_chars // 2:
-                split_pos = max_chars
+            # If still no newline, do hard split at max_chars
+            if split_pos < len(slice_text) // 2:
+                split_pos = len(slice_text)
 
-            chunks.append(remaining[:split_pos])
-            remaining = remaining[split_pos:].lstrip("\n")
+            # Append the chunk
+            chunk_end = start + split_pos
+            chunks.append(text[start:chunk_end])
+
+            # Move start forward by step_size (creating overlap)
+            start += step_size
+
+            # Adjust start to a newline boundary if possible (for cleaner overlap)
+            if start < len(text):
+                # Look for a newline within a small window
+                window_start = max(start - 50, chunk_end)
+                window_end = min(start + 50, len(text))
+                window_text = text[window_start:window_end]
+                newline_pos = window_text.find("\n")
+                if newline_pos != -1:
+                    start = window_start + newline_pos + 1
 
         return chunks
 

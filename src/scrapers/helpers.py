@@ -56,50 +56,79 @@ def save_html_debug(export_path: str, url: str, html: str) -> None:
 
 
 def split_markdown_chunks(
-    markdown: str, max_chars: int,
+    markdown: str, max_chars: int, overlap_ratio: float = 0.20,
 ) -> List[str]:
-    """Split Markdown into chunks that fit within the LLM context window.
+    """Split Markdown into overlapping chunks that fit within the LLM context window.
 
-    Splits on double-newline (paragraph) boundaries to avoid cutting
-    mid-link or mid-sentence. Falls back to hard split if no paragraph
-    break is found within the chunk.
+    Chunks overlap by `overlap_ratio` (default 20%) to prevent context truncation
+    when critical information spans chunk boundaries. Splits on double-newline
+    (paragraph) boundaries to avoid cutting mid-link or mid-sentence.
 
     Args:
         markdown: Full Markdown content.
         max_chars: Maximum characters per chunk.
+        overlap_ratio: Fraction of overlap between consecutive chunks (0.0-0.5).
 
     Returns:
-        List of Markdown chunks, each ≤ max_chars.
+        List of overlapping Markdown chunks.
+
+    Example:
+        For max_chars=20000 and overlap_ratio=0.2:
+        - Chunk 1: chars 0-20000
+        - Chunk 2: chars 16000-36000 (4000 char overlap)
+        - Chunk 3: chars 32000-52000 (4000 char overlap)
     """
     if len(markdown) <= max_chars:
         return [markdown]
 
-    chunks: List[str] = []
-    remaining = markdown
+    # Clamp overlap ratio to reasonable range
+    overlap_ratio = max(0.0, min(0.5, overlap_ratio))
+    overlap_chars = int(max_chars * overlap_ratio)
+    step_size = max_chars - overlap_chars
 
-    while remaining:
-        if len(remaining) <= max_chars:
-            chunks.append(remaining)
+    chunks: List[str] = []
+    start = 0
+
+    while start < len(markdown):
+        end = min(start + max_chars, len(markdown))
+
+        # If this is the last chunk, just take the remaining text
+        if end == len(markdown):
+            chunks.append(markdown[start:])
             break
 
-        # Find a paragraph break near the end of the chunk
-        slice_end = remaining[:max_chars]
-        split_pos = slice_end.rfind("\n\n")
+        # Find a good paragraph break near the end of the chunk
+        slice_text = markdown[start:end]
+        split_pos = slice_text.rfind("\n\n")
 
-        if split_pos < max_chars // 2:
-            # No good paragraph break found — try single newline
-            split_pos = slice_end.rfind("\n")
+        # If no good paragraph break, try single newline
+        if split_pos < len(slice_text) // 2:
+            split_pos = slice_text.rfind("\n")
 
-        if split_pos < max_chars // 2:
-            # No newline at all — hard split
-            split_pos = max_chars
+        # If still no newline, do hard split at max_chars
+        if split_pos < len(slice_text) // 2:
+            split_pos = len(slice_text)
 
-        chunks.append(remaining[:split_pos])
-        remaining = remaining[split_pos:].lstrip("\n")
+        # Append the chunk
+        chunk_end = start + split_pos
+        chunks.append(markdown[start:chunk_end])
+
+        # Move start forward by step_size (creating overlap)
+        start += step_size
+
+        # Adjust start to a newline boundary if possible (for cleaner overlap)
+        if start < len(markdown):
+            # Look for a newline within a small window
+            window_start = max(start - 50, chunk_end)
+            window_end = min(start + 50, len(markdown))
+            window_text = markdown[window_start:window_end]
+            newline_pos = window_text.find("\n")
+            if newline_pos != -1:
+                start = window_start + newline_pos + 1
 
     logger.info(
-        "Split %s chars into %d chunks",
-        f"{len(markdown):,}", len(chunks),
+        "Split %s chars into %d overlapping chunks (overlap: %d chars, %.0f%%)",
+        f"{len(markdown):,}", len(chunks), overlap_chars, overlap_ratio * 100,
     )
     return chunks
 
