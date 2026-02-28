@@ -6,6 +6,7 @@ All tests use MagicMock to avoid real LLM calls and token consumption.
 import json
 import os
 import sys
+import types
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch, PropertyMock
 
@@ -142,7 +143,7 @@ class TestDeepSeekProvider:
             from src.agents.providers.deepseek import DeepSeekProvider
             provider = DeepSeekProvider(api_key="sk-test")
             # Disable tenacity retries for testing
-            provider.generate = provider.generate.__wrapped__.__get__(provider)
+            provider.generate = types.MethodType(provider.generate.__wrapped__, provider)
             with pytest.raises(RateLimitError):
                 provider.generate("test", _TestSchema)
 

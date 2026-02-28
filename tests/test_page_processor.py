@@ -144,7 +144,7 @@ def test_process_page_html_fallback() -> None:
     assert success is True
     # The HTML should have been passed to clean_markdown instead of short markdown
     call_args = cleaner.clean_markdown.call_args
-    assert call_args[1]["markdown"] == large_html or call_args[0][0] == large_html
+    assert call_args[1]["markdown"] == large_html
 
 
 def test_process_page_no_html_fallback_when_md_long_enough() -> None:
