@@ -7,7 +7,6 @@ import threading
 from datetime import datetime, timezone
 from typing import Any, Optional, Tuple, List, Dict
 
-from dotenv import load_dotenv, find_dotenv
 from sqlalchemy import inspect as sa_inspect
 from sqlalchemy import text
 from sqlmodel import create_engine, Session, select, SQLModel, col
@@ -17,7 +16,6 @@ from src.models.admission import (
     University,
     Program,
     ProgramCatalog,
-    StudyMode,
     CurrencyCode,
 )
 from src.models.requirement import (
@@ -32,73 +30,22 @@ from src.models.requirement import (
     RequirementCategory,
 )
 from src.models.scraper_models import ProgramContext
+from src.storage.db_helpers import (
+    load_database_env,
+    patch_psycopg2_for_gbk,
+    normalize_text_payload as _normalize_text_payload,
+    catalog_key,
+    value_should_apply,
+    parse_study_mode,
+    parse_datetime,
+    extract_requirements_from_extra_metadata,
+)
 
-
-# On Windows with a Chinese locale the .env file may be saved in GBK/GB18030.
-# Try common encodings in priority order so DATABASE_URL always loads correctly.
-_ENV_FILE = find_dotenv(usecwd=True) or find_dotenv()
-if _ENV_FILE:
-    for _enc in ("utf-8-sig", "utf-8", "gb18030"):
-        try:
-            load_dotenv(_ENV_FILE, encoding=_enc, override=True)
-            break
-        except (UnicodeDecodeError, LookupError):
-            continue
-else:
-    load_dotenv()
+load_database_env()
 
 logger = logging.getLogger(__name__)
 
-
-def _normalize_text_payload(value: Any) -> Any:
-    """Normalize payload values for DB writes."""
-    if isinstance(value, dict):
-        return {
-            _normalize_text_payload(k): _normalize_text_payload(v)
-            for k, v in value.items()
-        }
-    if isinstance(value, list):
-        return [_normalize_text_payload(item) for item in value]
-    if isinstance(value, tuple):
-        return tuple(_normalize_text_payload(item) for item in value)
-    if isinstance(value, bytes):
-        for encoding in ("utf-8", "gb18030", "latin-1"):
-            try:
-                return value.decode(encoding)
-            except UnicodeDecodeError:
-                continue
-        return value.decode("utf-8", errors="replace")
-    return value
-
-
-def _patch_psycopg2_for_gbk() -> None:
-    """Patch psycopg2.connect for GBK locale decoding on Windows."""
-    try:
-        import psycopg2  # pylint: disable=import-outside-toplevel
-        from psycopg2 import OperationalError  # pylint: disable=import-outside-toplevel
-    except ImportError:
-        return
-
-    original_connect = psycopg2.connect
-
-    def _gbk_safe_connect(*args, **kwargs):
-        try:
-            return original_connect(*args, **kwargs)
-        except UnicodeDecodeError as exc:
-            raw_bytes: bytes = exc.object  # type: ignore[assignment]
-            try:
-                decoded = raw_bytes.decode("gbk", errors="replace")
-            except Exception:  # pragma: no cover
-                decoded = raw_bytes.decode("latin-1", errors="replace")
-            raise OperationalError(
-                "psycopg2 connection failed (GBK error message re-decoded): "
-                f"{decoded}"
-            ) from exc
-
-    psycopg2.connect = _gbk_safe_connect  # type: ignore[assignment]
-
-
-_patch_psycopg2_for_gbk()
+patch_psycopg2_for_gbk()
 
 
 class DatabaseManager:
@@ -208,47 +155,6 @@ class DatabaseManager:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _catalog_key(program_group_code: Optional[str], name_en: str) -> str:
-        if program_group_code and program_group_code.strip():
-            return f"group:{program_group_code.strip().lower()}"
-        normalized = re.sub(r"[^a-z0-9]+", "-", (name_en or "").lower()).strip("-")
-        return f"name:{normalized or 'unnamed'}"
-
-    @staticmethod
-    def _value_should_apply(value: Any) -> bool:
-        if value is None:
-            return False
-        if isinstance(value, str) and value.strip() == "":
-            return False
-        return True
-
-    @staticmethod
-    def _parse_study_mode(value: Any) -> StudyMode:
-        text_value = str(value or "").strip().lower()
-        if text_value in {"fulltime", "full_time", "full time", "ft"}:
-            return StudyMode.FULL_TIME
-        if text_value in {"parttime", "part_time", "part time", "pt"}:
-            return StudyMode.PART_TIME
-        if text_value in {"hybrid", "mixed", "blended"}:
-            return StudyMode.HYBRID
-        return StudyMode.UNKNOWN
-
-    @staticmethod
-    def _parse_datetime(value: Any) -> Optional[datetime]:
-        if value in (None, ""):
-            return None
-        if isinstance(value, datetime):
-            return value
-        text_value = str(value).strip().replace("Z", "+00:00")
-        try:
-            parsed = datetime.fromisoformat(text_value)
-        except ValueError:
-            return None
-        if parsed.tzinfo is None:
-            return parsed.replace(tzinfo=timezone.utc)
-        return parsed
-
-    @staticmethod
     def _normalize_dim_key(value: Any, prefix: str) -> Optional[str]:
         text = str(value or "").strip().lower()
         if not text:
@@ -355,7 +261,7 @@ class DatabaseManager:
             "evidence_locator_value": (
                 str(item.get("evidence_locator_value") or item.get("evidence_locator") or "").strip() or None
             ),
-            "evidence_captured_at": DatabaseManager._parse_datetime(item.get("evidence_captured_at")),
+            "evidence_captured_at": parse_datetime(item.get("evidence_captured_at")),
             "exam_code": exam_fields["exam_code"],
             "exam_display_name": exam_fields["exam_display_name"],
             "exam_family": exam_fields["exam_family"],
@@ -408,62 +314,6 @@ class DatabaseManager:
             "removed": [json.loads(item) for item in removed[:20]],
         }
 
-    @staticmethod
-    def _extract_requirements_from_extra_metadata(extra_metadata: dict[str, Any]) -> list[dict[str, Any]]:
-        if not isinstance(extra_metadata, dict):
-            return []
-
-        out: list[dict[str, Any]] = []
-        explicit = extra_metadata.get("requirements")
-        if isinstance(explicit, list):
-            for idx, item in enumerate(explicit):
-                if isinstance(item, dict):
-                    out.append(
-                        {
-                            "category": item.get("category", "other"),
-                            "subject_name": item.get("subject_name") or item.get("subject"),
-                            "framework": item.get("framework"),
-                            "minimum_value": item.get("minimum_value") or item.get("score"),
-                            "unit": item.get("unit"),
-                            "applicant_scope": item.get("applicant_scope", "all"),
-                            "requirement_text": item.get("requirement_text") or item.get("text") or "",
-                            "evidence_url": item.get("evidence_url"),
-                            "sort_order": idx,
-                        }
-                    )
-
-        keywords = (
-            "requirement",
-            "entry",
-            "subject",
-            "grade",
-            "ielts",
-            "toefl",
-            "sat",
-            "act",
-            "gmat",
-            "gre",
-        )
-        idx = len(out)
-        for key, value in extra_metadata.items():
-            key_str = str(key).strip()
-            value_str = str(value).strip()
-            if not key_str or not value_str:
-                continue
-            if not any(k in key_str.lower() for k in keywords):
-                continue
-            out.append(
-                {
-                    "category": "academic_subject",
-                    "subject_name": key_str,
-                    "requirement_text": value_str,
-                    "sort_order": idx,
-                }
-            )
-            idx += 1
-
-        return out
-
     def _sync_study_option_records(
         self,
         session: Session,
@@ -484,7 +334,7 @@ class DatabaseManager:
             session.add(
                 ProgramStudyOption(
                     program_id=program_id,
-                    mode=self._parse_study_mode(item.get("mode")),
+                    mode=parse_study_mode(item.get("mode")),
                     duration_months=duration,
                     notes=str(item.get("notes") or item.get("description") or "").strip() or None,
                 )
@@ -512,7 +362,7 @@ class DatabaseManager:
                     program_id=program_id,
                     round=round_value,
                     description=str(item.get("description") or "").strip() or None,
-                    cutoff_date=self._parse_datetime(item.get("cutoff_date")),
+                    cutoff_date=parse_datetime(item.get("cutoff_date")),
                 )
             )
 
@@ -850,14 +700,14 @@ class DatabaseManager:
 
             # 3) Resolve catalog identity.
             group_code = full_data.get("program_group_code")
-            catalog_key = self._catalog_key(group_code, full_data["name_en"])
+            resolved_catalog_key = catalog_key(group_code, full_data["name_en"])
             catalog = session.exec(
                 select(ProgramCatalog).where(
                     ProgramCatalog.university_id == univ.id,
-                    ProgramCatalog.catalog_key == catalog_key,
+                    ProgramCatalog.catalog_key == resolved_catalog_key,
                 )
             ).first()
-            if not catalog and not self._value_should_apply(group_code):
+            if not catalog and not value_should_apply(group_code):
                 existing_same_name = session.exec(
                     select(Program).where(
                         Program.university_id == univ.id,
@@ -875,7 +725,7 @@ class DatabaseManager:
             if not catalog:
                 catalog = ProgramCatalog(
                     university_id=univ.id,
-                    catalog_key=catalog_key,
+                    catalog_key=resolved_catalog_key,
                     program_group_code=group_code,
                     canonical_name_en=full_data.get("name_en"),
                     canonical_name_zh=full_data.get("name_zh"),
@@ -885,13 +735,13 @@ class DatabaseManager:
                 session.commit()
                 session.refresh(catalog)
             else:
-                if self._value_should_apply(group_code):
+                if value_should_apply(group_code):
                     catalog.program_group_code = group_code
-                if self._value_should_apply(full_data.get("name_en")):
+                if value_should_apply(full_data.get("name_en")):
                     catalog.canonical_name_en = full_data.get("name_en")
-                if self._value_should_apply(full_data.get("name_zh")):
+                if value_should_apply(full_data.get("name_zh")):
                     catalog.canonical_name_zh = full_data.get("name_zh")
-                if self._value_should_apply(full_data.get("faculty")):
+                if value_should_apply(full_data.get("faculty")):
                     catalog.faculty = full_data.get("faculty")
                 catalog.updated_at = datetime.now(timezone.utc)
                 session.add(catalog)
@@ -939,7 +789,7 @@ class DatabaseManager:
                         value = CurrencyCode(value)
                     except ValueError:
                         value = None
-                if self._value_should_apply(value):
+                if value_should_apply(value):
                     setattr(program, field_name, value)
                 elif getattr(program, field_name, None) is None:
                     setattr(program, field_name, value)
@@ -968,7 +818,7 @@ class DatabaseManager:
                     source_url=full_data.get("source_url"),
                 )
             else:
-                extra_requirements = self._extract_requirements_from_extra_metadata(
+                extra_requirements = extract_requirements_from_extra_metadata(
                     full_data.get("extra_metadata") or {}
                 )
                 if extra_requirements:

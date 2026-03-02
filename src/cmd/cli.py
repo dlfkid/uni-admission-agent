@@ -19,6 +19,7 @@ import logging
 import os
 import re
 import signal
+import subprocess
 import sys
 from pathlib import Path
 from typing import Optional
@@ -146,7 +147,6 @@ def _find_pid_by_port(port: int) -> "Optional[int]":
     Works on macOS/Linux (via lsof) and Windows (via netstat).
     Returns None if no process is found or the lookup fails.
     """
-    import subprocess
     import platform
 
     try:
@@ -617,6 +617,77 @@ def repair(
         raise typer.Exit(code=1)
 
 
+def _print_upgrade_check(update_info: dict) -> None:
+    if "error" in update_info:
+        typer.echo(f"❌ Failed to check for updates: {update_info['error']}", err=True)
+        raise typer.Exit(code=1)
+
+    typer.echo(f"📋 Current version: {update_info['current_version']}")
+    typer.echo(f"📋 Latest version:  {update_info['latest_version']}")
+
+    if not update_info.get("is_newer"):
+        typer.echo("✅ Already on latest version.")
+        return
+    if update_info.get("asset_available"):
+        typer.echo("🎯 Update available! Run 'upgrade' without --check to install.")
+        return
+
+    typer.echo("⚠️  Update available but no compatible asset found.")
+    release_url = update_info.get("release_url")
+    if release_url:
+        typer.echo(f"   Manual download: {release_url}")
+
+
+def _run_cli_subcommand(args: list[str]) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [sys.executable, *args],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def _print_subprocess_logs(proc: subprocess.CompletedProcess[str], verbose: bool) -> None:
+    if not verbose:
+        return
+    if proc.stdout:
+        typer.echo(proc.stdout.strip())
+    if proc.stderr:
+        typer.echo(proc.stderr.strip(), err=True)
+
+
+def _run_migration_after_upgrade(verbose: bool) -> None:
+    typer.echo("🔄 Running database migration...")
+    migrate_proc = _run_cli_subcommand(["db-migrate", "--yes"])
+    if migrate_proc.returncode == 0:
+        typer.echo("✅ Database migration completed.")
+        return
+
+    typer.echo("⚠️  Upgrade succeeded but DB migration failed.", err=True)
+    _print_subprocess_logs(migrate_proc, verbose)
+    typer.echo("🛠 Attempting automatic rollback repair...")
+
+    repair_proc = _run_cli_subcommand(["repair", "--auto"])
+    if repair_proc.returncode == 0:
+        typer.echo("✅ Auto-repair succeeded. Data restored to a safe state.")
+        return
+
+    typer.echo("❌ Auto-repair failed. Please run: adm-agent repair --auto", err=True)
+    _print_subprocess_logs(repair_proc, verbose)
+    raise typer.Exit(code=1)
+
+
+def _perform_upgrade(force: bool, migrate: bool, verbose: bool) -> None:
+    if not upgrade_backend(force=force, verbose=verbose):
+        typer.echo("ℹ️  No upgrade needed.")
+        return
+
+    typer.echo("🎉 Upgrade completed successfully!")
+    if migrate:
+        _run_migration_after_upgrade(verbose)
+    typer.echo("ℹ️  Restart the server if it's currently running.")
+
+
 @app.command()
 def upgrade(
     check_only: bool = typer.Option(False, "--check", help="Only check for updates, don't install"),
@@ -626,72 +697,14 @@ def upgrade(
 ) -> None:
     """Check for and install backend updates from GitHub releases."""
     _setup_logging(verbose)
-    
+
     try:
         if check_only:
-            # Only check for updates
-            update_info = check_for_updates(verbose=verbose)
-            
-            current = update_info["current_version"]
-            latest = update_info["latest_version"]
-            
-            if "error" in update_info:
-                typer.echo(f"❌ Failed to check for updates: {update_info['error']}", err=True)
-                raise typer.Exit(code=1)
-            
-            typer.echo(f"📋 Current version: {current}")
-            typer.echo(f"📋 Latest version:  {latest}")
-            
-            if update_info["is_newer"]:
-                if update_info["asset_available"]:
-                    typer.echo("🎯 Update available! Run 'upgrade' without --check to install.")
-                else:
-                    typer.echo("⚠️  Update available but no compatible asset found.")
-                    if "release_url" in update_info:
-                        typer.echo(f"   Manual download: {update_info['release_url']}")
-            else:
-                typer.echo("✅ Already on latest version.")
-        else:
-            # Perform upgrade
-            if upgrade_backend(force=force, verbose=verbose):
-                typer.echo("🎉 Upgrade completed successfully!")
-                if migrate:
-                    import subprocess
-
-                    typer.echo("🔄 Running database migration...")
-                    proc = subprocess.run(
-                        [sys.executable, "db-migrate", "--yes"],
-                        capture_output=True,
-                        text=True,
-                        check=False,
-                    )
-                    if proc.returncode == 0:
-                        typer.echo("✅ Database migration completed.")
-                    else:
-                        typer.echo("⚠️  Upgrade succeeded but DB migration failed.", err=True)
-                        if verbose and proc.stderr:
-                            typer.echo(proc.stderr.strip(), err=True)
-                        typer.echo("🛠 Attempting automatic rollback repair...")
-                        repair_proc = subprocess.run(
-                            [sys.executable, "repair", "--auto"],
-                            capture_output=True,
-                            text=True,
-                            check=False,
-                        )
-                        if repair_proc.returncode == 0:
-                            typer.echo("✅ Auto-repair succeeded. Data restored to a safe state.")
-                        else:
-                            typer.echo("❌ Auto-repair failed. Please run: adm-agent repair --auto", err=True)
-                            if verbose:
-                                if repair_proc.stdout:
-                                    typer.echo(repair_proc.stdout.strip())
-                                if repair_proc.stderr:
-                                    typer.echo(repair_proc.stderr.strip(), err=True)
-                            raise typer.Exit(code=1)
-                typer.echo("ℹ️  Restart the server if it's currently running.")
-            else:
-                typer.echo("ℹ️  No upgrade needed.")
-                
+            _print_upgrade_check(check_for_updates(verbose=verbose))
+            return
+        _perform_upgrade(force=force, migrate=migrate, verbose=verbose)
+    except typer.Exit:
+        raise
     except Exception as e:
         typer.echo(f"❌ Upgrade failed: {e}", err=True)
         raise typer.Exit(code=1)
