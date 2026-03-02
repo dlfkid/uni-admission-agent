@@ -646,19 +646,18 @@ def downgrade() -> None:
             )
 
         inspector = sa.inspect(bind)
+        requirement_fk_pairs = {
+            (frozenset({"version_id"}), "requirement_version"),
+            (frozenset({"subject_dim_id"}), "subject_dim"),
+            (frozenset({"exam_dim_id"}), "exam_dim"),
+            (frozenset({"framework_dim_id"}), "framework_dim"),
+            (frozenset({"evidence_id"}), "requirement_evidence"),
+        }
         for fk in inspector.get_foreign_keys("program_requirement"):
             local_columns = set(fk.get("constrained_columns") or [])
             referred_table = fk.get("referred_table")
-            if (
-                fk.get("name")
-                and (
-                    (local_columns == {"version_id"} and referred_table == "requirement_version")
-                    or (local_columns == {"subject_dim_id"} and referred_table == "subject_dim")
-                    or (local_columns == {"exam_dim_id"} and referred_table == "exam_dim")
-                    or (local_columns == {"framework_dim_id"} and referred_table == "framework_dim")
-                    or (local_columns == {"evidence_id"} and referred_table == "requirement_evidence")
-                )
-            ):
+            fk_key = (frozenset(local_columns), referred_table)
+            if fk.get("name") and fk_key in requirement_fk_pairs:
                 op.drop_constraint(fk["name"], "program_requirement", type_="foreignkey")
 
         inspector = sa.inspect(bind)

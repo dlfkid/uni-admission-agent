@@ -141,7 +141,7 @@ jobs:
                       "INSERT INTO program (academic_year, name_zh, name_en, program_group_code, faculty, "
                       "is_active, is_discontinued, tuition_amount, currency, study_options, deadlines, extra_metadata, updated_at, university_id) "
                       "VALUES (:year, :name_zh, :name_en, :group_code, :faculty, :is_active, :is_discontinued, :tuition, :currency, "
-                      ":study_options::jsonb, :deadlines::jsonb, :extra::jsonb, NOW(), :univ_id)"
+                      "CAST(:study_options AS jsonb), CAST(:deadlines AS jsonb), CAST(:extra AS jsonb), NOW(), :univ_id)"
                   ),
                   {
                       "year": 2026,

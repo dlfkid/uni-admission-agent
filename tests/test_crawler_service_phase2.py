@@ -17,7 +17,7 @@ async def test_crawl_url_uses_phase2_pipeline_for_default_depth(monkeypatch) -> 
                 "year": 2026,
             }
 
-    monkeypatch.setattr("src.services.crawler.IngestionPipeline", lambda: DummyPipeline())
+    monkeypatch.setattr("src.services.crawler.IngestionPipeline", DummyPipeline)
 
     result = await crawl_url(
         url="https://example.com",
@@ -43,7 +43,7 @@ async def test_crawl_url_uses_pipeline_when_continue_depth_enabled(monkeypatch) 
                 "year": 2026,
             }
 
-    monkeypatch.setattr("src.services.crawler.IngestionPipeline", lambda: DummyPipeline())
+    monkeypatch.setattr("src.services.crawler.IngestionPipeline", DummyPipeline)
 
     result = await crawl_url(
         url="https://example.com",
@@ -69,7 +69,7 @@ async def test_resume_crawl_job_parses_stage_enum(monkeypatch) -> None:
                 "year": 2026,
             }
 
-    monkeypatch.setattr("src.services.crawler.IngestionPipeline", lambda: DummyPipeline())
+    monkeypatch.setattr("src.services.crawler.IngestionPipeline", DummyPipeline)
 
     result = await resume_crawl_job(
         job_uid="job123",
