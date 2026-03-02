@@ -223,3 +223,40 @@ class ExportRequest(BaseModel):
 
     univ_slug: str = Field(description="University slug (a-z0-9-)")
     year: Optional[int] = Field(default=None, description="Academic year filter (omit for all years)")
+
+
+class IngestionTaskEntry(BaseModel):
+    """One stage task state from the Phase 2 ingestion pipeline."""
+
+    stage: str
+    state: str
+    attempt_count: int
+    max_retries: int
+    idempotency_key: Optional[str] = None
+    error_message: Optional[str] = None
+    next_retry_at: Optional[str] = None
+
+
+class IngestionJobResponse(BaseModel):
+    """Phase 2 ingestion job details."""
+
+    job_uid: str
+    status: str
+    univ_slug: str
+    academic_year: int
+    source_url: str
+    current_stage: Optional[str] = None
+    resume_from_stage: Optional[str] = None
+    error_message: Optional[str] = None
+    request_payload: Dict[str, Any] = Field(default_factory=dict)
+    context_payload: Dict[str, Any] = Field(default_factory=dict)
+    tasks: List[IngestionTaskEntry] = Field(default_factory=list)
+
+
+class IngestionResumeRequest(BaseModel):
+    """Resume payload for ``POST /ingestion/jobs/{job_uid}/resume``."""
+
+    resume_from_stage: Optional[str] = Field(
+        default=None,
+        description="Optional stage override: fetch_raw/extract_structured/validate_rules/persist_versioned",
+    )

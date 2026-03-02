@@ -7,7 +7,7 @@ structured data via LLM, and upserting to database.
 
 import logging
 from datetime import datetime
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple, Any
 
 from src.agents.cleaner_agent import LLMCleanerAgent, ParsedProgramData
 from src.agents.factory import RouterAgent
@@ -43,18 +43,51 @@ def process_page_for_program(
     Returns:
         Tuple of (success: bool, error_message: Optional[str]).
     """
-    if not page.markdown:
-        return False, "No markdown content"
+    program_data, error = extract_program_data_from_page(
+        page=page,
+        cleaner=cleaner,
+        univ_slug=univ_slug,
+        year=year,
+        current_depth=current_depth,
+        from_browser=from_browser,
+    )
+    if not program_data:
+        return False, error
 
-    # Determine content to use for LLM extraction
+    try:
+        _, created = db_manager.upsert_program(
+            program_data,  # type: ignore[arg-type]
+            univ_slug,
+        )
+        action = "Inserted" if created else "Updated"
+        logger.info(
+            "%s: %s (%d) [Group: %s]",
+            action, program_data['name_en'], year, program_data.get('program_group_code'),
+        )
+        return True, None
+    except Exception as e:
+        logger.exception("Failed to persist %s", page.url)
+        return False, str(e)
+
+
+def extract_program_data_from_page(
+    page: CrawlPageResult,
+    cleaner: LLMCleanerAgent,
+    univ_slug: str,
+    year: int,
+    current_depth: int,
+    from_browser: bool = False,
+) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+    """Extract structured program payload from one page without DB persistence."""
+    if not page.markdown:
+        return None, "No markdown content"
+
     content_for_llm = page.markdown
     content_type = "markdown"
-    
-    # HTML Fallback: If markdown is suspiciously short but HTML exists
+
     if page.html and len(page.html) > 1000:
         markdown_length = len(page.markdown)
         html_length = len(page.html)
-        # If markdown is less than 5% of HTML length, use HTML instead
         if markdown_length < html_length * 0.05:
             logger.warning(
                 "Markdown conversion poor (MD: %d, HTML: %d). Using HTML for LLM extraction.",
@@ -62,7 +95,7 @@ def process_page_for_program(
             )
             content_for_llm = page.html
             content_type = "html"
-    
+
     try:
         parsed: Optional[ParsedProgramData] = cleaner.clean_markdown(
             markdown=content_for_llm,
@@ -76,10 +109,10 @@ def process_page_for_program(
             logger.warning(
                 "No structured data from %s (used %s)", page.url, content_type
             )
-            return False, "No structured data extracted"
+            return None, "No structured data extracted"
 
         # Build program data for DB
-        program_data: Dict[str, object] = {
+        program_data: Dict[str, Any] = {
             "academic_year": year,
             "name_en": extract_program_name(page.markdown),
             "name_zh": "",
@@ -140,27 +173,19 @@ def process_page_for_program(
             extra_metadata["from_browser"] = True
         program_data["extra_metadata"] = extra_metadata
 
+        name_en = program_data.get("name_en")
         if not name_en:
             logger.warning(
                 "Could not extract program name from %s",
                 page.url,
             )
-            return False, "Could not extract program name"
+            return None, "Could not extract program name"
 
-        _, created = db_manager.upsert_program(
-            program_data,  # type: ignore[arg-type]
-            univ_slug,
-        )
-        action = "Inserted" if created else "Updated"
-        logger.info(
-            "%s: %s (%d) [Group: %s]",
-            action, program_data['name_en'], year, program_data.get('program_group_code'),
-        )
-        return True, None
+        return program_data, None
 
     except Exception as e:
-        logger.exception("Failed to process %s", page.url)
-        return False, str(e)
+        logger.exception("Failed to extract %s", page.url)
+        return None, str(e)
 
 
 def process_pages_batch(

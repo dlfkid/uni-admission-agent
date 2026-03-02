@@ -1,0 +1,27 @@
+{
+  "case_id": "manchester_masters_business_psychology",
+  "name": "Manchester",
+  "index_url": "https://www.manchester.ac.uk/study/masters/courses/list/",
+  "detail_url": "https://www.manchester.ac.uk/study/masters/courses/list/09994/msc-business-psychology/",
+  "fetched_at": "2026-03-02T18:49:04.953208+00:00",
+  "pages": {
+    "index": {
+      "status": "ok",
+      "status_code": 200,
+      "url": "https://www.manchester.ac.uk/study/masters/courses/list/",
+      "html_chars": 69284,
+      "markdown_chars": 23740,
+      "html_path": "golden_samples/cases/manchester_masters_business_psychology/index.html",
+      "markdown_path": "golden_samples/cases/manchester_masters_business_psychology/index.md"
+    },
+    "detail": {
+      "status": "ok",
+      "status_code": 200,
+      "url": "https://www.manchester.ac.uk/study/masters/courses/list/09994/msc-business-psychology/",
+      "html_chars": 85945,
+      "markdown_chars": 37521,
+      "html_path": "golden_samples/cases/manchester_masters_business_psychology/detail.html",
+      "markdown_path": "golden_samples/cases/manchester_masters_business_psychology/detail.md"
+    }
+  }
+}

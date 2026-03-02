@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "cases": [
+    {
+      "case_id": "ucl_undergrad_anthropology",
+      "name": "UCL",
+      "index_url": "https://www.ucl.ac.uk/prospective-students/undergraduate/degrees",
+      "detail_url": "https://www.ucl.ac.uk/prospective-students/undergraduate/degrees/anthropology-year-abroad-bsc"
+    },
+    {
+      "case_id": "manchester_masters_business_psychology",
+      "name": "Manchester",
+      "index_url": "https://www.manchester.ac.uk/study/masters/courses/list/",
+      "detail_url": "https://www.manchester.ac.uk/study/masters/courses/list/09994/msc-business-psychology/"
+    },
+    {
+      "case_id": "leeds_masters_ai_business",
+      "name": "Leeds",
+      "index_url": "https://courses.leeds.ac.uk/course-search/masters-courses",
+      "detail_url": "https://courses.leeds.ac.uk/k198/ai-for-business-msc?searchOrigin=query%3D%26type%3DPGT%26term%3D202627"
+    }
+  ]
+}

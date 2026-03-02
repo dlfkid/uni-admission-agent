@@ -12,10 +12,8 @@ Functions:
     get_db_status  — Return database statistics.
 """
 
-import asyncio
 import logging
-from pathlib import Path
-from typing import Optional, List
+from typing import Any, Callable, Optional, List
 
 from pydantic import BaseModel, Field
 from sqlmodel import select, func, col, desc
@@ -32,7 +30,9 @@ from src.models.requirement import (
     RequirementEvidence,
     RequirementVersion,
 )
+from src.models.ingestion import IngestionStage
 from src.scrapers.engine import AdmissionScraper
+from src.services.ingestion_pipeline import IngestionPipeline
 from src.storage.db_manager import DatabaseManager
 from src.storage.exporter import ExcelExporter
 from src.storage.importer import ExcelImporter
@@ -51,6 +51,10 @@ class CrawlResult(BaseModel):
     imported_count: int = Field(description="Number of programs imported")
     univ_slug: str = Field(description="University slug")
     year: int = Field(description="Academic year")
+    ingestion_job_id: Optional[str] = Field(
+        default=None,
+        description="Phase 2 ingestion job identifier",
+    )
 
 
 class ImportResult(BaseModel):
@@ -130,6 +134,7 @@ async def crawl_url(
     export_path: Optional[str] = None,
     html_content: Optional[str] = None,
     selected_urls: Optional[list[str]] = None,
+    progress_callback: Optional[Callable[[str, dict[str, Any]], None]] = None,
 ) -> CrawlResult:
     """Crawl a university admission page and import structured data.
 
@@ -154,29 +159,64 @@ async def crawl_url(
     Returns:
         CrawlResult with the number of programs imported.
     """
-    scraper = AdmissionScraper()
+    pipeline = IngestionPipeline()
+    result = await pipeline.run_new_job(
+        url=url,
+        univ_slug=univ_slug,
+        year=year,
+        continue_depth=continue_depth,
+        page_type_hint=page_type_hint,
+        export_md=export_md,
+        export_path=export_path,
+        html_content=html_content,
+        selected_urls=selected_urls,
+        event_callback=progress_callback,
+    )
+    imported = int(result.get("imported_count") or 0)
+    logger.info(
+        "Crawl complete (phase2 pipeline): %d programs imported, job=%s",
+        imported,
+        result.get("job_uid"),
+    )
+    return CrawlResult(
+        imported_count=imported,
+        univ_slug=univ_slug,
+        year=year,
+        ingestion_job_id=result.get("job_uid"),
+    )
 
-    if selected_urls:
-        imported = await scraper.crawl_selected_urls(
-            urls=selected_urls,
-            univ_slug=univ_slug,
-            year=year,
-            export_md=export_md,
-            export_path=export_path,
-        )
-    else:
-        imported = await scraper.crawl_and_clean(
-            url=url,
-            univ_slug=univ_slug,
-            year=year,
-            continue_depth=continue_depth,
-            page_type_hint=page_type_hint,
-            export_md=export_md,
-            export_path=export_path,
-            html_content=html_content,
-        )
-    logger.info("Crawl complete: %d programs imported", imported)
-    return CrawlResult(imported_count=imported, univ_slug=univ_slug, year=year)
+
+def list_ingestion_jobs(limit: int = 20) -> List[dict]:
+    """List recent ingestion jobs for replay/resume workflows."""
+    return IngestionPipeline().list_jobs(limit=limit)
+
+
+def get_ingestion_job(job_uid: str) -> Optional[dict]:
+    """Get one ingestion job and its stage/task state."""
+    return IngestionPipeline().get_job(job_uid)
+
+
+async def resume_crawl_job(
+    job_uid: str,
+    resume_from_stage: Optional[str] = None,
+    progress_callback: Optional[Callable[[str, dict[str, Any]], None]] = None,
+) -> CrawlResult:
+    """Resume a previously failed/poisoned ingestion job."""
+    parsed_stage: Optional[IngestionStage] = None
+    if resume_from_stage:
+        parsed_stage = IngestionStage(resume_from_stage)
+
+    result = await IngestionPipeline().resume_job(
+        job_uid=job_uid,
+        resume_from_stage=parsed_stage,
+        event_callback=progress_callback,
+    )
+    return CrawlResult(
+        imported_count=int(result.get("imported_count") or 0),
+        univ_slug=str(result.get("univ_slug") or ""),
+        year=int(result.get("year") or 0),
+        ingestion_job_id=str(result.get("job_uid") or job_uid),
+    )
 
 
 def import_file(

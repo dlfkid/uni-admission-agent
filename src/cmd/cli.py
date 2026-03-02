@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# pylint: disable=too-many-lines
 """
 UniAdmission Agent — Typer CLI
 
@@ -39,9 +40,14 @@ from src.services.crawler import (
     check_environment,
     crawl_url,
     export_data,
+    get_ingestion_job,
     get_db_status,
     import_file,
+    list_ingestion_jobs,
+    resume_crawl_job,
 )
+from src.services.golden_samples import collect_golden_samples
+from src.services.quality_scoring import score_manifest
 from src.services.upgrade import check_for_updates, upgrade_backend
 from src.services.migrations import (
     MigrationError,
@@ -72,6 +78,10 @@ UNIVERSITY DATA MANAGEMENT:
 DATABASE & STATUS:
     status     Show database statistics and connection info
     check      Run environment and dependency checks
+    ingestion-jobs   Show recent Phase 2 ingestion jobs
+    ingestion-resume Resume a failed Phase 2 ingestion job
+    golden-collect   Collect Phase 3 golden sample snapshots
+    quality-score    Run Phase 3 quality scoring and threshold checks
     
 LLM CONFIGURATION:
     llm-config Interactive wizard to configure LLM providers
@@ -430,6 +440,143 @@ def status(
                     typer.echo(f"      {yr}: {count} programs")
     except Exception as e:
         logger.error("Failed to get status: %s", e)
+        raise typer.Exit(code=1)
+
+
+@app.command(name="ingestion-jobs")
+def ingestion_jobs_cmd(
+    limit: int = typer.Option(20, help="Number of recent jobs to show"),
+    verbose: bool = typer.Option(False, "--verbose", "-v"),
+) -> None:
+    """List recent Phase 2 ingestion jobs."""
+    _setup_logging(verbose)
+    _init_db(verbose)
+
+    try:
+        rows = list_ingestion_jobs(limit=limit)
+        if not rows:
+            typer.echo("No ingestion jobs found.")
+            return
+        for row in rows:
+            typer.echo(
+                f"{row['job_uid']}  {row['status']:<10}  "
+                f"{row['univ_slug']}/{row['academic_year']}  "
+                f"{row.get('current_stage') or '-'}"
+            )
+    except Exception as e:
+        logger.error("Failed to list ingestion jobs: %s", e)
+        raise typer.Exit(code=1)
+
+
+@app.command(name="ingestion-resume")
+def ingestion_resume_cmd(
+    job_id: str = typer.Option(..., "--job", help="Ingestion job UID"),
+    stage: Optional[str] = typer.Option(
+        None,
+        "--stage",
+        help="Optional stage override (fetch_raw/extract_structured/validate_rules/persist_versioned)",
+    ),
+    verbose: bool = typer.Option(False, "--verbose", "-v"),
+) -> None:
+    """Resume a failed/poisoned Phase 2 ingestion job."""
+    _setup_logging(verbose)
+    _init_db(verbose)
+
+    job = get_ingestion_job(job_id)
+    if not job:
+        typer.echo(f"❌ Job not found: {job_id}", err=True)
+        raise typer.Exit(code=1)
+
+    try:
+        result = asyncio.run(
+            resume_crawl_job(
+                job_uid=job_id,
+                resume_from_stage=stage,
+            )
+        )
+        typer.echo(
+            f"✅ Resume complete: {result.imported_count} programs imported "
+            f"(job={result.ingestion_job_id})"
+        )
+    except Exception as e:
+        logger.exception("Resume failed: %s", e)
+        raise typer.Exit(code=1)
+
+
+@app.command(name="golden-collect")
+def golden_collect_cmd(
+    manifest: str = typer.Option(
+        "golden_samples/manifest.json",
+        help="Path to golden manifest JSON",
+    ),
+    output_root: str = typer.Option(
+        "golden_samples/cases",
+        help="Directory to store collected snapshots",
+    ),
+    overwrite: bool = typer.Option(
+        False,
+        "--overwrite",
+        help="Overwrite existing snapshot files",
+    ),
+    timeout: int = typer.Option(40, help="Network timeout in seconds"),
+    verbose: bool = typer.Option(False, "--verbose", "-v"),
+) -> None:
+    """Collect Phase 3 golden sample HTML/Markdown snapshots."""
+    _setup_logging(verbose)
+    try:
+        result = collect_golden_samples(
+            manifest_path=manifest,
+            output_root=output_root,
+            overwrite=overwrite,
+            timeout_seconds=timeout,
+        )
+        typer.echo(
+            f"✅ Golden collect done: collected={result['collected']} failed={result['failures']}"
+        )
+    except Exception as e:
+        logger.exception("Golden collection failed: %s", e)
+        raise typer.Exit(code=1)
+
+
+@app.command(name="quality-score")
+def quality_score_cmd(
+    manifest: str = typer.Option(
+        "golden_samples/manifest.json",
+        help="Path to golden manifest JSON",
+    ),
+    base_dir: str = typer.Option(
+        "golden_samples/cases",
+        help="Directory containing golden sample snapshots",
+    ),
+    report: str = typer.Option(
+        "golden_samples/reports/quality_report.json",
+        help="Output report JSON path",
+    ),
+    threshold: float = typer.Option(0.60, help="Global mean score threshold"),
+    verbose: bool = typer.Option(False, "--verbose", "-v"),
+) -> None:
+    """Run Phase 3 quality scoring and apply threshold gates."""
+    _setup_logging(verbose)
+    try:
+        result = score_manifest(
+            manifest_path=manifest,
+            base_dir=base_dir,
+            output_report_path=report,
+            global_threshold=threshold,
+        )
+        aggregate = result.get("aggregate") or {}
+        typer.echo(
+            "Quality score "
+            f"mean={aggregate.get('mean_score')} "
+            f"pass={aggregate.get('passed_case_count')}/{aggregate.get('case_count')}"
+        )
+        typer.echo(f"Report: {report}")
+        if not result.get("global_pass", False):
+            raise typer.Exit(code=1)
+    except typer.Exit:
+        raise
+    except Exception as e:
+        logger.exception("Quality scoring failed: %s", e)
         raise typer.Exit(code=1)
 
 

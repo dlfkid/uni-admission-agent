@@ -9,6 +9,8 @@ Build a trusted, self-updating database of university admission requirements.
 - Intelligent crawl depth with Heuristic/Regex scouting (optimized for speed/cost)
 - Rolling window sequential chunking for context preservation on large pages
 - Multi-provider LLM routing (Google Gemini, DeepSeek, OpenAI, VolcEngine)
+- **Phase 2 staged ingestion pipeline** with persisted job/task state and resume-from-stage
+- **Phase 3 golden-sample quality system** with offline scoring + CI regression gate
 - Stealth browsing with anti-detection mechanisms
 - **Cookie consent auto-dismissal** with JS injection to prevent navigation hijacking
 - **Resilient Pydantic validation** with field validators for LLM response edge cases
@@ -78,6 +80,30 @@ flowchart LR
     G -->|Upsert| H[PostgreSQL]
 ```
 
+### 3.4 Phase 2 Execution Pipeline (Decoupled + Resumable)
+
+The crawl execution layer is staged and persisted:
+- `fetch_raw`
+- `extract_structured`
+- `validate_rules`
+- `persist_versioned`
+
+Each run creates an `ingestion_job` with stage-level `ingestion_task` records, enabling:
+- bounded retry and poison handling
+- deterministic stage trace
+- resume from the first unfinished stage or an explicit stage override
+- reuse of successful upstream stage outputs
+
+### 3.5 Phase 3 Quality System (Seed)
+
+The project includes a seed quality framework for offline regression checks:
+- golden manifest: `golden_samples/manifest.json`
+- snapshot collector: `scripts/collect_golden_samples.py`
+- scoring runner: `scripts/score_golden_samples.py`
+- CI gate: `.github/workflows/ci.yml` fails when quality threshold is not met
+
+Current seed set includes 3 benchmark universities (UCL, Manchester, Leeds).
+
 ---
 
 ## 4. Build & Distribution System
@@ -145,6 +171,14 @@ uv run src/cmd/cli.py export --output data.xlsx ...
 # Check Status/Env
 uv run src/cmd/cli.py status
 uv run src/cmd/cli.py check
+
+# Phase 2 operations
+uv run src/cmd/cli.py ingestion-jobs --limit 20
+uv run src/cmd/cli.py ingestion-resume --job <job_uid> --stage validate_rules
+
+# Phase 3 operations
+uv run src/cmd/cli.py golden-collect --overwrite
+uv run src/cmd/cli.py quality-score --threshold 0.60
 ```
 
 ---
@@ -194,6 +228,12 @@ DATABASE_URL=postgresql+psycopg2://user:pass@localhost:5432/uni_admission
 ---
 
 ## 8. Recent Updates & Bug Fixes
+
+### 8.0 Optimization Roadmap Status (2026-03-03)
+
+- **Phase 1**: complete (data layer versioning + evidence chain)
+- **Phase 2**: complete (staged execution pipeline + resume + continue-depth unified path)
+- **Phase 3 (seed)**: complete (golden samples + scoring + CI quality gate)
 
 ### 8.1 Custom LLM Provider Integration (2026-02-28)
 

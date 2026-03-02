@@ -1,0 +1,16 @@
+{
+  "expected_name": "AI for Business MSc",
+  "expected_keywords": [
+    "AI",
+    "Business",
+    "MSc"
+  ],
+  "expected_tuition_currency": "GBP",
+  "min_requirement_count": 2,
+  "required_fields": [
+    "name_en",
+    "tuition",
+    "requirements"
+  ],
+  "case_threshold": 0.55
+}
