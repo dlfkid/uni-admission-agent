@@ -140,7 +140,7 @@ jobs:
                   text(
                       "INSERT INTO program (academic_year, name_zh, name_en, program_group_code, faculty, "
                       "is_active, is_discontinued, tuition_amount, currency, study_options, deadlines, extra_metadata, updated_at, university_id) "
-                      "VALUES (:year, :name_zh, :name_en, :group_code, :faculty, true, false, :tuition, :currency, "
+                      "VALUES (:year, :name_zh, :name_en, :group_code, :faculty, :is_active, :is_discontinued, :tuition, :currency, "
                       ":study_options::jsonb, :deadlines::jsonb, :extra::jsonb, NOW(), :univ_id)"
                   ),
                   {
@@ -149,6 +149,8 @@ jobs:
                       "name_en": "MSc Finance",
                       "group_code": "LEGACY-FIN",
                       "faculty": "Business",
+                      "is_active": True,
+                      "is_discontinued": False,
                       "tuition": 350000,
                       "currency": "HKD",
                       "study_options": json.dumps([{"mode": "FullTime", "duration_months": 12}]),
