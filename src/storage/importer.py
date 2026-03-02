@@ -33,7 +33,11 @@ class ExcelImporter:
         "学习时长": "_duration_raw",
         "Duration": "_duration_raw",
         "非本地人申请截止日期": "_deadline_raw",
-        "Deadline": "_deadline_raw"
+        "Deadline": "_deadline_raw",
+        "入学要求": "_requirement_raw",
+        "Entry Requirement": "_requirement_raw",
+        "Subject Requirement": "_requirement_raw",
+        "Language Requirement": "_requirement_raw",
     }
 
     def __init__(self, file_path: str, use_llm: bool = False):
@@ -132,6 +136,10 @@ class ExcelImporter:
                     d_dict = d.model_dump(mode="json")
                     d_dict["round"] = i
                     program_data["deadlines"].append(d_dict)
+            if parsed.requirements:
+                program_data["requirements"] = [
+                    req.model_dump(mode="json") for req in parsed.requirements
+                ]
 
             program_data["extra_metadata"] = {
                 "source_file": str(self.file_path),
@@ -286,6 +294,17 @@ class ExcelImporter:
             deadlines = DataCleaner.parse_deadlines(data["_deadline_raw"])
             if deadlines:
                 data["deadlines"] = deadlines
+
+        if "_requirement_raw" in data:
+            requirement_text = str(data["_requirement_raw"]).strip()
+            if requirement_text:
+                data["requirements"] = [
+                    {
+                        "category": "academic_subject",
+                        "subject_name": "Entry Requirement",
+                        "requirement_text": requirement_text,
+                    }
+                ]
                 
         return data
 
@@ -299,6 +318,8 @@ class ExcelImporter:
         if data.get("_duration_raw") and "study_options" not in data:
             return True
         if data.get("_deadline_raw") and "deadlines" not in data:
+            return True
+        if data.get("_requirement_raw") and "requirements" not in data:
             return True
         return False
 
@@ -329,6 +350,7 @@ class ExcelImporter:
                             "Tuition Fee": data.get("_tuition_raw"),
                             "Duration": data.get("_duration_raw"),
                             "Deadlines": data.get("_deadline_raw"),
+                            "Requirements": data.get("_requirement_raw"),
                         }
                         llm_inputs.append({k: v for k, v in inp.items() if v})
 
@@ -366,6 +388,11 @@ class ExcelImporter:
                                     d_dict = d.model_dump(mode="json")
                                     d_dict["round"] = i
                                     data["deadlines"].append(d_dict)
+
+                            if "requirements" not in data and res.requirements:
+                                data["requirements"] = [
+                                    req.model_dump(mode="json") for req in res.requirements
+                                ]
 
                 except Exception as e:
                     logger.error(f"Batch processing failed: {e}")

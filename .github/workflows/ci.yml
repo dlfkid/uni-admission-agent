@@ -48,3 +48,133 @@ jobs:
           echo '```' >> $GITHUB_STEP_SUMMARY
           uv run coverage report >> $GITHUB_STEP_SUMMARY || echo "Coverage report not available" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
+
+  migration:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 8
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
+
+      - name: Set up Python 3.12
+        run: uv python install 3.12
+
+      - name: Install dependencies
+        run: uv sync --all-extras
+
+      - name: Fresh database migration path
+        env:
+          DATABASE_URL: postgresql+psycopg2://postgres:postgres@localhost:5432/uni_admission_ci_fresh
+        run: |
+          uv run python - <<'PY'
+          import os
+          from sqlalchemy_utils import create_database, database_exists, drop_database
+          db_url = os.environ["DATABASE_URL"]
+          if database_exists(db_url):
+              drop_database(db_url)
+          create_database(db_url)
+          PY
+          uv run src/cmd/cli.py db-migrate --yes
+          uv run python - <<'PY'
+          import os
+          from src.services.migrations import get_migration_status
+          status = get_migration_status(os.environ["DATABASE_URL"])
+          assert status["pending"] is False, status
+          print(status)
+          PY
+
+      - name: Legacy database upgrade path
+        env:
+          DATABASE_URL: postgresql+psycopg2://postgres:postgres@localhost:5432/uni_admission_ci_legacy
+        run: |
+          uv run python - <<'PY'
+          import os
+          from sqlalchemy_utils import create_database, database_exists, drop_database
+          db_url = os.environ["DATABASE_URL"]
+          if database_exists(db_url):
+              drop_database(db_url)
+          create_database(db_url)
+          PY
+          uv run alembic upgrade 20260302_0001
+          uv run python - <<'PY'
+          import os, json
+          from sqlalchemy import create_engine, text
+          db_url = os.environ["DATABASE_URL"]
+          engine = create_engine(db_url)
+          with engine.begin() as conn:
+              conn.execute(
+                  text("INSERT INTO university (name, slug, updated_at) VALUES (:name, :slug, NOW())"),
+                  {"name": "legacy-u", "slug": "legacy-u"},
+              )
+              univ_id = conn.execute(
+                  text("SELECT id FROM university WHERE slug=:slug"),
+                  {"slug": "legacy-u"},
+              ).scalar_one()
+              conn.execute(
+                  text(
+                      "INSERT INTO program (academic_year, name_zh, name_en, program_group_code, faculty, "
+                      "is_active, is_discontinued, tuition_amount, currency, study_options, deadlines, extra_metadata, updated_at, university_id) "
+                      "VALUES (:year, :name_zh, :name_en, :group_code, :faculty, true, false, :tuition, :currency, "
+                      ":study_options::jsonb, :deadlines::jsonb, :extra::jsonb, NOW(), :univ_id)"
+                  ),
+                  {
+                      "year": 2026,
+                      "name_zh": "金融学硕士",
+                      "name_en": "MSc Finance",
+                      "group_code": "LEGACY-FIN",
+                      "faculty": "Business",
+                      "tuition": 350000,
+                      "currency": "HKD",
+                      "study_options": json.dumps([{"mode": "FullTime", "duration_months": 12}]),
+                      "deadlines": json.dumps([{"round": 1, "description": "Main", "cutoff_date": "2026-01-15T00:00:00+00:00"}]),
+                      "extra": json.dumps({"Entry Requirement": "Mathematics grade A", "source_url": "https://example.com/finance"}),
+                      "univ_id": univ_id,
+                  },
+              )
+          engine.dispose()
+          PY
+          uv run src/cmd/cli.py db-migrate --yes
+          uv run python - <<'PY'
+          import os
+          from sqlalchemy import create_engine, text
+          from src.services.migrations import get_migration_status
+          status = get_migration_status(os.environ["DATABASE_URL"])
+          assert status["pending"] is False, status
+          print(status)
+          engine = create_engine(os.environ["DATABASE_URL"])
+          with engine.begin() as conn:
+              catalog_count = conn.execute(text("SELECT COUNT(*) FROM program_catalog")).scalar_one()
+              req_count = conn.execute(text("SELECT COUNT(*) FROM program_requirement")).scalar_one()
+              req_ver_count = conn.execute(text("SELECT COUNT(*) FROM requirement_version")).scalar_one()
+              subject_dim_count = conn.execute(text("SELECT COUNT(*) FROM subject_dim")).scalar_one()
+              evidence_count = conn.execute(text("SELECT COUNT(*) FROM requirement_evidence")).scalar_one()
+          engine.dispose()
+          assert catalog_count >= 1, catalog_count
+          assert req_count >= 1, req_count
+          assert req_ver_count >= 1, req_ver_count
+          assert subject_dim_count >= 1, subject_dim_count
+          assert evidence_count >= 1, evidence_count
+          PY
+
+      - name: Auto-repair smoke test
+        env:
+          DATABASE_URL: postgresql+psycopg2://postgres:postgres@localhost:5432/uni_admission_ci_legacy
+        run: uv run src/cmd/cli.py repair --auto

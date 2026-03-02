@@ -21,7 +21,17 @@ from pydantic import BaseModel, Field
 from sqlmodel import select, func, col, desc
 
 from src.core.environment import ensure_ready
-from src.models.admission import University, Program
+from src.models.admission import University, Program, ProgramCatalog
+from src.models.requirement import (
+    ProgramStudyOption,
+    ProgramDeadline,
+    ProgramRequirement,
+    SubjectDim,
+    ExamDim,
+    FrameworkDim,
+    RequirementEvidence,
+    RequirementVersion,
+)
 from src.scrapers.engine import AdmissionScraper
 from src.storage.db_manager import DatabaseManager
 from src.storage.exporter import ExcelExporter
@@ -82,8 +92,10 @@ class ProgramSummary(BaseModel):
     program_group_code: Optional[str] = None
     tuition_amount: Optional[float] = None
     currency: Optional[str] = None
-    study_options: list = []
-    deadlines: list = []
+    study_options: list = Field(default_factory=list)
+    deadlines: list = Field(default_factory=list)
+    requirements: list = Field(default_factory=list)
+    requirement_version: Optional[dict] = None
     source_url: Optional[str] = None
 
 
@@ -269,27 +281,162 @@ def query_programs(
         if not univ:
             return []
 
-        stmt = select(Program).where(Program.university_id == univ.id)
+        stmt = (
+            select(Program, ProgramCatalog)
+            .join(ProgramCatalog, ProgramCatalog.id == Program.program_catalog_id, isouter=True)
+            .where(Program.university_id == univ.id)
+            .order_by(desc(col(Program.academic_year)), col(Program.name_en))
+        )
         if year is not None:
             stmt = stmt.where(Program.academic_year == year)
 
-        programs = session.exec(stmt).all()
-        return [
-            ProgramSummary(
-                id=p.id,
-                name_en=p.name_en,
-                name_zh=p.name_zh,
-                academic_year=p.academic_year,
-                faculty=p.faculty,
-                program_group_code=p.program_group_code,
-                tuition_amount=float(p.tuition_amount) if p.tuition_amount else None,
-                currency=p.currency.value if p.currency else None,
-                study_options=p.study_options or [],
-                deadlines=p.deadlines or [],
-                source_url=(p.extra_metadata or {}).get("source_url"),
+        rows = session.exec(stmt).all()
+        out: List[ProgramSummary] = []
+
+        for program, catalog in rows:
+            option_rows = session.exec(
+                select(ProgramStudyOption)
+                .where(ProgramStudyOption.program_id == program.id)
+                .order_by(col(ProgramStudyOption.id))
+            ).all()
+            deadline_rows = session.exec(
+                select(ProgramDeadline)
+                .where(ProgramDeadline.program_id == program.id)
+                .order_by(col(ProgramDeadline.cutoff_date), col(ProgramDeadline.id))
+            ).all()
+            latest_requirement_version = session.exec(
+                select(RequirementVersion)
+                .where(RequirementVersion.program_id == program.id)
+                .order_by(desc(col(RequirementVersion.version_no)))
+            ).first()
+
+            requirement_stmt = (
+                select(
+                    ProgramRequirement,
+                    SubjectDim,
+                    ExamDim,
+                    FrameworkDim,
+                    RequirementEvidence,
+                )
+                .join(SubjectDim, SubjectDim.id == ProgramRequirement.subject_dim_id, isouter=True)
+                .join(ExamDim, ExamDim.id == ProgramRequirement.exam_dim_id, isouter=True)
+                .join(FrameworkDim, FrameworkDim.id == ProgramRequirement.framework_dim_id, isouter=True)
+                .join(RequirementEvidence, RequirementEvidence.id == ProgramRequirement.evidence_id, isouter=True)
+                .order_by(col(ProgramRequirement.sort_order), col(ProgramRequirement.id))
             )
-            for p in programs
-        ]
+            if latest_requirement_version and latest_requirement_version.id is not None:
+                requirement_stmt = requirement_stmt.where(
+                    ProgramRequirement.version_id == latest_requirement_version.id
+                )
+            else:
+                requirement_stmt = requirement_stmt.where(
+                    ProgramRequirement.program_id == program.id
+                )
+            requirement_rows = session.exec(requirement_stmt).all()
+
+            if option_rows:
+                study_options = [
+                    {
+                        "mode": opt.mode.value if opt.mode else "Unknown",
+                        "duration_months": opt.duration_months,
+                        "notes": opt.notes,
+                    }
+                    for opt in option_rows
+                ]
+            else:
+                study_options = program.study_options or []
+
+            if deadline_rows:
+                deadlines = [
+                    {
+                        "round": d.round,
+                        "description": d.description,
+                        "cutoff_date": d.cutoff_date.isoformat() if d.cutoff_date else None,
+                    }
+                    for d in deadline_rows
+                ]
+            else:
+                deadlines = program.deadlines or []
+
+            requirements = []
+            for req, subject_dim, exam_dim, framework_dim, evidence in requirement_rows:
+                requirements.append(
+                    {
+                        "category": req.category.value if req.category else "other",
+                        "subject_name": (
+                            subject_dim.canonical_name
+                            if subject_dim and subject_dim.canonical_name
+                            else req.subject_name
+                        ),
+                        "framework": (
+                            framework_dim.display_name
+                            if framework_dim and framework_dim.display_name
+                            else req.framework
+                        ),
+                        "exam_name": exam_dim.display_name if exam_dim else None,
+                        "minimum_value": req.minimum_value,
+                        "unit": req.unit,
+                        "applicant_scope": req.applicant_scope,
+                        "requirement_text": req.requirement_text,
+                        "evidence_url": (
+                            evidence.source_url
+                            if evidence and evidence.source_url
+                            else req.evidence_url
+                        ),
+                        "evidence_snippet": evidence.page_snippet if evidence else None,
+                        "evidence_locator_type": evidence.locator_type if evidence else None,
+                        "evidence_locator_value": evidence.locator_value if evidence else None,
+                        "evidence_captured_at": (
+                            evidence.captured_at.isoformat()
+                            if evidence and evidence.captured_at
+                            else None
+                        ),
+                        "sort_order": req.sort_order,
+                    }
+                )
+
+            requirement_version = None
+            if latest_requirement_version:
+                requirement_version = {
+                    "version_no": latest_requirement_version.version_no,
+                    "effective_at": latest_requirement_version.effective_at.isoformat()
+                    if latest_requirement_version.effective_at
+                    else None,
+                    "valid_from": latest_requirement_version.valid_from.isoformat()
+                    if latest_requirement_version.valid_from
+                    else None,
+                    "valid_to": latest_requirement_version.valid_to.isoformat()
+                    if latest_requirement_version.valid_to
+                    else None,
+                    "change_summary": latest_requirement_version.change_summary,
+                    "diff_payload": latest_requirement_version.diff_payload or {},
+                }
+
+            source_url = program.source_url or (program.extra_metadata or {}).get("source_url")
+            group_code = (
+                (catalog.program_group_code if catalog else None)
+                or program.program_group_code
+            )
+
+            out.append(
+                ProgramSummary(
+                    id=program.id,
+                    name_en=program.name_en,
+                    name_zh=program.name_zh,
+                    academic_year=program.academic_year,
+                    faculty=program.faculty,
+                    program_group_code=group_code,
+                    tuition_amount=float(program.tuition_amount) if program.tuition_amount else None,
+                    currency=program.currency.value if program.currency else None,
+                    study_options=study_options,
+                    deadlines=deadlines,
+                    requirements=requirements,
+                    requirement_version=requirement_version,
+                    source_url=source_url,
+                )
+            )
+
+        return out
 
 
 def check_environment(verbose: bool = False) -> bool:

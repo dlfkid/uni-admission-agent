@@ -189,8 +189,10 @@ class ProgramResponse(BaseModel):
     program_group_code: Optional[str] = None
     tuition_amount: Optional[float] = None
     currency: Optional[str] = None
-    study_options: list = []
-    deadlines: list = []
+    study_options: list = Field(default_factory=list)
+    deadlines: list = Field(default_factory=list)
+    requirements: list = Field(default_factory=list)
+    requirement_version: Optional[Dict[str, Any]] = None
     source_url: Optional[str] = None
 
 

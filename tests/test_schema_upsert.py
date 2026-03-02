@@ -2,6 +2,13 @@ import os
 import pytest
 from sqlmodel import SQLModel, select
 from src.models.admission import Program, University
+from src.models.requirement import (
+    ProgramRequirement,
+    RequirementVersion,
+    SubjectDim,
+    ExamDim,
+    RequirementEvidence,
+)
 from src.storage.db_manager import DatabaseManager
 from sqlalchemy_utils import database_exists, create_database, drop_database
 
@@ -132,4 +139,117 @@ def test_program_history(db_manager):
             s.delete(p)
         u = s.exec(select(University).where(University.slug == slug)).first()
         if u: s.delete(u)
+        s.commit()
+
+
+def test_requirement_versioning_with_dimensions_and_evidence(db_manager):
+    slug = "test-u-req-version"
+    year = 2026
+
+    base_data = {
+        "academic_year": year,
+        "name_en": "MSc Data Science",
+        "program_group_code": "REQ-VERSION-001",
+        "source_url": "https://example.edu/ds",
+        "requirements": [
+            {
+                "category": "academic_subject",
+                "subject_name": "Mathematics",
+                "minimum_value": "A",
+                "requirement_text": "Mathematics grade A",
+            },
+            {
+                "category": "language",
+                "subject_name": "IELTS",
+                "minimum_value": "6.5",
+                "unit": "band",
+                "requirement_text": "IELTS overall 6.5",
+            },
+        ],
+    }
+
+    program, _ = db_manager.upsert_program(base_data, slug)
+
+    # Idempotent re-upsert: no new version should be created.
+    db_manager.upsert_program(base_data, slug)
+
+    with db_manager.get_session() as s:
+        versions = s.exec(
+            select(RequirementVersion)
+            .where(RequirementVersion.program_id == program.id)
+            .order_by(RequirementVersion.version_no)
+        ).all()
+        assert len(versions) == 1
+        assert versions[0].version_no == 1
+        assert versions[0].valid_to is None
+
+    # Update requirement payload to trigger a new version snapshot.
+    updated_data = {
+        **base_data,
+        "requirements": [
+            {
+                "category": "academic_subject",
+                "subject_name": "Mathematics",
+                "minimum_value": "B",
+                "requirement_text": "Mathematics grade B or above",
+            },
+            {
+                "category": "language",
+                "subject_name": "IELTS",
+                "minimum_value": "7.0",
+                "unit": "band",
+                "requirement_text": "IELTS overall 7.0",
+            },
+        ],
+    }
+    db_manager.upsert_program(updated_data, slug)
+
+    with db_manager.get_session() as s:
+        versions = s.exec(
+            select(RequirementVersion)
+            .where(RequirementVersion.program_id == program.id)
+            .order_by(RequirementVersion.version_no)
+        ).all()
+        assert len(versions) == 2
+        assert versions[0].version_no == 1
+        assert versions[1].version_no == 2
+        assert versions[0].valid_to is not None
+        assert versions[1].valid_to is None
+        assert (versions[1].diff_payload or {}).get("added_count", 0) >= 1
+
+        latest_rows = s.exec(
+            select(ProgramRequirement).where(ProgramRequirement.version_id == versions[1].id)
+        ).all()
+        assert len(latest_rows) == 2
+
+        math_dim = s.exec(
+            select(SubjectDim).where(SubjectDim.normalized_name == "mathematics")
+        ).first()
+        assert math_dim is not None
+
+        ielts_dim = s.exec(select(ExamDim).where(ExamDim.code == "ielts")).first()
+        assert ielts_dim is not None
+
+        evidence_count = s.exec(select(RequirementEvidence)).all()
+        assert len(evidence_count) >= 1
+
+        # cleanup
+        for req in s.exec(
+            select(ProgramRequirement).where(ProgramRequirement.program_id == program.id)
+        ).all():
+            s.delete(req)
+        for rv in versions:
+            s.delete(rv)
+        for e in s.exec(select(RequirementEvidence)).all():
+            s.delete(e)
+        for ex in s.exec(select(ExamDim)).all():
+            s.delete(ex)
+        for sub in s.exec(select(SubjectDim)).all():
+            s.delete(sub)
+        p = s.get(Program, program.id)
+        if p:
+            s.delete(p)
+        u = s.exec(select(University).where(University.slug == slug)).first()
+        if u:
+            s.delete(u)
         s.commit()

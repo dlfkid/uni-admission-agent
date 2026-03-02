@@ -19,6 +19,8 @@ Extract the following admission data from the current chunk. If information span
 3. **Study Options**: Extract study modes (FullTime, PartTime, Hybrid) and duration in months.
 4. **Deadlines**: Extract application deadlines with dates and round types (Early, Main, Extended).
    - "Round 1" → Early, "Round 2"/Normal → Main, "Clearing" → Extended.
+5. **Requirements**: Extract subject-level admission requirements with thresholds.
+   - Include subjects/tests (e.g., Mathematics, IELTS), score/grade, and framework when present.
 
 IMPORTANT:
 - Only return necessary structured data. Do NOT include any raw HTML snippets or duplicate original text in the JSON output.

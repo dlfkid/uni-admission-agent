@@ -83,6 +83,12 @@ all_datas.append(
     (str(ROOT / "src" / "agents" / "prompts" / "*.txt"), "src/agents/prompts")
 )
 
+# Alembic configuration and migration scripts
+if (ROOT / "alembic.ini").exists():
+    all_datas.append((str(ROOT / "alembic.ini"), "."))
+if (ROOT / "migrations").exists():
+    all_datas.append((str(ROOT / "migrations"), "migrations"))
+
 # .env.example for reference
 if (ROOT / ".env.example").exists():
     all_datas.append((str(ROOT / ".env.example"), "."))
@@ -111,10 +117,13 @@ a = Analysis(
         "src.agents.cleaner_agent",
         "src.scrapers.engine",
         "src.services.crawler",
+        "src.services.migrations",
+        "src.services.repair",
         "src.storage.db_manager",
         "src.storage.importer",
         "src.storage.exporter",
         "src.models.admission",
+        "src.models.requirement",
         "src.models.scraper_models",
         "src.utils.text",
         "src.utils.pdf_processor",

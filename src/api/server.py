@@ -618,7 +618,7 @@ try:
         """Query programs for a university from the database.
 
         Returns a list of program records with name, tuition, deadlines,
-        and other structured fields.
+        subject requirements, and other structured fields.
 
         Args:
             univ_slug: University identifier (e.g. "hku").
@@ -679,12 +679,17 @@ serve:
 upgrade:
     --check     Only check for updates, don't install
     --force     Force upgrade even if already latest
+    --migrate   Run DB migration after backend update
+    --verbose   Show detailed progress
+
+repair:
+    --auto      Run automatic rollback-safe repair
     --verbose   Show detailed progress
             """
         
         available_commands = [
             "crawl", "import", "export", "status", "check", 
-            "serve", "serve-stop", "upgrade", "version", 
+            "serve", "serve-stop", "upgrade", "db-migrate", "db-version", "repair", "version",
             "browser-install", "help"
         ]
         

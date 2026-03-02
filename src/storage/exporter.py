@@ -1,11 +1,19 @@
-
-import json
 import logging
-from typing import Optional, List, IO, Union
+from typing import Optional, IO
 import pandas as pd
-from sqlmodel import select
+from sqlmodel import select, col, desc
 from src.storage.db_manager import DatabaseManager
 from src.models.admission import University, Program
+from src.models.requirement import (
+    ProgramStudyOption,
+    ProgramDeadline,
+    ProgramRequirement,
+    SubjectDim,
+    ExamDim,
+    FrameworkDim,
+    RequirementEvidence,
+    RequirementVersion,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +47,22 @@ def _format_study_options(options: list) -> str:
     return ", ".join(parts)
 
 
+def _format_requirements(requirements: list) -> str:
+    if not requirements:
+        return ""
+    parts = []
+    for req in requirements:
+        subject = req.get("subject_name") or req.get("exam_name") or req.get("framework") or "Requirement"
+        min_val = req.get("minimum_value") or ""
+        unit = req.get("unit") or ""
+        text = req.get("requirement_text") or ""
+        scope = req.get("applicant_scope") or ""
+        headline = " ".join(s for s in [subject, min_val, unit] if s).strip()
+        tail = " | ".join(s for s in [text, scope] if s)
+        parts.append(" - ".join(s for s in [headline, tail] if s))
+    return " || ".join(parts)
+
+
 class ExcelExporter:
     def __init__(self, output_path: Optional[str] = None, output_stream: Optional[IO[bytes]] = None):
         """
@@ -66,7 +90,11 @@ class ExcelExporter:
                 return 0
 
             # 2. Build Query
-            query = select(Program).where(Program.university_id == univ.id)
+            query = (
+                select(Program)
+                .where(Program.university_id == univ.id)
+                .order_by(col(Program.academic_year).desc(), col(Program.name_en))
+            )
             if year:
                 query = query.where(Program.academic_year == year)
             
@@ -81,6 +109,97 @@ class ExcelExporter:
             # 4. Transform to DataFrame
             data_rows = []
             for p in programs:
+                option_rows = session.exec(
+                    select(ProgramStudyOption)
+                    .where(ProgramStudyOption.program_id == p.id)
+                    .order_by(col(ProgramStudyOption.id))
+                ).all()
+                deadline_rows = session.exec(
+                    select(ProgramDeadline)
+                    .where(ProgramDeadline.program_id == p.id)
+                    .order_by(col(ProgramDeadline.cutoff_date), col(ProgramDeadline.id))
+                ).all()
+                latest_requirement_version = session.exec(
+                    select(RequirementVersion)
+                    .where(RequirementVersion.program_id == p.id)
+                    .order_by(desc(col(RequirementVersion.version_no)))
+                ).first()
+                requirement_stmt = (
+                    select(
+                        ProgramRequirement,
+                        SubjectDim,
+                        ExamDim,
+                        FrameworkDim,
+                        RequirementEvidence,
+                    )
+                    .join(SubjectDim, SubjectDim.id == ProgramRequirement.subject_dim_id, isouter=True)
+                    .join(ExamDim, ExamDim.id == ProgramRequirement.exam_dim_id, isouter=True)
+                    .join(FrameworkDim, FrameworkDim.id == ProgramRequirement.framework_dim_id, isouter=True)
+                    .join(RequirementEvidence, RequirementEvidence.id == ProgramRequirement.evidence_id, isouter=True)
+                    .order_by(col(ProgramRequirement.sort_order), col(ProgramRequirement.id))
+                )
+                if latest_requirement_version and latest_requirement_version.id is not None:
+                    requirement_stmt = requirement_stmt.where(
+                        ProgramRequirement.version_id == latest_requirement_version.id
+                    )
+                else:
+                    requirement_stmt = requirement_stmt.where(ProgramRequirement.program_id == p.id)
+                requirement_rows = session.exec(requirement_stmt).all()
+
+                study_options = (
+                    [
+                        {
+                            "mode": opt.mode.value if opt.mode else "Unknown",
+                            "duration_months": opt.duration_months,
+                            "notes": opt.notes,
+                        }
+                        for opt in option_rows
+                    ]
+                    if option_rows
+                    else (p.study_options or [])
+                )
+
+                deadlines = (
+                    [
+                        {
+                            "round": d.round,
+                            "description": d.description,
+                            "cutoff_date": d.cutoff_date.isoformat() if d.cutoff_date else None,
+                        }
+                        for d in deadline_rows
+                    ]
+                    if deadline_rows
+                    else (p.deadlines or [])
+                )
+
+                requirements = []
+                for req, subject_dim, exam_dim, framework_dim, evidence in requirement_rows:
+                    requirements.append(
+                        {
+                            "category": req.category.value if req.category else "other",
+                            "subject_name": (
+                                subject_dim.canonical_name
+                                if subject_dim and subject_dim.canonical_name
+                                else req.subject_name
+                            ),
+                            "framework": (
+                                framework_dim.display_name
+                                if framework_dim and framework_dim.display_name
+                                else req.framework
+                            ),
+                            "exam_name": exam_dim.display_name if exam_dim else None,
+                            "minimum_value": req.minimum_value,
+                            "unit": req.unit,
+                            "applicant_scope": req.applicant_scope,
+                            "requirement_text": req.requirement_text,
+                            "evidence_url": (
+                                evidence.source_url
+                                if evidence and evidence.source_url
+                                else req.evidence_url
+                            ),
+                        }
+                    )
+
                 row = {
                     "University": univ.name,
                     "Academic Year": p.academic_year,
@@ -90,8 +209,35 @@ class ExcelExporter:
                     "Faculty": p.faculty or "",
                     "Tuition": float(p.tuition_amount) if p.tuition_amount else "",
                     "Currency": p.currency.value if p.currency else "",
-                    "Study Options": _format_study_options(p.study_options),
-                    "Deadlines": _format_deadlines(p.deadlines),
+                    "Study Options": _format_study_options(study_options),
+                    "Deadlines": _format_deadlines(deadlines),
+                    "Subject Requirements": _format_requirements(requirements),
+                    "Requirement Version": (
+                        latest_requirement_version.version_no
+                        if latest_requirement_version
+                        else ""
+                    ),
+                    "Requirement Effective At": (
+                        latest_requirement_version.effective_at.isoformat()
+                        if latest_requirement_version and latest_requirement_version.effective_at
+                        else ""
+                    ),
+                    "Requirement Valid From": (
+                        latest_requirement_version.valid_from.isoformat()
+                        if latest_requirement_version and latest_requirement_version.valid_from
+                        else ""
+                    ),
+                    "Requirement Valid To": (
+                        latest_requirement_version.valid_to.isoformat()
+                        if latest_requirement_version and latest_requirement_version.valid_to
+                        else ""
+                    ),
+                    "Requirement Change Summary": (
+                        latest_requirement_version.change_summary
+                        if latest_requirement_version and latest_requirement_version.change_summary
+                        else ""
+                    ),
+                    "Source URL": p.source_url or (p.extra_metadata or {}).get("source_url", ""),
                     "Active": "Yes" if p.is_active else "No",
                     "Discontinued": "Yes" if p.is_discontinued else "No",
                     "Updated At": p.updated_at.strftime("%Y-%m-%d %H:%M") if p.updated_at else "",

@@ -42,6 +42,12 @@ from src.services.crawler import (
     import_file,
 )
 from src.services.upgrade import check_for_updates, upgrade_backend
+from src.services.migrations import (
+    MigrationError,
+    get_migration_status,
+    run_db_migrations,
+)
+from src.services.repair import RepairError, run_auto_repair
 from src.core.environment import install_playwright_browser
 from src.storage.db_manager import DatabaseManager
 
@@ -75,6 +81,9 @@ SERVER OPERATIONS:
     
 SYSTEM MAINTENANCE:
     upgrade    Check for and install backend updates
+    db-migrate Apply Alembic database migrations
+    db-version Show Alembic database revision status
+    repair     Auto-repair DB migration failures with rollback safety
     version    Show current version information
     browser-install  Install Playwright Chromium browser
     
@@ -84,6 +93,9 @@ USAGE EXAMPLES:
     ./adm-agent export --name hku --output report.xlsx --year 2026
     ./adm-agent serve --port 9000
     ./adm-agent upgrade --check
+    ./adm-agent db-version
+    ./adm-agent db-migrate --yes
+    ./adm-agent repair --auto
     ./adm-agent status
     
 For detailed help on any command:
@@ -216,12 +228,29 @@ def _setup_logging(verbose: bool = False) -> None:
 
 
 def _init_db(verbose: bool = False) -> None:
-    """Ensure database is initialised."""
+    """Ensure database is initialised and schema is migrated."""
     try:
         DatabaseManager().init_db()
     except Exception as e:
         if verbose:
             logger.warning("Database auto-init warning: %s", e)
+        return
+
+    try:
+        status = get_migration_status()
+        if status["pending"]:
+            logger.info(
+                "Pending DB migration detected (%s -> %s), applying...",
+                status["current_revision"] or "unversioned",
+                status["head_revision"],
+            )
+            run_db_migrations(verbose=verbose)
+    except MigrationError as e:
+        if verbose:
+            logger.warning("Database migration warning: %s", e)
+    except Exception as e:  # pragma: no cover - defensive logging path
+        if verbose:
+            logger.warning("Unexpected migration warning: %s", e)
 
 
 # ---------------------------------------------------------------------------
@@ -500,9 +529,99 @@ def serve_stop(
 
 
 @app.command()
+def db_version(
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Debug logging"),
+) -> None:
+    """Show Alembic migration revision status."""
+    _setup_logging(verbose)
+    try:
+        status = get_migration_status()
+        typer.echo(f"📦 Current DB revision: {status['current_revision'] or 'unversioned'}")
+        typer.echo(f"📦 Target DB revision:  {status['head_revision']}")
+        if status["pending"]:
+            typer.echo("⚠️  Migrations pending. Run: adm-agent db-migrate")
+        else:
+            typer.echo("✅ Database schema is up to date.")
+    except Exception as e:
+        typer.echo(f"❌ Failed to read migration status: {e}", err=True)
+        raise typer.Exit(code=1)
+
+
+@app.command(name="db-migrate")
+def db_migrate(
+    revision: str = typer.Option("head", "--revision", help="Target alembic revision"),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation prompt"),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Debug logging"),
+) -> None:
+    """Apply Alembic migrations to the configured database."""
+    _setup_logging(verbose)
+
+    if not yes:
+        confirm = typer.confirm(
+            f"Apply database migration to revision '{revision}'?",
+            default=True,
+        )
+        if not confirm:
+            typer.echo("ℹ️  Migration cancelled.")
+            raise typer.Exit(code=0)
+
+    try:
+        result = run_db_migrations(revision=revision, verbose=verbose)
+        typer.echo(f"📦 Before revision: {result['before_revision'] or 'unversioned'}")
+        typer.echo(f"📦 After revision:  {result['after_revision'] or 'unversioned'}")
+        if result["legacy_bootstrap"]:
+            typer.echo("ℹ️  Legacy schema detected and stamped before migration.")
+        if result["pending"]:
+            typer.echo("⚠️  Database not fully up to head. Re-run db-migrate.")
+            raise typer.Exit(code=1)
+        typer.echo("✅ Database migration completed.")
+    except Exception as e:
+        typer.echo(f"❌ Database migration failed: {e}", err=True)
+        typer.echo("👉 Run 'adm-agent repair --auto' to rollback and recover automatically.", err=True)
+        raise typer.Exit(code=1)
+
+
+@app.command()
+def repair(
+    auto: bool = typer.Option(False, "--auto", help="Run automatic repair workflow"),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Debug logging"),
+) -> None:
+    """Repair database state automatically with migration rollback safety."""
+    _setup_logging(verbose)
+
+    if not auto:
+        typer.echo("Use --auto to run non-interactive repair.")
+        raise typer.Exit(code=1)
+
+    db_url = os.getenv("DATABASE_URL")
+    if not db_url:
+        typer.echo("❌ DATABASE_URL is not configured.", err=True)
+        raise typer.Exit(code=1)
+
+    try:
+        result = run_auto_repair(db_url=db_url, verbose=verbose)
+        typer.echo("✅ Repair completed.")
+        if result["migration_result"]["pending"]:
+            typer.echo("⚠️  Schema still not at head; retry repair or contact support.")
+            raise typer.Exit(code=1)
+        if not result["health_after"]["ok"]:
+            typer.echo("⚠️  Database is reachable but missing core tables after repair.", err=True)
+            raise typer.Exit(code=1)
+        typer.echo("ℹ️  Database is healthy and migration-compatible.")
+    except RepairError as e:
+        typer.echo("❌ Automatic repair failed.", err=True)
+        typer.echo(str(e), err=True)
+        raise typer.Exit(code=1)
+    except Exception as e:
+        typer.echo(f"❌ Unexpected repair failure: {e}", err=True)
+        raise typer.Exit(code=1)
+
+
+@app.command()
 def upgrade(
     check_only: bool = typer.Option(False, "--check", help="Only check for updates, don't install"),
     force: bool = typer.Option(False, "--force", help="Force upgrade even if already on latest version"),
+    migrate: bool = typer.Option(True, "--migrate/--no-migrate", help="Run DB migration after backend upgrade"),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Debug logging"),
 ) -> None:
     """Check for and install backend updates from GitHub releases."""
@@ -536,6 +655,39 @@ def upgrade(
             # Perform upgrade
             if upgrade_backend(force=force, verbose=verbose):
                 typer.echo("🎉 Upgrade completed successfully!")
+                if migrate:
+                    import subprocess
+
+                    typer.echo("🔄 Running database migration...")
+                    proc = subprocess.run(
+                        [sys.executable, "db-migrate", "--yes"],
+                        capture_output=True,
+                        text=True,
+                        check=False,
+                    )
+                    if proc.returncode == 0:
+                        typer.echo("✅ Database migration completed.")
+                    else:
+                        typer.echo("⚠️  Upgrade succeeded but DB migration failed.", err=True)
+                        if verbose and proc.stderr:
+                            typer.echo(proc.stderr.strip(), err=True)
+                        typer.echo("🛠 Attempting automatic rollback repair...")
+                        repair_proc = subprocess.run(
+                            [sys.executable, "repair", "--auto"],
+                            capture_output=True,
+                            text=True,
+                            check=False,
+                        )
+                        if repair_proc.returncode == 0:
+                            typer.echo("✅ Auto-repair succeeded. Data restored to a safe state.")
+                        else:
+                            typer.echo("❌ Auto-repair failed. Please run: adm-agent repair --auto", err=True)
+                            if verbose:
+                                if repair_proc.stdout:
+                                    typer.echo(repair_proc.stdout.strip())
+                                if repair_proc.stderr:
+                                    typer.echo(repair_proc.stderr.strip(), err=True)
+                            raise typer.Exit(code=1)
                 typer.echo("ℹ️  Restart the server if it's currently running.")
             else:
                 typer.echo("ℹ️  No upgrade needed.")

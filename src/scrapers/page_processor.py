@@ -116,6 +116,12 @@ def process_page_for_program(
                 d_dict["round"] = i
                 program_data["deadlines"].append(d_dict)
 
+        if parsed.requirements:
+            program_data["requirements"] = [
+                req.model_dump(mode="json")
+                for req in parsed.requirements
+            ]
+
         # --- Deterministic program_group_code (local) ---
         name_en = program_data.get("name_en")
         if name_en:

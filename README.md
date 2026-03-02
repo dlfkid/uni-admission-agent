@@ -33,6 +33,9 @@ Entry Points                    Services Layer              Infrastructure
 └──────────────┘
 ```
 
+## 📘 Upgrade Changelog
+- [Phase 1: Data-Layer Upgrade (fact + dimensions + evidence + versioning)](docs/changelog_phase1_data_layer.md)
+
 ## � Production Usage (No Code Required)
 
 If you just want to *use* the agent without writing code, download the latest release for your platform.
@@ -166,6 +169,15 @@ The agent needs a database connection.
 # Force update even if already on latest version
 ./adm-agent upgrade --force
 
+# Apply database migrations
+./adm-agent db-migrate --yes
+
+# Show database migration revision status
+./adm-agent db-version
+
+# Auto-repair migration failures with rollback safety
+./adm-agent repair --auto
+
 # Show current version
 ./adm-agent version
 
@@ -204,6 +216,15 @@ The agent needs a database connection.
 
 # Force update even if already on latest version
 .\adm-agent.exe upgrade --force
+
+# Apply database migrations
+.\adm-agent.exe db-migrate --yes
+
+# Show database migration revision status
+.\adm-agent.exe db-version
+
+# Auto-repair migration failures with rollback safety
+.\adm-agent.exe repair --auto
 
 # Show current version
 .\adm-agent.exe version
@@ -279,6 +300,22 @@ export PLAYWRIGHT_BROWSERS_PATH=/path/to/ms-playwright
 .\adm-agent.exe status
 ```
 
+### Database Migrations
+
+Use Alembic migration commands to keep schema in sync after upgrades:
+
+```bash
+# Check revision status
+./adm-agent db-version
+
+# Migrate to latest schema
+./adm-agent db-migrate --yes
+```
+
+`upgrade` runs `db-migrate --yes` by default after a successful backend update.
+If migration fails during upgrade, the agent automatically runs `repair --auto`
+to rollback to a safe data state.
+
 ### Server
 
 **Unix (macOS/Linux):**
@@ -326,7 +363,7 @@ curl http://localhost:8910/tasks/{task_id}
 # Database statistics
 curl http://localhost:8910/status
 
-# Query programs (with detailed fields: study_options, deadlines, source_url)
+# Query programs (with detailed fields: study_options, deadlines, requirements, source_url)
 curl "http://localhost:8910/programs?univ_slug=hku&year=2026"
 
 # List all universities
