@@ -18,14 +18,14 @@ import os
 import platform
 import shutil
 import ssl
-import subprocess
 import sys
 import tarfile
 import tempfile
 import zipfile
 from pathlib import Path
-from urllib.parse import urljoin
 from urllib.request import urlopen, Request
+
+from src.core.paths import is_frozen
 
 try:
     import certifi
@@ -121,8 +121,12 @@ def find_backend_asset(release_data: dict, os_name: str, arch_name: str) -> dict
     return None
 
 
-def download_and_extract(asset: dict, target_dir: Path) -> Path:
-    """Download and extract the backend asset to target directory."""
+def download_and_extract(asset: dict, target_dir: Path) -> tuple[Path, Path]:
+    """Download and extract the backend asset to target directory.
+
+    Returns:
+        (payload_dir, executable_path)
+    """
     download_url = asset["browser_download_url"]
     filename = asset["name"]
     
@@ -184,7 +188,39 @@ def download_and_extract(asset: dict, target_dir: Path) -> Path:
         if platform.system().lower() != "windows":
             executable_path.chmod(0o755)
         
-        return executable_path
+        return target_dir, executable_path
+
+
+def sync_installation_payload(payload_dir: Path) -> None:
+    """Sync non-executable runtime files from payload into current install dir.
+
+    This keeps bundled resources (e.g. `_internal`, prompts, migration scripts)
+    aligned with the upgraded executable.
+    """
+    current_exe = Path(sys.executable)
+    install_dir = current_exe.parent
+    executable_name = current_exe.name
+
+    preserve = {
+        executable_name,  # replaced separately with rollback handling
+        f"{executable_name}.backup",
+        ".env",
+        ".env.example",
+    }
+
+    for item in payload_dir.iterdir():
+        if item.name in preserve:
+            continue
+
+        destination = install_dir / item.name
+        if item.is_dir():
+            if destination.exists():
+                shutil.rmtree(destination)
+            shutil.copytree(item, destination)
+        else:
+            shutil.copy2(item, destination)
+
+    logger.info("Synced runtime payload into %s", install_dir)
 
 
 def backup_current_executable() -> Path:
@@ -278,6 +314,12 @@ def check_for_updates(verbose: bool = False) -> dict:
 
 def upgrade_backend(force: bool = False, verbose: bool = False) -> bool:
     """Perform backend upgrade if newer version available."""
+    if not is_frozen():
+        raise UpgradeError(
+            "Self-upgrade is only supported in packaged executable mode. "
+            "For development, update via git/uv instead."
+        )
+
     logger.info("🔍 Checking for updates...")
     
     update_info = check_for_updates(verbose=verbose)
@@ -308,13 +350,17 @@ def upgrade_backend(force: bool = False, verbose: bool = False) -> bool:
         
         # Download and extract
         logger.info("⬇️  Downloading new version...")
-        new_executable = download_and_extract(asset, temp_path / "new_version")
-        
+        payload_dir, new_executable = download_and_extract(asset, temp_path / "new_version")
+
         # Backup current version
         logger.info("💾 Creating backup...")
         backup_path = backup_current_executable()
-        
+
         try:
+            # Sync runtime payload (non-executable files/directories)
+            logger.info("📦 Syncing runtime files...")
+            sync_installation_payload(payload_dir)
+
             # Replace executable
             logger.info("🔄 Installing update...")
             replace_executable(new_executable, backup_path)

@@ -1,0 +1,360 @@
+{
+  "generated_at": "2026-03-02T18:49:18.338637+00:00",
+  "manifest": "golden_samples/manifest.json",
+  "global_threshold": 0.6,
+  "aggregate": {
+    "case_count": 3,
+    "scored_case_count": 3,
+    "passed_case_count": 3,
+    "failed_case_count": 0,
+    "pass_rate": 1.0,
+    "mean_score": 0.9733
+  },
+  "cases": [
+    {
+      "case_id": "ucl_undergrad_anthropology",
+      "name": "UCL",
+      "status": "passed",
+      "threshold": 0.55,
+      "overall_score": 0.96,
+      "metrics": {
+        "completeness": 1.0,
+        "correctness": 1.0,
+        "normalization_consistency": 0.8,
+        "evidence_coverage": 1.0,
+        "name_similarity": 1.0,
+        "keyword_coverage": 1.0
+      },
+      "required_fields": [
+        "name_en",
+        "tuition",
+        "requirements"
+      ],
+      "observed": {
+        "name_en": "Anthropology with a Year Abroad BSc",
+        "tuition": {
+          "amount": 39200.0,
+          "currency": "GBP",
+          "evidence_url": "https://www.ucl.ac.uk/prospective-students/undergraduate/degrees/anthropology-year-abroad-bsc"
+        },
+        "study_options": [
+          {
+            "mode": "Unknown",
+            "duration_months": 144,
+            "evidence_url": "https://www.ucl.ac.uk/prospective-students/undergraduate/degrees/anthropology-year-abroad-bsc"
+          },
+          {
+            "mode": "Unknown",
+            "duration_months": 12,
+            "evidence_url": "https://www.ucl.ac.uk/prospective-students/undergraduate/degrees/anthropology-year-abroad-bsc"
+          }
+        ],
+        "deadlines": [],
+        "requirements": [
+          {
+            "category": "other",
+            "requirement_text": "[Skip to main content](https://www.ucl.ac.uk/prospective-students/undergraduate/degrees/anthropology-year-abroad-bsc#main-content)",
+            "evidence_url": "https://www.ucl.ac.uk/prospective-students/undergraduate/degrees/anthropology-year-abroad-bsc"
+          },
+          {
+            "category": "other",
+            "requirement_text": "What is it to be human? Delve into the evolutionary, environmental, social, cultural and material aspects of this vast topic on this broad-based anthropology degree. You’ll gain the skills and analytical perspectives to explore and respond ",
+            "evidence_url": "https://www.ucl.ac.uk/prospective-students/undergraduate/degrees/anthropology-year-abroad-bsc"
+          },
+          {
+            "category": "academic_subject",
+            "requirement_text": "## Entry requirements",
+            "evidence_url": "https://www.ucl.ac.uk/prospective-students/undergraduate/degrees/anthropology-year-abroad-bsc"
+          },
+          {
+            "category": "academic_subject",
+            "requirement_text": "[A levels](https://www.ucl.ac.uk/prospective-students/undergraduate/degrees/anthropology-year-abroad-bsc#tab1-alevel) [IB Diploma](https://www.ucl.ac.uk/prospective-students/undergraduate/degrees/anthropology-year-abroad-bsc#tab2-ibdiploma)",
+            "evidence_url": "https://www.ucl.ac.uk/prospective-students/undergraduate/degrees/anthropology-year-abroad-bsc"
+          },
+          {
+            "category": "academic_subject",
+            "requirement_text": "No specific subjects. At least two A level subjects should be taken from [UCL's list of preferred A level subjects](https://www.ucl.ac.uk/prospective-students/undergraduate/application/entry-requirements/preferred-level-subjects).",
+            "evidence_url": "https://www.ucl.ac.uk/prospective-students/undergraduate/degrees/anthropology-year-abroad-bsc"
+          },
+          {
+            "category": "language",
+            "requirement_text": "English Language and Mathematics at grade C or 4, plus any Science (Single Science, Biology, Chemistry or Physics) required at grade B or 6 (Combined Science at grades 6, 6).",
+            "evidence_url": "https://www.ucl.ac.uk/prospective-students/undergraduate/degrees/anthropology-year-abroad-bsc"
+          },
+          {
+            "category": "language",
+            "requirement_text": "English Language and Mathematics both at grade C or 4, plus any Science (Single Science, Biology, Chemistry or Physics) required at grade C or 4 (Combined Science at grades 4, 4).",
+            "evidence_url": "https://www.ucl.ac.uk/prospective-students/undergraduate/degrees/anthropology-year-abroad-bsc"
+          },
+          {
+            "category": "academic_subject",
+            "requirement_text": "For entry requirements with other UK qualifications accepted by UCL, choose your qualification from the list below:",
+            "evidence_url": "https://www.ucl.ac.uk/prospective-students/undergraduate/degrees/anthropology-year-abroad-bsc"
+          },
+          {
+            "category": "other",
+            "requirement_text": "Select your country Select a countryAlbaniaAlgeriaArgentinaArmeniaAustraliaAustriaAzerbaijanBahrainBangladeshBarbadosBelarusBelgiumBelizeBoliviaBosnia and HerzegovinaBotswanaBrazilBruneiBulgariaCambodiaCameroonCanadaCaribbean / West IndiesC",
+            "evidence_url": "https://www.ucl.ac.uk/prospective-students/undergraduate/degrees/anthropology-year-abroad-bsc"
+          },
+          {
+            "category": "other",
+            "requirement_text": "The Undergraduate Preparatory Certificates (UPC) prepare international students for a UCL undergraduate degree who don’t have the qualifications to enter directly. These intensive one-year foundation courses are taught on our central London",
+            "evidence_url": "https://www.ucl.ac.uk/prospective-students/undergraduate/degrees/anthropology-year-abroad-bsc"
+          },
+          {
+            "category": "language",
+            "requirement_text": "### English language requirements",
+            "evidence_url": "https://www.ucl.ac.uk/prospective-students/undergraduate/degrees/anthropology-year-abroad-bsc"
+          },
+          {
+            "category": "language",
+            "requirement_text": "The English language level for this programme is: **Level 2**",
+            "evidence_url": "https://www.ucl.ac.uk/prospective-students/undergraduate/degrees/anthropology-year-abroad-bsc"
+          }
+        ],
+        "source_url": "https://www.ucl.ac.uk/prospective-students/undergraduate/degrees/anthropology-year-abroad-bsc"
+      },
+      "expected": {
+        "expected_name": "Anthropology with a Year Abroad BSc",
+        "expected_keywords": [
+          "Anthropology",
+          "Year Abroad",
+          "BSc"
+        ],
+        "expected_tuition_currency": "GBP",
+        "min_requirement_count": 2
+      }
+    },
+    {
+      "case_id": "manchester_masters_business_psychology",
+      "name": "Manchester",
+      "status": "passed",
+      "threshold": 0.55,
+      "overall_score": 0.98,
+      "metrics": {
+        "completeness": 1.0,
+        "correctness": 1.0,
+        "normalization_consistency": 0.9,
+        "evidence_coverage": 1.0,
+        "name_similarity": 1.0,
+        "keyword_coverage": 1.0
+      },
+      "required_fields": [
+        "name_en",
+        "tuition",
+        "requirements"
+      ],
+      "observed": {
+        "name_en": "MSc Business Psychology",
+        "tuition": {
+          "amount": 31000.0,
+          "currency": "GBP",
+          "evidence_url": "https://www.manchester.ac.uk/study/masters/courses/list/09994/msc-business-psychology/"
+        },
+        "study_options": [
+          {
+            "mode": "Unknown",
+            "duration_months": 12,
+            "evidence_url": "https://www.manchester.ac.uk/study/masters/courses/list/09994/msc-business-psychology/"
+          }
+        ],
+        "deadlines": [
+          {
+            "round": 1,
+            "cutoff_date": "0500-02-03T00:00:00",
+            "description": "If you are successful in receiving an offer, you w",
+            "evidence_url": "https://www.manchester.ac.uk/study/masters/courses/list/09994/msc-business-psychology/"
+          }
+        ],
+        "requirements": [
+          {
+            "category": "other",
+            "requirement_text": "![Menu](https://assets.manchester.ac.uk/corporate/images/design/icon-menu.gif) ![Share this content](https://assets.manchester.ac.uk/corporate/images/design/icon-share-grey.svg)",
+            "evidence_url": "https://www.manchester.ac.uk/study/masters/courses/list/09994/msc-business-psychology/"
+          },
+          {
+            "category": "other",
+            "requirement_text": "![Share this content](https://assets.manchester.ac.uk/corporate/images/design/icon-share-grey.svg)",
+            "evidence_url": "https://www.manchester.ac.uk/study/masters/courses/list/09994/msc-business-psychology/"
+          },
+          {
+            "category": "other",
+            "requirement_text": "![](https://assets.manchester.ac.uk/course-profiles/2025-03-03/images/icon-degree-award.svg)Master of Science",
+            "evidence_url": "https://www.manchester.ac.uk/study/masters/courses/list/09994/msc-business-psychology/"
+          },
+          {
+            "category": "academic_subject",
+            "requirement_text": "[Full entry requirements](https://www.manchester.ac.uk/study/masters/courses/list/09994/msc-business-psychology/#entry-requirements)[How to apply](https://www.manchester.ac.uk/study/masters/courses/list/09994/msc-business-psychology/#applic",
+            "evidence_url": "https://www.manchester.ac.uk/study/masters/courses/list/09994/msc-business-psychology/"
+          },
+          {
+            "category": "academic_subject",
+            "requirement_text": "* [Entry requirements](https://www.manchester.ac.uk/study/masters/courses/list/09994/msc-business-psychology/#entry-requirements)",
+            "evidence_url": "https://www.manchester.ac.uk/study/masters/courses/list/09994/msc-business-psychology/"
+          },
+          {
+            "category": "other",
+            "requirement_text": "For students without a BPS accredited degree, MSc Business Psychology offers you the opportunity to study alongside the students of [MSc Organisational Psychology](https://www.alliancembs.manchester.ac.uk/study/masters/msc-organisational-ps",
+            "evidence_url": "https://www.manchester.ac.uk/study/masters/courses/list/09994/msc-business-psychology/"
+          },
+          {
+            "category": "academic_subject",
+            "requirement_text": "## Entry requirements",
+            "evidence_url": "https://www.manchester.ac.uk/study/masters/courses/list/09994/msc-business-psychology/"
+          },
+          {
+            "category": "other",
+            "requirement_text": "We require a First or Upper Second class honours degree (2:1, with 60% average) from a UK university or the overseas equivalent in psychology without GBC (Graduate Basis for Chartership), or in related disciplines such as social sciences, h",
+            "evidence_url": "https://www.manchester.ac.uk/study/masters/courses/list/09994/msc-business-psychology/"
+          },
+          {
+            "category": "language",
+            "requirement_text": "### English language",
+            "evidence_url": "https://www.manchester.ac.uk/study/masters/courses/list/09994/msc-business-psychology/"
+          },
+          {
+            "category": "language",
+            "requirement_text": "### English language test validity",
+            "evidence_url": "https://www.manchester.ac.uk/study/masters/courses/list/09994/msc-business-psychology/"
+          },
+          {
+            "category": "language",
+            "requirement_text": "Some English Language test results are only valid for two years. Your English Language test report must be valid on the start date of the course.",
+            "evidence_url": "https://www.manchester.ac.uk/study/masters/courses/list/09994/msc-business-psychology/"
+          },
+          {
+            "category": "academic_subject",
+            "requirement_text": "### Other international entry requirements",
+            "evidence_url": "https://www.manchester.ac.uk/study/masters/courses/list/09994/msc-business-psychology/"
+          }
+        ],
+        "source_url": "https://www.manchester.ac.uk/study/masters/courses/list/09994/msc-business-psychology/"
+      },
+      "expected": {
+        "expected_name": "MSc Business Psychology",
+        "expected_keywords": [
+          "Business",
+          "Psychology",
+          "MSc"
+        ],
+        "expected_tuition_currency": "GBP",
+        "min_requirement_count": 2
+      }
+    },
+    {
+      "case_id": "leeds_masters_ai_business",
+      "name": "Leeds",
+      "status": "passed",
+      "threshold": 0.55,
+      "overall_score": 0.98,
+      "metrics": {
+        "completeness": 1.0,
+        "correctness": 1.0,
+        "normalization_consistency": 0.9,
+        "evidence_coverage": 1.0,
+        "name_similarity": 1.0,
+        "keyword_coverage": 1.0
+      },
+      "required_fields": [
+        "name_en",
+        "tuition",
+        "requirements"
+      ],
+      "observed": {
+        "name_en": "AI for Business MSc",
+        "tuition": {
+          "amount": 33000.0,
+          "currency": "GBP",
+          "evidence_url": "https://courses.leeds.ac.uk/k198/ai-for-business-msc?searchOrigin=query%3D%26type%3DPGT%26term%3D202627"
+        },
+        "study_options": [
+          {
+            "mode": "FullTime",
+            "duration_months": 12,
+            "evidence_url": "https://courses.leeds.ac.uk/k198/ai-for-business-msc?searchOrigin=query%3D%26type%3DPGT%26term%3D202627"
+          },
+          {
+            "mode": "Unknown",
+            "duration_months": 12,
+            "evidence_url": "https://courses.leeds.ac.uk/k198/ai-for-business-msc?searchOrigin=query%3D%26type%3DPGT%26term%3D202627"
+          }
+        ],
+        "deadlines": [],
+        "requirements": [
+          {
+            "category": "academic_subject",
+            "requirement_text": "12 Months (Full time) Entry requirements",
+            "evidence_url": "https://courses.leeds.ac.uk/k198/ai-for-business-msc?searchOrigin=query%3D%26type%3DPGT%26term%3D202627"
+          },
+          {
+            "category": "other",
+            "requirement_text": "A bachelor degree with a 2:1 (hons) in any subject.",
+            "evidence_url": "https://courses.leeds.ac.uk/k198/ai-for-business-msc?searchOrigin=query%3D%26type%3DPGT%26term%3D202627"
+          },
+          {
+            "category": "language",
+            "requirement_text": "[Full entry requirements](https://courses.leeds.ac.uk/k198/ai-for-business-msc?searchOrigin=query%3D%26type%3DPGT%26term%3D202627#applying) English language requirements",
+            "evidence_url": "https://courses.leeds.ac.uk/k198/ai-for-business-msc?searchOrigin=query%3D%26type%3DPGT%26term%3D202627"
+          },
+          {
+            "category": "language",
+            "requirement_text": "IELTS 6.5 overall, with no less than 6.0 in any component. UK fees",
+            "evidence_url": "https://courses.leeds.ac.uk/k198/ai-for-business-msc?searchOrigin=query%3D%26type%3DPGT%26term%3D202627"
+          },
+          {
+            "category": "academic_subject",
+            "requirement_text": "* [Applying and entry requirements](https://courses.leeds.ac.uk/k198/ai-for-business-msc?searchOrigin=query%3D%26type%3DPGT%26term%3D202627#applying)",
+            "evidence_url": "https://courses.leeds.ac.uk/k198/ai-for-business-msc?searchOrigin=query%3D%26type%3DPGT%26term%3D202627"
+          },
+          {
+            "category": "other",
+            "requirement_text": "This innovative degree focuses on artificial intelligence in business and will equip you with the knowledge, analytical capabilities, and practical skills required to lead responsible, sustainable AI-driven business transformation in a rapi",
+            "evidence_url": "https://courses.leeds.ac.uk/k198/ai-for-business-msc?searchOrigin=query%3D%26type%3DPGT%26term%3D202627"
+          },
+          {
+            "category": "other",
+            "requirement_text": "This course is structured over three semesters within a 12-month period. In semester 1, you'll study four compulsory modules, with semester 2 having two compulsory modules. You’ll also choose from a range of optional modules to tailor your ",
+            "evidence_url": "https://courses.leeds.ac.uk/k198/ai-for-business-msc?searchOrigin=query%3D%26type%3DPGT%26term%3D202627"
+          },
+          {
+            "category": "other",
+            "requirement_text": "This module offers a clear and accessible introduction to machine learning, designed to demystify complex concepts for business professionals. Students will gain a solid foundation in the most widely used algorithms such as regression model",
+            "evidence_url": "https://courses.leeds.ac.uk/k198/ai-for-business-msc?searchOrigin=query%3D%26type%3DPGT%26term%3D202627"
+          },
+          {
+            "category": "academic_subject",
+            "requirement_text": "### Entry requirements",
+            "evidence_url": "https://courses.leeds.ac.uk/k198/ai-for-business-msc?searchOrigin=query%3D%26type%3DPGT%26term%3D202627"
+          },
+          {
+            "category": "language",
+            "requirement_text": "#### English language requirements",
+            "evidence_url": "https://courses.leeds.ac.uk/k198/ai-for-business-msc?searchOrigin=query%3D%26type%3DPGT%26term%3D202627"
+          },
+          {
+            "category": "language",
+            "requirement_text": "IELTS 6.5 overall, with no less than 6.0 in any component.. For other English qualifications, read [English language equivalent qualifications](https://www.leeds.ac.uk/international-admissions/doc/entry-requirements \"English language equiva",
+            "evidence_url": "https://courses.leeds.ac.uk/k198/ai-for-business-msc?searchOrigin=query%3D%26type%3DPGT%26term%3D202627"
+          },
+          {
+            "category": "language",
+            "requirement_text": "International students who do not meet the English language requirements for this programme may be able to study our postgraduate pre-sessional English course, to help improve your English language level.",
+            "evidence_url": "https://courses.leeds.ac.uk/k198/ai-for-business-msc?searchOrigin=query%3D%26type%3DPGT%26term%3D202627"
+          }
+        ],
+        "source_url": "https://courses.leeds.ac.uk/k198/ai-for-business-msc?searchOrigin=query%3D%26type%3DPGT%26term%3D202627"
+      },
+      "expected": {
+        "expected_name": "AI for Business MSc",
+        "expected_keywords": [
+          "AI",
+          "Business",
+          "MSc"
+        ],
+        "expected_tuition_currency": "GBP",
+        "min_requirement_count": 2
+      }
+    }
+  ],
+  "global_pass": true
+}

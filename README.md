@@ -33,7 +33,19 @@ Entry Points                    Services Layer              Infrastructure
 └──────────────┘
 ```
 
-## � Production Usage (No Code Required)
+## 📘 Upgrade Changelog
+- [Phase 1: Data-Layer Upgrade (fact + dimensions + evidence + versioning)](docs/changelog_phase1_data_layer.md)
+- [Phase 2: Execution-Layer Decoupling (ingestion_job/task + staged pipeline + resume)](docs/changelog_phase2_execution_layer.md)
+- [Phase 3: Quality System Seed (golden samples + scoring + CI gate)](docs/changelog_phase3_quality_system.md)
+- [Consolidated Progress Log](change_log.md)
+
+## ✅ Current Optimization Status (2026-03-03)
+- Phase 1 complete: versioned requirement data model and evidence chain are in place.
+- Phase 2 complete: crawl flow now runs through staged ingestion pipeline by default, including `--continue > 0` paths.
+- Phase 3 seed complete: golden sample collection, offline quality scoring, and CI regression gate are enabled.
+- Latest seed benchmark: `golden_samples/reports/quality_report.json` with global pass at threshold `0.60`.
+
+## Production Usage (No Code Required)
 
 If you just want to *use* the agent without writing code, download the latest release for your platform.
 
@@ -122,10 +134,11 @@ The agent needs a database connection.
    ```
 3. Set your `DATABASE_URL` and API keys in `.env`.
 
-## �🚀 Getting Started (Development)
+## 🚀 Getting Started (Development)
 1. `pyenv local 3.12.0`
 2. `uv sync`
-3. Copy `.env.example` to `.env` and add your API keys.4. Install Git hooks for code quality: `bash .githooks/install-hooks.sh`
+3. Copy `.env.example` to `.env` and add your API keys.
+4. Install Git hooks for code quality: `bash .githooks/install-hooks.sh`
 ## 📖 Usage
 
 ### CLI Commands
@@ -166,6 +179,27 @@ The agent needs a database connection.
 # Force update even if already on latest version
 ./adm-agent upgrade --force
 
+# Apply database migrations
+./adm-agent db-migrate --yes
+
+# Show database migration revision status
+./adm-agent db-version
+
+# Auto-repair migration failures with rollback safety
+./adm-agent repair --auto
+
+# List recent Phase 2 ingestion jobs
+./adm-agent ingestion-jobs --limit 20
+
+# Resume a failed ingestion job
+./adm-agent ingestion-resume --job <job_uid> --stage validate_rules
+
+# Collect Phase 3 golden sample snapshots
+./adm-agent golden-collect --overwrite
+
+# Run Phase 3 quality scoring (fails on regression threshold)
+./adm-agent quality-score --threshold 0.60
+
 # Show current version
 ./adm-agent version
 
@@ -204,6 +238,27 @@ The agent needs a database connection.
 
 # Force update even if already on latest version
 .\adm-agent.exe upgrade --force
+
+# Apply database migrations
+.\adm-agent.exe db-migrate --yes
+
+# Show database migration revision status
+.\adm-agent.exe db-version
+
+# Auto-repair migration failures with rollback safety
+.\adm-agent.exe repair --auto
+
+# List recent Phase 2 ingestion jobs
+.\adm-agent.exe ingestion-jobs --limit 20
+
+# Resume a failed ingestion job
+.\adm-agent.exe ingestion-resume --job <job_uid> --stage validate_rules
+
+# Collect Phase 3 golden sample snapshots
+.\adm-agent.exe golden-collect --overwrite
+
+# Run Phase 3 quality scoring (fails on regression threshold)
+.\adm-agent.exe quality-score --threshold 0.60
 
 # Show current version
 .\adm-agent.exe version
@@ -279,6 +334,22 @@ export PLAYWRIGHT_BROWSERS_PATH=/path/to/ms-playwright
 .\adm-agent.exe status
 ```
 
+### Database Migrations
+
+Use Alembic migration commands to keep schema in sync after upgrades:
+
+```bash
+# Check revision status
+./adm-agent db-version
+
+# Migrate to latest schema
+./adm-agent db-migrate --yes
+```
+
+`upgrade` runs `db-migrate --yes` by default after a successful backend update.
+If migration fails during upgrade, the agent automatically runs `repair --auto`
+to rollback to a safe data state.
+
 ### Server
 
 **Unix (macOS/Linux):**
@@ -326,7 +397,7 @@ curl http://localhost:8910/tasks/{task_id}
 # Database statistics
 curl http://localhost:8910/status
 
-# Query programs (with detailed fields: study_options, deadlines, source_url)
+# Query programs (with detailed fields: study_options, deadlines, requirements, source_url)
 curl "http://localhost:8910/programs?univ_slug=hku&year=2026"
 
 # List all universities

@@ -1,0 +1,16 @@
+{
+  "expected_name": "Anthropology with a Year Abroad BSc",
+  "expected_keywords": [
+    "Anthropology",
+    "Year Abroad",
+    "BSc"
+  ],
+  "expected_tuition_currency": "GBP",
+  "min_requirement_count": 2,
+  "required_fields": [
+    "name_en",
+    "tuition",
+    "requirements"
+  ],
+  "case_threshold": 0.55
+}

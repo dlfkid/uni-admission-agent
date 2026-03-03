@@ -86,13 +86,28 @@ class ParsedDeadline(BaseModel):
     cutoff_date: Optional[datetime] = Field(default=None, description="ISO 8601 date string. If missing, return null.")
 
 
+class ParsedRequirement(BaseModel):
+    category: str = Field(
+        default="academic_subject",
+        description="Requirement category (academic_subject, language, standardized_test, portfolio, experience, other).",
+    )
+    subject_name: Optional[str] = Field(default=None, description="Subject/test name, e.g. Mathematics, IELTS.")
+    framework: Optional[str] = Field(default=None, description="Qualification framework, e.g. A-Level, IB, Gaokao.")
+    minimum_value: Optional[str] = Field(default=None, description="Minimum threshold, e.g. A, 6.5, 1300.")
+    unit: Optional[str] = Field(default=None, description="Unit or score scale, e.g. points, band.")
+    applicant_scope: str = Field(default="all", description="Target applicant scope, e.g. all/international/local.")
+    requirement_text: str = Field(default="", description="Human-readable requirement statement.")
+    evidence_url: Optional[str] = Field(default=None, description="Source evidence URL if available.")
+
+
 class ParsedProgramData(BaseModel):
     faculty: Optional[str] = Field(default=None, description="Top-level academic unit (Faculty, School, or College). e.g., 'Faculty of Engineering'.")
     tuition: Optional[ParsedTuition] = Field(default=None, description="Tuition fee structure")
     study_options: List[ParsedStudyOption] = Field(default_factory=list, description="List of study options")
     deadlines: List[ParsedDeadline] = Field(default_factory=list, description="List of application deadlines")
+    requirements: List[ParsedRequirement] = Field(default_factory=list, description="Subject-level admission requirements")
 
-    @field_validator("study_options", "deadlines", mode="before")
+    @field_validator("study_options", "deadlines", "requirements", mode="before")
     @classmethod
     def _none_to_list(cls, v: object) -> object:
         """LLMs sometimes return ``null`` for list fields; coerce to ``[]``."""
@@ -143,11 +158,17 @@ def _merge_parsed_data(
         if dl not in merged_deadlines:
             merged_deadlines.append(dl)
 
+    merged_requirements = list(existing.requirements)
+    for req in new.requirements:
+        if req not in merged_requirements:
+            merged_requirements.append(req)
+
     return ParsedProgramData(
         faculty=merged_faculty,
         tuition=merged_tuition,
         study_options=merged_options,
         deadlines=merged_deadlines,
+        requirements=merged_requirements,
     )
 
 
@@ -198,7 +219,10 @@ class LLMCleanerAgent:
         3. **Study Options**: Convert descriptions like "1 year FT / 2 years PT" into a list of options with mode and months.
         4. **Deadlines**: Extract dates and descriptions.
            - Output ALL valid deadlines found, sorted chronologically.
-        5. Missing Data: If a field cannot be extracted, set it to null/empty list as per schema.
+        5. **Requirements**: Extract subject-level admission requirements.
+           - Include score/grade thresholds when present (e.g., Math A, IELTS 6.5).
+           - Capture framework when available (A-Level/IB/Gaokao/SAT/ACT).
+        6. Missing Data: If a field cannot be extracted, set it to null/empty list as per schema.
 
         IMPORTANT: Only return necessary structured data. Do NOT include any raw HTML snippets or duplicate original text in the JSON output.
 
@@ -317,7 +341,12 @@ class LLMCleanerAgent:
                 continue
 
         # Check if we got any meaningful data
-        if not accumulated.tuition and not accumulated.study_options and not accumulated.deadlines:
+        if (
+            not accumulated.tuition
+            and not accumulated.study_options
+            and not accumulated.deadlines
+            and not accumulated.requirements
+        ):
             logger.warning("No data extracted from any chunk: %s", source_url)
             return None
 
@@ -424,7 +453,9 @@ class LLMCleanerAgent:
             "3. **Study Options**: Convert descriptions like '1 year FT / 2 years PT' into a list of options with mode and months.",
             "4. **Deadlines**: Extract dates and descriptions.",
             "   - Output ALL valid deadlines found, sorted chronologically.",
-            "5. Missing Data: If a field cannot be extracted, set it to null/empty list as per schema.",
+            "5. **Requirements**: Extract subject-level admission requirements.",
+            "   - Include score/grade thresholds when available (Math A, IELTS 6.5).",
+            "6. Missing Data: If a field cannot be extracted, set it to null/empty list as per schema.",
             "",
             "IMPORTANT: Only return necessary structured data. Do NOT include any raw HTML snippets or duplicate original text in the JSON output.",
             "",

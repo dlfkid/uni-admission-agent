@@ -1,101 +1,59 @@
 import os
 import logging
+import re
+import json
+import hashlib
 import threading
-from typing import Any, Optional, Tuple, List, Dict
 from datetime import datetime, timezone
+from typing import Any, Optional, Tuple, List, Dict
+
+from sqlalchemy import inspect as sa_inspect
+from sqlalchemy import text
 from sqlmodel import create_engine, Session, select, SQLModel, col
 from sqlalchemy_utils import database_exists, create_database
-from sqlalchemy.dialects.postgresql import insert
-from sqlalchemy import func
-from sqlalchemy import inspect as sa_inspect
-from src.models.admission import University, Program
-from src.models.scraper_models import ProgramContext
-from dotenv import load_dotenv, find_dotenv
 
-# On Windows with a Chinese locale the .env file may be saved in GBK/GB18030.
-# Try common encodings in priority order so DATABASE_URL always loads correctly.
-_ENV_FILE = find_dotenv(usecwd=True) or find_dotenv()
-if _ENV_FILE:
-    for _enc in ("utf-8-sig", "utf-8", "gb18030"):
-        try:
-            load_dotenv(_ENV_FILE, encoding=_enc, override=True)
-            break
-        except (UnicodeDecodeError, LookupError):
-            continue
-else:
-    load_dotenv()
+from src.models.admission import (
+    University,
+    Program,
+    ProgramCatalog,
+    CurrencyCode,
+)
+from src.models.requirement import (
+    SubjectDim,
+    ExamDim,
+    FrameworkDim,
+    RequirementEvidence,
+    RequirementVersion,
+    ProgramStudyOption,
+    ProgramDeadline,
+    ProgramRequirement,
+    RequirementCategory,
+)
+from src.models.ingestion import IngestionJob, IngestionTask  # noqa: F401
+from src.models.scraper_models import ProgramContext
+from src.storage.db_helpers import (
+    load_database_env,
+    patch_psycopg2_for_gbk,
+    normalize_text_payload as _normalize_text_payload,
+    catalog_key,
+    value_should_apply,
+    parse_study_mode,
+    parse_datetime,
+    extract_requirements_from_extra_metadata,
+)
+
+load_database_env()
 
 logger = logging.getLogger(__name__)
 
-
-def _normalize_text_payload(value: Any) -> Any:
-    """Normalize payload values for DB writes.
-
-    Recursively converts unexpected bytes into string to avoid
-    Unicode decode errors in database adapters on Windows.
-    """
-    if isinstance(value, dict):
-        return {
-            _normalize_text_payload(k): _normalize_text_payload(v)
-            for k, v in value.items()
-        }
-    if isinstance(value, list):
-        return [_normalize_text_payload(item) for item in value]
-    if isinstance(value, tuple):
-        return tuple(_normalize_text_payload(item) for item in value)
-    if isinstance(value, bytes):
-        for encoding in ("utf-8", "gb18030", "latin-1"):
-            try:
-                return value.decode(encoding)
-            except UnicodeDecodeError:
-                continue
-        return value.decode("utf-8", errors="replace")
-    return value
-
-
-def _patch_psycopg2_for_gbk() -> None:
-    """Patch psycopg2.connect so GBK-encoded error messages from PostgreSQL
-    are re-decoded correctly on Windows Chinese locale systems.
-
-    Without this patch, a connection failure whose error message is in GBK
-    (e.g. 致命错误: 用户"postgres"Password认证失败) causes psycopg2 to raise an
-    unreadable ``UnicodeDecodeError`` instead of a proper ``OperationalError``,
-    completely hiding the real problem from the operator.
-    """
-    try:
-        import psycopg2  # pylint: disable=import-outside-toplevel
-        from psycopg2 import OperationalError  # pylint: disable=import-outside-toplevel
-    except ImportError:
-        return  # psycopg2 not installed – nothing to patch
-
-    _original_connect = psycopg2.connect
-
-    def _gbk_safe_connect(*args, **kwargs):
-        try:
-            return _original_connect(*args, **kwargs)
-        except UnicodeDecodeError as exc:
-            raw_bytes: bytes = exc.object  # type: ignore[assignment]
-            # Attempt to decode the GBK error message for a readable traceback
-            try:
-                decoded = raw_bytes.decode("gbk", errors="replace")
-            except Exception:  # pragma: no cover
-                decoded = raw_bytes.decode("latin-1", errors="replace")
-            raise OperationalError(
-                f"psycopg2 connection failed (GBK error message re-decoded): "
-                f"{decoded}"
-            ) from exc
-
-    psycopg2.connect = _gbk_safe_connect  # type: ignore[assignment]
-
-
-_patch_psycopg2_for_gbk()
+patch_psycopg2_for_gbk()
 
 
 class DatabaseManager:
     _instance: Optional["DatabaseManager"] = None
     _lock = threading.Lock()
     initialized: bool
-    
+
     def __new__(cls):
         if cls._instance is None:
             with cls._lock:
@@ -106,19 +64,10 @@ class DatabaseManager:
 
     @staticmethod
     def _sanitize_db_url(url: str) -> str:
-        """Ensure the database URL is a clean, psycopg2-safe connection string.
-
-        1. Normalises any accidentally GBK-encoded bytes (Windows Chinese locale).
-        2. Appends ``client_encoding=utf8`` so psycopg2 negotiates UTF-8 with
-           the server from the initial handshake.  Without this, on Windows the
-           client inherits the ANSI code page (CP936/GBK) and psycopg2 may fail
-           to decode the server startup response as UTF-8.
-        """
-        # --- Byte normalisation ---
+        """Ensure psycopg2-safe URL and UTF-8 client encoding."""
         try:
             url.encode("ascii")
         except UnicodeEncodeError:
-            # Try latin-1 round-trip to recover bytes mis-read as latin-1.
             try:
                 raw = url.encode("latin-1")
                 for enc in ("utf-8", "gb18030"):
@@ -128,102 +77,68 @@ class DatabaseManager:
                     except UnicodeDecodeError:
                         continue
             except UnicodeEncodeError:
-                pass  # Genuine Unicode chars – leave as-is
+                pass
 
-        # --- Force UTF-8 client encoding ---
         if "client_encoding" not in url and url.startswith("postgresql"):
             sep = "&" if "?" in url else "?"
             url = f"{url}{sep}client_encoding=utf8"
-
         return url
 
     def init_db(self, db_url: Optional[str] = None):
-        """Initialize database connection, create tables, and sync schema.
-
-        Performs self-healing: if a table exists but is missing columns that
-        the current SQLModel definition expects, those columns are added
-        automatically via ``ALTER TABLE ... ADD COLUMN``.  This prevents the
-        common failure mode where a model gains a new field but the live
-        database has not been migrated yet.
-        """
+        """Initialize DB engine and sync minimal additive schema drift."""
         if getattr(self, "engine", None):
             return
 
         if not db_url:
             db_url = os.getenv("DATABASE_URL")
             if not db_url:
-                db_url = "postgresql+psycopg2://postgres:postgres@localhost:5432/uni_admission"
+                db_url = (
+                    "postgresql+psycopg2://postgres:postgres@localhost:5432/uni_admission"
+                )
 
         db_url = self._sanitize_db_url(db_url)
 
-        try:
-            self.engine = create_engine(
-                db_url,
-                connect_args={"client_encoding": "utf8"},
-            )
-            
-            # Self-healing: Create DB if not exists
-            if not database_exists(self.engine.url):
-                logger.info(f"Database does not exist. Creating: {self.engine.url}")
-                create_database(self.engine.url)
-            
-            # Create tables (only creates NEW tables; does NOT alter existing)
-            SQLModel.metadata.create_all(self.engine)
+        self.engine = create_engine(
+            db_url,
+            connect_args={"client_encoding": "utf8"},
+        )
 
-            # Self-healing: add missing columns to existing tables
-            self._sync_schema()
+        if not database_exists(self.engine.url):
+            logger.info("Database does not exist. Creating: %s", self.engine.url)
+            create_database(self.engine.url)
 
-            logger.info("Database initialized successfully.")
-        except Exception as e:
-            logger.error(f"Failed to initialize database: {e}")
-            raise
-
-    # ------------------------------------------------------------------
-    #  Schema self-healing
-    # ------------------------------------------------------------------
+        # Keep lightweight self-healing for additive columns.
+        SQLModel.metadata.create_all(self.engine)
+        self._sync_schema()
+        logger.info("Database initialized successfully.")
 
     def _sync_schema(self) -> None:
-        """Compare SQLModel metadata with the live database and add any
-        missing columns.  This is a lightweight forward-only migration that
-        covers the most common case (new nullable/defaulted columns) without
-        requiring a full Alembic run.
-        """
-        from sqlalchemy import text, inspect as sa_inspect_engine
-
-        inspector = sa_inspect_engine(self.engine)
+        """Forward-only schema sync for missing columns."""
+        inspector = sa_inspect(self.engine)
         existing_tables = set(inspector.get_table_names())
 
         for table in SQLModel.metadata.sorted_tables:
             if table.name not in existing_tables:
-                continue  # create_all already handled brand-new tables
+                continue
 
-            db_columns = {col["name"] for col in inspector.get_columns(table.name)}
-
-            for col in table.columns:
-                if col.name in db_columns:
+            db_columns = {col_meta["name"] for col_meta in inspector.get_columns(table.name)}
+            for column in table.columns:
+                if column.name in db_columns:
                     continue
 
-                # Build ALTER TABLE statement
-                col_type = col.type.compile(dialect=self.engine.dialect)
-                nullable = "NULL" if col.nullable else "NOT NULL"
-
-                # Determine a DEFAULT clause so NOT NULL doesn't fail on backfill
+                col_type = column.type.compile(dialect=self.engine.dialect)
+                nullable = "NULL" if column.nullable else "NOT NULL"
                 default_clause = ""
-                if col.server_default is not None:
-                    default_clause = f"DEFAULT {col.server_default.arg}"
-                elif col.default is not None:
-                    # Python-side defaults can't be expressed as SQL DEFAULT
-                    # easily; fall back to a safe literal if possible.
-                    if col.nullable:
-                        default_clause = "DEFAULT NULL"
-                    else:
-                        default_clause = "DEFAULT ''"
-                elif col.nullable:
+                if column.server_default is not None:
+                    default_clause = f"DEFAULT {column.server_default.arg}"
+                elif column.default is not None:
+                    default_clause = "DEFAULT NULL" if column.nullable else "DEFAULT ''"
+                elif column.nullable:
                     default_clause = "DEFAULT NULL"
 
                 ddl = (
                     f'ALTER TABLE "{table.name}" '
-                    f'ADD COLUMN "{col.name}" {col_type} {nullable} {default_clause}'
+                    f'ADD COLUMN "{column.name}" {col_type} {nullable} {default_clause}'
                 )
 
                 logger.info("Auto-sync schema: %s", ddl.strip())
@@ -236,27 +151,515 @@ class DatabaseManager:
             self.init_db()
         return Session(self.engine)
 
+    # ------------------------------------------------------------------
+    #  Core upsert/query
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _normalize_dim_key(value: Any, prefix: str) -> Optional[str]:
+        text = str(value or "").strip().lower()
+        if not text:
+            return None
+        normalized = re.sub(r"[^a-z0-9]+", "-", text).strip("-")
+        if not normalized:
+            normalized = prefix
+        return normalized
+
+    @staticmethod
+    def _infer_exam_fields(item: dict[str, Any]) -> dict[str, Optional[str]]:
+        text_parts = [
+            str(item.get("subject_name") or item.get("subject") or "").strip().lower(),
+            str(item.get("framework") or "").strip().lower(),
+            str(item.get("requirement_text") or item.get("text") or "").strip().lower(),
+        ]
+        merged = " ".join(part for part in text_parts if part)
+
+        explicit_exam_name = str(item.get("exam_name") or "").strip()
+        if explicit_exam_name:
+            code = DatabaseManager._normalize_dim_key(explicit_exam_name, "exam")
+            return {
+                "exam_code": code,
+                "exam_display_name": explicit_exam_name,
+                "exam_family": str(item.get("exam_family") or "").strip() or None,
+            }
+
+        patterns = (
+            ("ielts", "IELTS", "language"),
+            ("toefl", "TOEFL", "language"),
+            ("sat", "SAT", "standardized"),
+            ("act", "ACT", "standardized"),
+            ("gre", "GRE", "standardized"),
+            ("gmat", "GMAT", "standardized"),
+            ("a-level", "A-Level", "curriculum"),
+            ("a level", "A-Level", "curriculum"),
+            ("ib", "IB", "curriculum"),
+            ("ap", "AP", "curriculum"),
+        )
+        for token, display_name, family in patterns:
+            if token in merged:
+                return {
+                    "exam_code": DatabaseManager._normalize_dim_key(display_name, "exam"),
+                    "exam_display_name": display_name,
+                    "exam_family": family,
+                }
+
+        category = str(item.get("category") or "").strip().lower()
+        if category == RequirementCategory.STANDARDIZED_TEST.value:
+            fallback_name = str(
+                item.get("subject_name")
+                or item.get("subject")
+                or item.get("framework")
+                or "Standardized Test"
+            ).strip()
+            if fallback_name:
+                return {
+                    "exam_code": DatabaseManager._normalize_dim_key(fallback_name, "exam"),
+                    "exam_display_name": fallback_name,
+                    "exam_family": "standardized",
+                }
+
+        return {
+            "exam_code": None,
+            "exam_display_name": None,
+            "exam_family": None,
+        }
+
+    @staticmethod
+    def _normalize_requirement_item(
+        item: dict[str, Any],
+        sort_order: int,
+        default_evidence_url: Optional[str] = None,
+    ) -> dict[str, Any]:
+        category = str(item.get("category") or "other").strip().lower()
+        allowed = {c.value for c in RequirementCategory}
+        if category not in allowed:
+            category = RequirementCategory.OTHER.value
+
+        requirement_text = str(
+            item.get("requirement_text") or item.get("text") or item.get("minimum_value") or ""
+        ).strip()
+
+        subject_name = str(item.get("subject_name") or item.get("subject") or "").strip() or None
+        framework = str(item.get("framework") or "").strip() or None
+        evidence_url = str(item.get("evidence_url") or "").strip() or default_evidence_url
+        exam_fields = DatabaseManager._infer_exam_fields(item)
+
+        return {
+            "category": RequirementCategory(category),
+            "subject_name": subject_name,
+            "framework": framework,
+            "minimum_value": str(item.get("minimum_value") or item.get("score") or "").strip() or None,
+            "unit": str(item.get("unit") or "").strip() or None,
+            "applicant_scope": str(item.get("applicant_scope") or "all").strip() or "all",
+            "requirement_text": requirement_text,
+            "evidence_url": evidence_url,
+            "evidence_snippet": (
+                str(item.get("evidence_snippet") or item.get("source_snippet") or "").strip() or None
+            ),
+            "evidence_locator_type": (
+                str(item.get("evidence_locator_type") or "").strip() or None
+            ),
+            "evidence_locator_value": (
+                str(item.get("evidence_locator_value") or item.get("evidence_locator") or "").strip() or None
+            ),
+            "evidence_captured_at": parse_datetime(item.get("evidence_captured_at")),
+            "exam_code": exam_fields["exam_code"],
+            "exam_display_name": exam_fields["exam_display_name"],
+            "exam_family": exam_fields["exam_family"],
+            "sort_order": sort_order,
+        }
+
+    @staticmethod
+    def _signature_requirement_item(item: dict[str, Any]) -> str:
+        payload = {
+            "category": (
+                item.get("category").value
+                if isinstance(item.get("category"), RequirementCategory)
+                else str(item.get("category") or "").strip().lower()
+            ),
+            "subject_name": str(item.get("subject_name") or "").strip().lower(),
+            "framework": str(item.get("framework") or "").strip().lower(),
+            "minimum_value": str(item.get("minimum_value") or "").strip().lower(),
+            "unit": str(item.get("unit") or "").strip().lower(),
+            "applicant_scope": str(item.get("applicant_scope") or "").strip().lower(),
+            "requirement_text": str(item.get("requirement_text") or "").strip().lower(),
+            "exam_code": str(item.get("exam_code") or "").strip().lower(),
+        }
+        return json.dumps(payload, sort_keys=True, ensure_ascii=False)
+
+    @staticmethod
+    def _requirements_fingerprint(items: list[dict[str, Any]]) -> str:
+        signatures = sorted(
+            DatabaseManager._signature_requirement_item(item)
+            for item in items
+            if str(item.get("requirement_text") or "").strip()
+        )
+        blob = "|".join(signatures)
+        return hashlib.sha256(blob.encode("utf-8")).hexdigest()
+
+    @staticmethod
+    def _diff_requirements(
+        old_items: list[dict[str, Any]],
+        new_items: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        old_set = {DatabaseManager._signature_requirement_item(item) for item in old_items}
+        new_set = {DatabaseManager._signature_requirement_item(item) for item in new_items}
+        added = sorted(new_set - old_set)
+        removed = sorted(old_set - new_set)
+        return {
+            "old_count": len(old_set),
+            "new_count": len(new_set),
+            "added_count": len(added),
+            "removed_count": len(removed),
+            "added": [json.loads(item) for item in added[:20]],
+            "removed": [json.loads(item) for item in removed[:20]],
+        }
+
+    def _sync_study_option_records(
+        self,
+        session: Session,
+        program_id: int,
+        payload: list[dict[str, Any]],
+    ) -> None:
+        existing = session.exec(
+            select(ProgramStudyOption).where(ProgramStudyOption.program_id == program_id)
+        ).all()
+        for row in existing:
+            session.delete(row)
+
+        for item in payload:
+            if not isinstance(item, dict):
+                continue
+            duration_raw = item.get("duration_months")
+            duration = int(duration_raw) if str(duration_raw or "").isdigit() else None
+            session.add(
+                ProgramStudyOption(
+                    program_id=program_id,
+                    mode=parse_study_mode(item.get("mode")),
+                    duration_months=duration,
+                    notes=str(item.get("notes") or item.get("description") or "").strip() or None,
+                )
+            )
+
+    def _sync_deadline_records(
+        self,
+        session: Session,
+        program_id: int,
+        payload: list[dict[str, Any]],
+    ) -> None:
+        existing = session.exec(
+            select(ProgramDeadline).where(ProgramDeadline.program_id == program_id)
+        ).all()
+        for row in existing:
+            session.delete(row)
+
+        for item in payload:
+            if not isinstance(item, dict):
+                continue
+            round_raw = item.get("round")
+            round_value = int(round_raw) if str(round_raw or "").isdigit() else None
+            session.add(
+                ProgramDeadline(
+                    program_id=program_id,
+                    round=round_value,
+                    description=str(item.get("description") or "").strip() or None,
+                    cutoff_date=parse_datetime(item.get("cutoff_date")),
+                )
+            )
+
+    def _upsert_subject_dim(self, session: Session, subject_name: Optional[str]) -> Optional[SubjectDim]:
+        normalized_name = self._normalize_dim_key(subject_name, "subject")
+        if not normalized_name:
+            return None
+        canonical_name = str(subject_name or "").strip()
+
+        existing = session.exec(
+            select(SubjectDim).where(SubjectDim.normalized_name == normalized_name)
+        ).first()
+        if existing:
+            if canonical_name and existing.canonical_name != canonical_name:
+                aliases = list(existing.aliases or [])
+                if existing.canonical_name and existing.canonical_name not in aliases:
+                    aliases.append(existing.canonical_name)
+                if canonical_name not in aliases and canonical_name != existing.canonical_name:
+                    aliases.append(canonical_name)
+                existing.aliases = aliases
+                existing.canonical_name = canonical_name
+                existing.updated_at = datetime.now(timezone.utc)
+                session.add(existing)
+                session.flush()
+            return existing
+
+        created = SubjectDim(
+            normalized_name=normalized_name,
+            canonical_name=canonical_name or normalized_name,
+            aliases=[],
+        )
+        session.add(created)
+        session.flush()
+        return created
+
+    def _upsert_framework_dim(self, session: Session, framework: Optional[str]) -> Optional[FrameworkDim]:
+        code = self._normalize_dim_key(framework, "framework")
+        if not code:
+            return None
+        display_name = str(framework or "").strip() or code
+
+        existing = session.exec(
+            select(FrameworkDim).where(FrameworkDim.code == code)
+        ).first()
+        if existing:
+            if display_name and existing.display_name != display_name:
+                existing.display_name = display_name
+                existing.updated_at = datetime.now(timezone.utc)
+                session.add(existing)
+                session.flush()
+            return existing
+
+        created = FrameworkDim(
+            code=code,
+            display_name=display_name,
+            region=None,
+        )
+        session.add(created)
+        session.flush()
+        return created
+
+    def _upsert_exam_dim(
+        self,
+        session: Session,
+        exam_code: Optional[str],
+        exam_display_name: Optional[str],
+        exam_family: Optional[str],
+    ) -> Optional[ExamDim]:
+        if not exam_code:
+            return None
+        display_name = exam_display_name or exam_code
+
+        existing = session.exec(select(ExamDim).where(ExamDim.code == exam_code)).first()
+        if existing:
+            changed = False
+            if display_name and existing.display_name != display_name:
+                existing.display_name = display_name
+                changed = True
+            if exam_family and existing.family != exam_family:
+                existing.family = exam_family
+                changed = True
+            if changed:
+                existing.updated_at = datetime.now(timezone.utc)
+                session.add(existing)
+                session.flush()
+            return existing
+
+        created = ExamDim(
+            code=exam_code,
+            display_name=display_name,
+            family=exam_family,
+        )
+        session.add(created)
+        session.flush()
+        return created
+
+    def _upsert_requirement_evidence(
+        self,
+        session: Session,
+        normalized: dict[str, Any],
+        default_source_url: Optional[str],
+    ) -> Optional[RequirementEvidence]:
+        source_url = normalized.get("evidence_url") or default_source_url
+        page_snippet = normalized.get("evidence_snippet") or normalized.get("requirement_text")
+        page_snippet = (str(page_snippet).strip() or None) if page_snippet else None
+        if page_snippet:
+            page_snippet = page_snippet[:1000]
+
+        locator_type = normalized.get("evidence_locator_type") or ("url" if source_url else "text")
+        locator_value = (
+            normalized.get("evidence_locator_value")
+            or source_url
+            or normalized.get("subject_name")
+            or normalized.get("framework")
+        )
+        locator_value = str(locator_value).strip() if locator_value else None
+
+        if not source_url and not page_snippet:
+            return None
+
+        content_key = "|".join(
+            [
+                str(source_url or "").strip(),
+                str(page_snippet or "").strip(),
+                str(locator_type or "").strip(),
+                str(locator_value or "").strip(),
+            ]
+        )
+        content_hash = hashlib.sha256(content_key.encode("utf-8")).hexdigest()
+
+        existing = session.exec(
+            select(RequirementEvidence).where(RequirementEvidence.content_hash == content_hash)
+        ).first()
+        if existing:
+            return existing
+
+        captured_at = normalized.get("evidence_captured_at") or datetime.now(timezone.utc)
+        created = RequirementEvidence(
+            source_url=source_url,
+            page_title=None,
+            page_snippet=page_snippet,
+            locator_type=locator_type,
+            locator_value=locator_value,
+            captured_at=captured_at,
+            crawled_at=datetime.now(timezone.utc),
+            content_hash=content_hash,
+        )
+        session.add(created)
+        session.flush()
+        return created
+
+    def _get_latest_requirement_version(
+        self,
+        session: Session,
+        program_id: int,
+    ) -> Optional[RequirementVersion]:
+        return session.exec(
+            select(RequirementVersion)
+            .where(RequirementVersion.program_id == program_id)
+            .order_by(col(RequirementVersion.version_no).desc())
+        ).first()
+
+    def _list_version_requirements(
+        self,
+        session: Session,
+        version_id: int,
+    ) -> list[dict[str, Any]]:
+        rows = session.exec(
+            select(ProgramRequirement, ExamDim)
+            .join(ExamDim, ExamDim.id == ProgramRequirement.exam_dim_id, isouter=True)
+            .where(ProgramRequirement.version_id == version_id)
+            .order_by(col(ProgramRequirement.sort_order), col(ProgramRequirement.id))
+        ).all()
+
+        out: list[dict[str, Any]] = []
+        for row in rows:
+            if isinstance(row, tuple) and len(row) == 2:
+                requirement, exam_dim = row
+            else:
+                try:
+                    requirement = row[0]
+                    exam_dim = row[1]
+                except Exception:
+                    requirement = row
+                    exam_dim = None
+            out.append(
+                {
+                    "category": requirement.category,
+                    "subject_name": requirement.subject_name,
+                    "framework": requirement.framework,
+                    "minimum_value": requirement.minimum_value,
+                    "unit": requirement.unit,
+                    "applicant_scope": requirement.applicant_scope,
+                    "requirement_text": requirement.requirement_text,
+                    "exam_code": exam_dim.code if exam_dim else None,
+                }
+            )
+        return out
+
+    def _sync_requirement_records(
+        self,
+        session: Session,
+        program_id: int,
+        payload: list[dict[str, Any]],
+        source_url: Optional[str] = None,
+    ) -> Optional[RequirementVersion]:
+        normalized_payload: list[dict[str, Any]] = []
+        for idx, item in enumerate(payload):
+            if not isinstance(item, dict):
+                continue
+            normalized = self._normalize_requirement_item(item, idx, source_url)
+            if not normalized["requirement_text"]:
+                continue
+            normalized_payload.append(normalized)
+
+        latest_version = self._get_latest_requirement_version(session, program_id)
+        if not normalized_payload and latest_version is None:
+            return None
+
+        old_items = (
+            self._list_version_requirements(session, latest_version.id)
+            if latest_version and latest_version.id is not None
+            else []
+        )
+        old_fingerprint = self._requirements_fingerprint(old_items)
+        new_fingerprint = self._requirements_fingerprint(normalized_payload)
+        if latest_version and old_fingerprint == new_fingerprint:
+            return latest_version
+
+        now = datetime.now(timezone.utc)
+        if latest_version and latest_version.valid_to is None:
+            latest_version.valid_to = now
+            session.add(latest_version)
+
+        diff_payload = self._diff_requirements(old_items, normalized_payload)
+        added_count = diff_payload.get("added_count", 0)
+        removed_count = diff_payload.get("removed_count", 0)
+        if latest_version is None:
+            change_summary = "Initial requirement snapshot"
+            new_version_no = 1
+        else:
+            change_summary = f"Requirements updated (+{added_count}/-{removed_count})"
+            new_version_no = int(latest_version.version_no or 0) + 1
+
+        version = RequirementVersion(
+            program_id=program_id,
+            version_no=new_version_no,
+            effective_at=now,
+            valid_from=now,
+            valid_to=None,
+            change_summary=change_summary,
+            diff_payload=diff_payload,
+        )
+        session.add(version)
+        session.flush()
+
+        for normalized in normalized_payload:
+            subject_dim = self._upsert_subject_dim(session, normalized.get("subject_name"))
+            framework_dim = self._upsert_framework_dim(session, normalized.get("framework"))
+            exam_dim = self._upsert_exam_dim(
+                session,
+                normalized.get("exam_code"),
+                normalized.get("exam_display_name"),
+                normalized.get("exam_family"),
+            )
+            evidence = self._upsert_requirement_evidence(session, normalized, source_url)
+
+            session.add(
+                ProgramRequirement(
+                    program_id=program_id,
+                    version_id=version.id,
+                    category=normalized["category"],
+                    subject_name=normalized.get("subject_name"),
+                    framework=normalized.get("framework"),
+                    minimum_value=normalized.get("minimum_value"),
+                    unit=normalized.get("unit"),
+                    applicant_scope=normalized.get("applicant_scope"),
+                    requirement_text=normalized.get("requirement_text") or "",
+                    evidence_url=normalized.get("evidence_url"),
+                    sort_order=normalized.get("sort_order") or 0,
+                    subject_dim_id=subject_dim.id if subject_dim else None,
+                    exam_dim_id=exam_dim.id if exam_dim else None,
+                    framework_dim_id=framework_dim.id if framework_dim else None,
+                    evidence_id=evidence.id if evidence else None,
+                )
+            )
+        return version
+
     def get_university_by_slug(self, slug: str) -> Optional[University]:
-        """Retrieve a university by its slug."""
         with self.get_session() as session:
-            statement = select(University).where(University.slug == slug)
-            return session.exec(statement).first()
+            return session.exec(select(University).where(University.slug == slug)).first()
 
     def upsert_program(self, program_data: dict, univ_slug: str) -> Tuple[Program, bool]:
-        """
-        Upsert a program record using PostgreSQL ON CONFLICT.
-        Logic: 
-           - Match on (university_id, academic_year, name_en).
-           - Do UPDATE on conflict, but coalesce() to avoid overwriting existing non-nulls with new nulls.
-        Returns: (Program, created: bool) - Note: created boolean is harder to determine precisely with one query in SQLAlchemy 1.4/2.0 without RETURNING details, checking if system columns changed, or using xmax. 
-                   For simplicity in this Agent context, we might return True (potentially created/updated) or fetch after.
-                   Actually, let's stick to the interface but the 'created' bool might be just 'True' (processed).
-        """
-        from sqlalchemy.dialects.postgresql import insert
-        from sqlalchemy import func
-
+        """Upsert a year-specific program snapshot and normalized child records."""
         with self.get_session() as session:
-            # 1. Ensure University exists
+            # 1) Ensure university exists.
             univ = session.exec(select(University).where(University.slug == univ_slug)).first()
             if not univ:
                 univ = University(name=univ_slug, slug=univ_slug)
@@ -264,170 +667,252 @@ class DatabaseManager:
                 session.commit()
                 session.refresh(univ)
             else:
-                # Touch updated_at so the university floats to the top of recent list
                 univ.updated_at = datetime.now(timezone.utc)
                 session.add(univ)
                 session.commit()
                 session.refresh(univ)
-            
-            # 2. Prepare Data & Translations
+
+            # 2) Name sanity / translation fallback.
             name_en = program_data.get("name_en")
             name_zh = program_data.get("name_zh")
-            
-            # --- Auto-Translation Logic ---
             if (not name_en and name_zh) or (not name_zh and name_en):
                 try:
                     from src.agents.translation_agent import TranslationAgent
+
                     translator = TranslationAgent()
                     if not name_en and name_zh:
-                        logger.info(f"Translating program name to EN: {name_zh}")
                         name_en = translator.translate_program_name(name_zh, to_lang="en")
                         program_data["name_en"] = name_en
                     elif not name_zh and name_en:
-                        logger.info(f"Translating program name to ZH: {name_en}")
                         name_zh = translator.translate_program_name(name_en, to_lang="zh")
                         program_data["name_zh"] = name_zh
-                except Exception as e:
-                    logger.error(f"Auto-translation failed: {e}")
-            
-            if not name_en or not program_data.get("academic_year"):
+                except Exception as exc:
+                    logger.error("Auto-translation failed: %s", exc)
+
+            if not program_data.get("name_en") or not program_data.get("academic_year"):
                 raise ValueError("Program data must contain 'name_en' and 'academic_year'")
 
-            # 3. Construct Insert Statement
-            # Add university_id to data
             full_data = _normalize_text_payload(program_data.copy())
-            full_data["university_id"] = univ.id
-            if "updated_at" not in full_data:
-                full_data["updated_at"] = datetime.now(timezone.utc)
+            full_data.setdefault("extra_metadata", {})
+            if not full_data.get("source_url"):
+                source_from_meta = full_data["extra_metadata"].get("source_url")
+                if source_from_meta:
+                    full_data["source_url"] = str(source_from_meta)
 
-            stmt = insert(Program).values(**full_data)
-            
-            # 4. Construct ON CONFLICT ... DO UPDATE Set
-            # We want to update all fields provided in full_data, BUT if the new value is None 
-            # and the DB has a value, we keep the DB value (COALESCE).
-            # Columns to theoretically update: everything except PK and constraints.
-            
-            # Note: We need to be careful. If we pass specific fields, we want to update them.
-            # The Requirement: "如果数据库已有记录，新入库的 null 字段不应覆盖已有值"
-            # This implies if provided key is None, ignore it? Or if provided key IS provided but None?
-            # Usually upsert dictionary `full_data` only contains keys we scraped. 
-            # If a key is NOT in `full_data`, `insert` uses default.
-            # `excluded` table contains the values tried for insert.
-            
-            # Let's iterate over ALL columns in Program model to build the set_ dict
-            # excluding primary keys and the unique constraint keys.
-            constraint_keys = {"university_id", "academic_year", "name_en"}
-            excluded_cols = constraint_keys | {"id"}
-            
-            update_dict = {}
-            from sqlalchemy import inspect as sa_inspect
-            mapper = sa_inspect(Program)
-            for col_obj in mapper.columns:
-                if col_obj.name not in excluded_cols:
-                    # COALESCE(excluded.col, existing.col)
-                    # If the INSERT attempted to put NULL (e.g. because data didn't have it and default is None), 
-                    # keep existing.
-                    update_dict[col_obj.name] = func.coalesce(getattr(stmt.excluded, col_obj.name), getattr(Program, col_obj.name))
-            
-            # Force update updated_at
-            update_dict["updated_at"] = datetime.now(timezone.utc)
-
-            stmt = stmt.on_conflict_do_update(
-                constraint="uq_program_year", # Must match the name in SQLModel
-                set_=update_dict
-            )
-            
-            # Execute
-            result = session.exec(stmt)
-            session.commit()
-            
-            # Fetch and return
-            # To be 100% strictly compatible with previous 'new_program, created', 
-            # we can't easily know if it was insert or update without more complex SQL/returning.
-            # But the caller mostly cares about the object.
-            # We re-fetch.
-            refreshed = session.exec(
-                select(Program).where(
-                    Program.university_id == univ.id,
-                    Program.academic_year == full_data["academic_year"],
-                    Program.name_en == full_data["name_en"]
+            # 3) Resolve catalog identity.
+            group_code = full_data.get("program_group_code")
+            resolved_catalog_key = catalog_key(group_code, full_data["name_en"])
+            catalog = session.exec(
+                select(ProgramCatalog).where(
+                    ProgramCatalog.university_id == univ.id,
+                    ProgramCatalog.catalog_key == resolved_catalog_key,
                 )
             ).first()
-            
-            if not refreshed:
-                # Should not happen
-                raise RuntimeError("Upsert failed to produce a record")
+            if not catalog and not value_should_apply(group_code):
+                existing_same_name = session.exec(
+                    select(Program).where(
+                        Program.university_id == univ.id,
+                        Program.academic_year == full_data["academic_year"],
+                        Program.name_en == full_data["name_en"],
+                    )
+                ).first()
+                existing_catalog_id = (
+                    getattr(existing_same_name, "program_catalog_id", None)
+                    if existing_same_name is not None
+                    else None
+                )
+                if existing_catalog_id is not None:
+                    catalog = session.get(ProgramCatalog, existing_catalog_id)
+            if not catalog:
+                catalog = ProgramCatalog(
+                    university_id=univ.id,
+                    catalog_key=resolved_catalog_key,
+                    program_group_code=group_code,
+                    canonical_name_en=full_data.get("name_en"),
+                    canonical_name_zh=full_data.get("name_zh"),
+                    faculty=full_data.get("faculty"),
+                )
+                session.add(catalog)
+                session.commit()
+                session.refresh(catalog)
+            else:
+                if value_should_apply(group_code):
+                    catalog.program_group_code = group_code
+                if value_should_apply(full_data.get("name_en")):
+                    catalog.canonical_name_en = full_data.get("name_en")
+                if value_should_apply(full_data.get("name_zh")):
+                    catalog.canonical_name_zh = full_data.get("name_zh")
+                if value_should_apply(full_data.get("faculty")):
+                    catalog.faculty = full_data.get("faculty")
+                catalog.updated_at = datetime.now(timezone.utc)
+                session.add(catalog)
+                session.commit()
+                session.refresh(catalog)
 
-            return refreshed, True # Returning True for 'processed'
+            # 4) Upsert year-version record.
+            existing = session.exec(
+                select(Program).where(
+                    Program.program_catalog_id == catalog.id,
+                    Program.academic_year == full_data["academic_year"],
+                )
+            ).first()
+
+            created = existing is None
+            program = existing or Program(
+                university_id=univ.id,
+                program_catalog_id=catalog.id,
+                academic_year=full_data["academic_year"],
+                name_en=full_data["name_en"],
+            )
+
+            program.university_id = univ.id
+            program.program_catalog_id = catalog.id
+
+            for field_name in (
+                "name_en",
+                "name_zh",
+                "program_group_code",
+                "faculty",
+                "is_active",
+                "is_discontinued",
+                "tuition_amount",
+                "currency",
+                "study_options",
+                "deadlines",
+                "extra_metadata",
+                "source_url",
+            ):
+                if field_name not in full_data:
+                    continue
+                value = full_data[field_name]
+                if field_name == "currency" and isinstance(value, str):
+                    try:
+                        value = CurrencyCode(value)
+                    except ValueError:
+                        value = None
+                if value_should_apply(value):
+                    setattr(program, field_name, value)
+                elif getattr(program, field_name, None) is None:
+                    setattr(program, field_name, value)
+
+            program.updated_at = datetime.now(timezone.utc)
+            session.add(program)
+            session.commit()
+            session.refresh(program)
+
+            # 5) Sync normalized child records only when fresh payload supplied.
+            if "study_options" in full_data:
+                self._sync_study_option_records(
+                    session, program.id, full_data.get("study_options") or []
+                )
+            if "deadlines" in full_data:
+                self._sync_deadline_records(
+                    session, program.id, full_data.get("deadlines") or []
+                )
+
+            if "requirements" in full_data:
+                requirement_payload = full_data.get("requirements") or []
+                self._sync_requirement_records(
+                    session,
+                    program.id,
+                    requirement_payload,
+                    source_url=full_data.get("source_url"),
+                )
+            else:
+                extra_requirements = extract_requirements_from_extra_metadata(
+                    full_data.get("extra_metadata") or {}
+                )
+                if extra_requirements:
+                    self._sync_requirement_records(
+                        session,
+                        program.id,
+                        extra_requirements,
+                        source_url=full_data.get("source_url"),
+                    )
+
+            session.commit()
+            session.refresh(program)
+            return program, created
 
     def get_program_history(self, program_group_code: str) -> List[Program]:
-        """
-        Retrieve all historical records for a given program group code,
-        ordered by academic year.
-        """
         with self.get_session() as session:
-            statement = select(Program).where(
-                Program.program_group_code == program_group_code
-            ).order_by(col(Program.academic_year))
-            results = session.exec(statement).all()
-            return list(results)
+            stmt = (
+                select(Program)
+                .join(ProgramCatalog, ProgramCatalog.id == Program.program_catalog_id)
+                .where(ProgramCatalog.program_group_code == program_group_code)
+                .order_by(col(Program.academic_year))
+            )
+            return list(session.exec(stmt).all())
 
     def get_program_group_map(self, university_id: int) -> Dict[str, str]:
-        """
-        Get a mapping of {name_en: program_group_code} for a university.
-        Used to provide context to LLM for consistent group code assignment.
-        Only returns entries where program_group_code is set.
-        """
         with self.get_session() as session:
-            statement = select(Program.name_en, Program.program_group_code).where(
-                Program.university_id == university_id,
-                Program.program_group_code.is_not(None) # type: ignore
+            stmt = (
+                select(Program, ProgramCatalog)
+                .join(ProgramCatalog, ProgramCatalog.id == Program.program_catalog_id)
+                .where(
+                    ProgramCatalog.university_id == university_id,
+                    ProgramCatalog.program_group_code.is_not(None),  # type: ignore
+                )
+                .order_by(col(Program.academic_year).desc())
             )
-            results = session.exec(statement).all()
-            return {name: code for name, code in results if name and code}
+            rows = session.exec(stmt).all()
+
+            out: Dict[str, str] = {}
+            seen_catalog: set[int] = set()
+            for row in rows:
+                if isinstance(row, tuple) and len(row) == 2:
+                    program, catalog = row
+                    catalog_id = catalog.id
+                    group_code = catalog.program_group_code
+                else:
+                    program = row
+                    catalog_id = getattr(program, "program_catalog_id", None)
+                    group_code = getattr(program, "program_group_code", None)
+
+                if catalog_id in seen_catalog:
+                    continue
+                if catalog_id is not None:
+                    seen_catalog.add(catalog_id)
+                if program.name_en and group_code:
+                    out[program.name_en] = group_code
+            return out
 
     def get_program_contexts(self, university_id: int) -> List[ProgramContext]:
-        """
-        Fetch rich context for all programs with a group code.
-        Returns a list of ProgramContext objects.
-        """
-        
         with self.get_session() as session:
-            # Fetch most recent record for each group code to get latest metadata
-            # Window function would be ideal, but for simplicity/portability (sqlite), 
-            # we can fetch all and dedup in python or just fetch meaningful ones.
-            # Let's fetch all non-null group codes.
-            statement = select(Program).where(
-                Program.university_id == university_id,
-                Program.program_group_code.is_not(None) # type: ignore
+            stmt = (
+                select(Program, ProgramCatalog)
+                .join(ProgramCatalog, ProgramCatalog.id == Program.program_catalog_id)
+                .where(
+                    ProgramCatalog.university_id == university_id,
+                    ProgramCatalog.program_group_code.is_not(None),  # type: ignore
+                )
+                .order_by(col(Program.academic_year).desc())
             )
-            programs = session.exec(statement).all()
-            
-            contexts = []
-            seen_groups = set()
-            
-            # Sort by year desc to prioritize latest info
-            sorted_programs = sorted(programs, key=lambda p: p.academic_year, reverse=True)
-            
-            for p in sorted_programs:
-                if not p.program_group_code: continue
-                
-                # We might want multiple aliases for the same group code if names changed?
-                # User said: "Fetch all history (name_en, group_code)". 
-                # So we should include ALL name variations for the same group code.
-                # But deduplicate if (name_en, group_code) is identical.
-                
-                key = (p.name_en, p.program_group_code)
-                if key in seen_groups:
+            rows = session.exec(stmt).all()
+
+            contexts: List[ProgramContext] = []
+            seen: set[tuple[str, str]] = set()
+            for row in rows:
+                if isinstance(row, tuple) and len(row) == 2:
+                    program, catalog = row
+                    group_code = catalog.program_group_code
+                else:
+                    program = row
+                    group_code = getattr(program, "program_group_code", None)
+
+                if not program.name_en or not group_code:
                     continue
-                seen_groups.add(key)
-                
-                contexts.append(ProgramContext(
-                    name_en=p.name_en,
-                    program_group_code=p.program_group_code,
-                    faculty=p.faculty,
-                    tuition_amount=float(p.tuition_amount) if p.tuition_amount else None,
-                    currency=p.currency.value if p.currency else None
-                ))
-                
+                key = (program.name_en, group_code)
+                if key in seen:
+                    continue
+                seen.add(key)
+                contexts.append(
+                    ProgramContext(
+                        name_en=program.name_en,
+                        program_group_code=group_code,
+                        faculty=program.faculty,
+                        tuition_amount=float(program.tuition_amount) if program.tuition_amount else None,
+                        currency=program.currency.value if program.currency else None,
+                    )
+                )
             return contexts

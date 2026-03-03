@@ -1,0 +1,27 @@
+{
+  "case_id": "leeds_masters_ai_business",
+  "name": "Leeds",
+  "index_url": "https://courses.leeds.ac.uk/course-search/masters-courses",
+  "detail_url": "https://courses.leeds.ac.uk/k198/ai-for-business-msc?searchOrigin=query%3D%26type%3DPGT%26term%3D202627",
+  "fetched_at": "2026-03-02T18:49:08.108026+00:00",
+  "pages": {
+    "index": {
+      "status": "ok",
+      "status_code": 200,
+      "url": "https://courses.leeds.ac.uk/course-search/masters-courses",
+      "html_chars": 84060,
+      "markdown_chars": 8534,
+      "html_path": "golden_samples/cases/leeds_masters_ai_business/index.html",
+      "markdown_path": "golden_samples/cases/leeds_masters_ai_business/index.md"
+    },
+    "detail": {
+      "status": "ok",
+      "status_code": 200,
+      "url": "https://courses.leeds.ac.uk/k198/ai-for-business-msc?searchOrigin=query%3D%26type%3DPGT%26term%3D202627",
+      "html_chars": 86342,
+      "markdown_chars": 39867,
+      "html_path": "golden_samples/cases/leeds_masters_ai_business/detail.html",
+      "markdown_path": "golden_samples/cases/leeds_masters_ai_business/detail.md"
+    }
+  }
+}

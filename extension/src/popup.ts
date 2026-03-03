@@ -1369,6 +1369,25 @@ interface ProgramRecord {
     currency: string | null;
     study_options: { mode: string; duration_months: number }[];
     deadlines: { round?: number; description?: string; cutoff_date?: string }[];
+    requirements?: {
+        category?: string;
+        subject_name?: string;
+        framework?: string;
+        exam_name?: string;
+        minimum_value?: string;
+        unit?: string;
+        applicant_scope?: string;
+        requirement_text?: string;
+        evidence_url?: string;
+        sort_order?: number;
+    }[];
+    requirement_version?: {
+        version_no?: number;
+        effective_at?: string;
+        valid_from?: string;
+        valid_to?: string | null;
+        change_summary?: string | null;
+    } | null;
     source_url: string | null;
 }
 
@@ -1490,6 +1509,20 @@ function renderPreviewResults(programs: ProgramRecord[]) {
             }
         }
 
+        if (p.requirements?.length) {
+            const requirementTag = document.createElement("span");
+            requirementTag.className = "program-tag mode";
+            requirementTag.textContent = `${p.requirements.length} req${p.requirements.length > 1 ? "s" : ""}`;
+            meta.appendChild(requirementTag);
+        }
+
+        if (p.requirement_version?.version_no != null) {
+            const versionTag = document.createElement("span");
+            versionTag.className = "program-tag mode";
+            versionTag.textContent = `req-v${p.requirement_version.version_no}`;
+            meta.appendChild(versionTag);
+        }
+
         if (meta.children.length > 0) {
             card.appendChild(meta);
         }
@@ -1523,6 +1556,50 @@ function renderPreviewResults(programs: ProgramRecord[]) {
                     descEl.textContent = d.description;
                     li.appendChild(descEl);
                 }
+                ul.appendChild(li);
+            }
+            details.appendChild(ul);
+            card.appendChild(details);
+        }
+
+        // Requirements
+        if (p.requirements?.length) {
+            const details = document.createElement("details");
+            details.className = "program-card-deadlines";
+            const summary = document.createElement("summary");
+            summary.textContent = `${p.requirements.length} requirement${p.requirements.length > 1 ? "s" : ""}`;
+            details.appendChild(summary);
+
+            const ul = document.createElement("ul");
+            ul.className = "deadline-list";
+            for (const req of p.requirements) {
+                const li = document.createElement("li");
+                li.className = "deadline-item";
+
+                const catEl = document.createElement("span");
+                catEl.className = "dl-round";
+                catEl.textContent = (req.category || "other").replace(/_/g, " ");
+                li.appendChild(catEl);
+
+                const textEl = document.createElement("span");
+                textEl.className = "dl-date";
+                const subjectLike = req.subject_name || req.exam_name;
+                if (subjectLike && req.minimum_value) {
+                    textEl.textContent = `${subjectLike}: ${req.minimum_value}${req.unit ? " " + req.unit : ""}`;
+                } else if (subjectLike) {
+                    textEl.textContent = subjectLike;
+                } else {
+                    textEl.textContent = "Requirement";
+                }
+                li.appendChild(textEl);
+
+                const desc = req.requirement_text || req.framework || req.applicant_scope;
+                if (desc) {
+                    const descEl = document.createElement("span");
+                    descEl.textContent = desc;
+                    li.appendChild(descEl);
+                }
+
                 ul.appendChild(li);
             }
             details.appendChild(ul);

@@ -43,14 +43,19 @@ from src.api.schemas import (
     LinkCandidate,
     TestConnectionRequest,
     TestConnectionResponse,
+    IngestionJobResponse,
+    IngestionResumeRequest,
 )
 from src.api.task_manager import TaskManager, TaskState
 from src.services.crawler import (
     CrawlResult,
     analyze_page,
     crawl_url,
+    get_ingestion_job,
     get_db_status,
+    list_ingestion_jobs,
     query_programs,
+    resume_crawl_job,
 )
 from src.storage.db_manager import DatabaseManager
 
@@ -283,6 +288,19 @@ async def api_crawl(body: CrawlRequest) -> CrawlResponse:
         initial_tokens = sum(u.total_tokens for u in tracker._usage.values())
 
         try:
+            def _on_ingestion_event(event_type: str, payload: dict) -> None:
+                stage = payload.get("stage")
+                if event_type == "stage_started" and stage:
+                    task_manager.update_task(task_id, progress=f"{stage}…")
+                elif event_type == "stage_retry_scheduled" and stage:
+                    backoff = payload.get("backoff_seconds")
+                    task_manager.update_task(
+                        task_id,
+                        progress=f"{stage} retry in {backoff}s…",
+                    )
+                elif event_type == "stage_poisoned" and stage:
+                    task_manager.update_task(task_id, progress=f"{stage} poisoned")
+
             # We need to periodically update token usage? 
             # Or just update it at the end? 
             # User asked for "display tokens used from start to finish", implying dynamic updates would be nice.
@@ -328,6 +346,7 @@ async def api_crawl(body: CrawlRequest) -> CrawlResponse:
                     export_path=body.export_path,
                     html_content=body.html_content,
                     selected_urls=body.selected_urls,
+                    progress_callback=_on_ingestion_event,
                 )
             finally:
                 stop_event.set()
@@ -380,6 +399,84 @@ async def api_task_status(task_id: str) -> TaskStatusResponse:
     if info is None:
         raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
     return TaskStatusResponse(**info.to_dict())
+
+
+@app.get("/ingestion/jobs", response_model=List[IngestionJobResponse])
+async def api_ingestion_jobs(
+    limit: int = Query(20, ge=1, le=200, description="Number of jobs to return"),
+) -> List[IngestionJobResponse]:
+    """List recent Phase 2 ingestion jobs."""
+    jobs = list_ingestion_jobs(limit=limit)
+    return [IngestionJobResponse(**job) for job in jobs]
+
+
+@app.get("/ingestion/jobs/{job_uid}", response_model=IngestionJobResponse)
+async def api_ingestion_job(job_uid: str) -> IngestionJobResponse:
+    """Get full stage/task state for one ingestion job."""
+    job = get_ingestion_job(job_uid)
+    if not job:
+        raise HTTPException(status_code=404, detail=f"Ingestion job {job_uid} not found")
+    return IngestionJobResponse(**job)
+
+
+@app.post("/ingestion/jobs/{job_uid}/resume", response_model=CrawlResponse)
+async def api_ingestion_resume(
+    job_uid: str,
+    body: Optional[IngestionResumeRequest] = Body(default=None),
+) -> CrawlResponse:
+    """Resume a failed/poisoned ingestion job from a specific stage."""
+    try:
+        task_id = task_manager.create_task(
+            params={
+                "job_uid": job_uid,
+                "resume_from_stage": body.resume_from_stage if body else None,
+            }
+        )
+    except RuntimeError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+
+    async def _run_resume() -> None:
+        log_handler = TaskLogHandler(task_manager, task_id)
+        root_logger = logging.getLogger()
+        root_logger.addHandler(log_handler)
+
+        task_manager.update_task(task_id, state=TaskState.RUNNING, progress="Resuming…")
+        try:
+            def _on_ingestion_event(event_type: str, payload: dict) -> None:
+                stage = payload.get("stage")
+                if event_type == "stage_started" and stage:
+                    task_manager.update_task(task_id, progress=f"resume {stage}…")
+                elif event_type == "stage_retry_scheduled" and stage:
+                    backoff = payload.get("backoff_seconds")
+                    task_manager.update_task(
+                        task_id,
+                        progress=f"resume {stage} retry in {backoff}s…",
+                    )
+
+            result = await resume_crawl_job(
+                job_uid=job_uid,
+                resume_from_stage=body.resume_from_stage if body else None,
+                progress_callback=_on_ingestion_event,
+            )
+            task_manager.update_task(
+                task_id,
+                state=TaskState.DONE,
+                progress="Complete",
+                result=result.model_dump(),
+            )
+        except Exception as exc:
+            logger.exception("Resume task %s failed", task_id)
+            task_manager.update_task(
+                task_id,
+                state=TaskState.FAILED,
+                error=str(exc),
+            )
+        finally:
+            root_logger.removeHandler(log_handler)
+
+    task_obj = asyncio.create_task(_run_resume())
+    task_manager.register_task_object(task_id, task_obj)
+    return CrawlResponse(task_id=task_id, message="Resume task submitted")
 
 
 @app.post("/tasks/{task_id}/cancel", response_model=CancelResponse)
@@ -618,7 +715,7 @@ try:
         """Query programs for a university from the database.
 
         Returns a list of program records with name, tuition, deadlines,
-        and other structured fields.
+        subject requirements, and other structured fields.
 
         Args:
             univ_slug: University identifier (e.g. "hku").
@@ -679,13 +776,19 @@ serve:
 upgrade:
     --check     Only check for updates, don't install
     --force     Force upgrade even if already latest
+    --migrate   Run DB migration after backend update
+    --verbose   Show detailed progress
+
+repair:
+    --auto      Run automatic rollback-safe repair
     --verbose   Show detailed progress
             """
         
         available_commands = [
             "crawl", "import", "export", "status", "check", 
-            "serve", "serve-stop", "upgrade", "version", 
-            "browser-install", "help"
+            "serve", "serve-stop", "upgrade", "db-migrate", "db-version", "repair", "version",
+            "browser-install", "ingestion-jobs", "ingestion-resume",
+            "golden-collect", "quality-score", "help"
         ]
         
         return {

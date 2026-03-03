@@ -16,7 +16,17 @@ load_dotenv(find_dotenv(usecwd=True) or find_dotenv())
 
 # Import ALL models so SQLModel registers their tables in metadata
 from sqlmodel import SQLModel
-from src.models.admission import University, Program  # noqa: F401
+from src.models.admission import University, Program, ProgramCatalog  # noqa: F401
+from src.models.requirement import (  # noqa: F401
+    SubjectDim,
+    ExamDim,
+    FrameworkDim,
+    RequirementEvidence,
+    RequirementVersion,
+    ProgramStudyOption,
+    ProgramDeadline,
+    ProgramRequirement,
+)
 
 config = context.config
 

@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# pylint: disable=too-many-lines
 """
 UniAdmission Agent — Typer CLI
 
@@ -19,6 +20,7 @@ import logging
 import os
 import re
 import signal
+import subprocess
 import sys
 from pathlib import Path
 from typing import Optional
@@ -38,10 +40,21 @@ from src.services.crawler import (
     check_environment,
     crawl_url,
     export_data,
+    get_ingestion_job,
     get_db_status,
     import_file,
+    list_ingestion_jobs,
+    resume_crawl_job,
 )
+from src.services.golden_samples import collect_golden_samples
+from src.services.quality_scoring import score_manifest
 from src.services.upgrade import check_for_updates, upgrade_backend
+from src.services.migrations import (
+    MigrationError,
+    get_migration_status,
+    run_db_migrations,
+)
+from src.services.repair import RepairError, run_auto_repair
 from src.core.environment import install_playwright_browser
 from src.storage.db_manager import DatabaseManager
 
@@ -65,6 +78,10 @@ UNIVERSITY DATA MANAGEMENT:
 DATABASE & STATUS:
     status     Show database statistics and connection info
     check      Run environment and dependency checks
+    ingestion-jobs   Show recent Phase 2 ingestion jobs
+    ingestion-resume Resume a failed Phase 2 ingestion job
+    golden-collect   Collect Phase 3 golden sample snapshots
+    quality-score    Run Phase 3 quality scoring and threshold checks
     
 LLM CONFIGURATION:
     llm-config Interactive wizard to configure LLM providers
@@ -75,6 +92,9 @@ SERVER OPERATIONS:
     
 SYSTEM MAINTENANCE:
     upgrade    Check for and install backend updates
+    db-migrate Apply Alembic database migrations
+    db-version Show Alembic database revision status
+    repair     Auto-repair DB migration failures with rollback safety
     version    Show current version information
     browser-install  Install Playwright Chromium browser
     
@@ -84,6 +104,9 @@ USAGE EXAMPLES:
     ./adm-agent export --name hku --output report.xlsx --year 2026
     ./adm-agent serve --port 9000
     ./adm-agent upgrade --check
+    ./adm-agent db-version
+    ./adm-agent db-migrate --yes
+    ./adm-agent repair --auto
     ./adm-agent status
     
 For detailed help on any command:
@@ -134,7 +157,6 @@ def _find_pid_by_port(port: int) -> "Optional[int]":
     Works on macOS/Linux (via lsof) and Windows (via netstat).
     Returns None if no process is found or the lookup fails.
     """
-    import subprocess
     import platform
 
     try:
@@ -216,12 +238,29 @@ def _setup_logging(verbose: bool = False) -> None:
 
 
 def _init_db(verbose: bool = False) -> None:
-    """Ensure database is initialised."""
+    """Ensure database is initialised and schema is migrated."""
     try:
         DatabaseManager().init_db()
     except Exception as e:
         if verbose:
             logger.warning("Database auto-init warning: %s", e)
+        return
+
+    try:
+        status = get_migration_status()
+        if status["pending"]:
+            logger.info(
+                "Pending DB migration detected (%s -> %s), applying...",
+                status["current_revision"] or "unversioned",
+                status["head_revision"],
+            )
+            run_db_migrations(verbose=verbose)
+    except MigrationError as e:
+        if verbose:
+            logger.warning("Database migration warning: %s", e)
+    except Exception as e:  # pragma: no cover - defensive logging path
+        if verbose:
+            logger.warning("Unexpected migration warning: %s", e)
 
 
 # ---------------------------------------------------------------------------
@@ -404,6 +443,143 @@ def status(
         raise typer.Exit(code=1)
 
 
+@app.command(name="ingestion-jobs")
+def ingestion_jobs_cmd(
+    limit: int = typer.Option(20, help="Number of recent jobs to show"),
+    verbose: bool = typer.Option(False, "--verbose", "-v"),
+) -> None:
+    """List recent Phase 2 ingestion jobs."""
+    _setup_logging(verbose)
+    _init_db(verbose)
+
+    try:
+        rows = list_ingestion_jobs(limit=limit)
+        if not rows:
+            typer.echo("No ingestion jobs found.")
+            return
+        for row in rows:
+            typer.echo(
+                f"{row['job_uid']}  {row['status']:<10}  "
+                f"{row['univ_slug']}/{row['academic_year']}  "
+                f"{row.get('current_stage') or '-'}"
+            )
+    except Exception as e:
+        logger.error("Failed to list ingestion jobs: %s", e)
+        raise typer.Exit(code=1)
+
+
+@app.command(name="ingestion-resume")
+def ingestion_resume_cmd(
+    job_id: str = typer.Option(..., "--job", help="Ingestion job UID"),
+    stage: Optional[str] = typer.Option(
+        None,
+        "--stage",
+        help="Optional stage override (fetch_raw/extract_structured/validate_rules/persist_versioned)",
+    ),
+    verbose: bool = typer.Option(False, "--verbose", "-v"),
+) -> None:
+    """Resume a failed/poisoned Phase 2 ingestion job."""
+    _setup_logging(verbose)
+    _init_db(verbose)
+
+    job = get_ingestion_job(job_id)
+    if not job:
+        typer.echo(f"❌ Job not found: {job_id}", err=True)
+        raise typer.Exit(code=1)
+
+    try:
+        result = asyncio.run(
+            resume_crawl_job(
+                job_uid=job_id,
+                resume_from_stage=stage,
+            )
+        )
+        typer.echo(
+            f"✅ Resume complete: {result.imported_count} programs imported "
+            f"(job={result.ingestion_job_id})"
+        )
+    except Exception as e:
+        logger.exception("Resume failed: %s", e)
+        raise typer.Exit(code=1)
+
+
+@app.command(name="golden-collect")
+def golden_collect_cmd(
+    manifest: str = typer.Option(
+        "golden_samples/manifest.json",
+        help="Path to golden manifest JSON",
+    ),
+    output_root: str = typer.Option(
+        "golden_samples/cases",
+        help="Directory to store collected snapshots",
+    ),
+    overwrite: bool = typer.Option(
+        False,
+        "--overwrite",
+        help="Overwrite existing snapshot files",
+    ),
+    timeout: int = typer.Option(40, help="Network timeout in seconds"),
+    verbose: bool = typer.Option(False, "--verbose", "-v"),
+) -> None:
+    """Collect Phase 3 golden sample HTML/Markdown snapshots."""
+    _setup_logging(verbose)
+    try:
+        result = collect_golden_samples(
+            manifest_path=manifest,
+            output_root=output_root,
+            overwrite=overwrite,
+            timeout_seconds=timeout,
+        )
+        typer.echo(
+            f"✅ Golden collect done: collected={result['collected']} failed={result['failures']}"
+        )
+    except Exception as e:
+        logger.exception("Golden collection failed: %s", e)
+        raise typer.Exit(code=1)
+
+
+@app.command(name="quality-score")
+def quality_score_cmd(
+    manifest: str = typer.Option(
+        "golden_samples/manifest.json",
+        help="Path to golden manifest JSON",
+    ),
+    base_dir: str = typer.Option(
+        "golden_samples/cases",
+        help="Directory containing golden sample snapshots",
+    ),
+    report: str = typer.Option(
+        "golden_samples/reports/quality_report.json",
+        help="Output report JSON path",
+    ),
+    threshold: float = typer.Option(0.60, help="Global mean score threshold"),
+    verbose: bool = typer.Option(False, "--verbose", "-v"),
+) -> None:
+    """Run Phase 3 quality scoring and apply threshold gates."""
+    _setup_logging(verbose)
+    try:
+        result = score_manifest(
+            manifest_path=manifest,
+            base_dir=base_dir,
+            output_report_path=report,
+            global_threshold=threshold,
+        )
+        aggregate = result.get("aggregate") or {}
+        typer.echo(
+            "Quality score "
+            f"mean={aggregate.get('mean_score')} "
+            f"pass={aggregate.get('passed_case_count')}/{aggregate.get('case_count')}"
+        )
+        typer.echo(f"Report: {report}")
+        if not result.get("global_pass", False):
+            raise typer.Exit(code=1)
+    except typer.Exit:
+        raise
+    except Exception as e:
+        logger.exception("Quality scoring failed: %s", e)
+        raise typer.Exit(code=1)
+
+
 @app.command()
 def serve(
     host: str = typer.Option("0.0.0.0", help="Bind address"),
@@ -500,46 +676,182 @@ def serve_stop(
 
 
 @app.command()
+def db_version(
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Debug logging"),
+) -> None:
+    """Show Alembic migration revision status."""
+    _setup_logging(verbose)
+    try:
+        status = get_migration_status()
+        typer.echo(f"📦 Current DB revision: {status['current_revision'] or 'unversioned'}")
+        typer.echo(f"📦 Target DB revision:  {status['head_revision']}")
+        if status["pending"]:
+            typer.echo("⚠️  Migrations pending. Run: adm-agent db-migrate")
+        else:
+            typer.echo("✅ Database schema is up to date.")
+    except Exception as e:
+        typer.echo(f"❌ Failed to read migration status: {e}", err=True)
+        raise typer.Exit(code=1)
+
+
+@app.command(name="db-migrate")
+def db_migrate(
+    revision: str = typer.Option("head", "--revision", help="Target alembic revision"),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation prompt"),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Debug logging"),
+) -> None:
+    """Apply Alembic migrations to the configured database."""
+    _setup_logging(verbose)
+
+    if not yes:
+        confirm = typer.confirm(
+            f"Apply database migration to revision '{revision}'?",
+            default=True,
+        )
+        if not confirm:
+            typer.echo("ℹ️  Migration cancelled.")
+            raise typer.Exit(code=0)
+
+    try:
+        result = run_db_migrations(revision=revision, verbose=verbose)
+        typer.echo(f"📦 Before revision: {result['before_revision'] or 'unversioned'}")
+        typer.echo(f"📦 After revision:  {result['after_revision'] or 'unversioned'}")
+        if result["legacy_bootstrap"]:
+            typer.echo("ℹ️  Legacy schema detected and stamped before migration.")
+        if result["pending"]:
+            typer.echo("⚠️  Database not fully up to head. Re-run db-migrate.")
+            raise typer.Exit(code=1)
+        typer.echo("✅ Database migration completed.")
+    except Exception as e:
+        typer.echo(f"❌ Database migration failed: {e}", err=True)
+        typer.echo("👉 Run 'adm-agent repair --auto' to rollback and recover automatically.", err=True)
+        raise typer.Exit(code=1)
+
+
+@app.command()
+def repair(
+    auto: bool = typer.Option(False, "--auto", help="Run automatic repair workflow"),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Debug logging"),
+) -> None:
+    """Repair database state automatically with migration rollback safety."""
+    _setup_logging(verbose)
+
+    if not auto:
+        typer.echo("Use --auto to run non-interactive repair.")
+        raise typer.Exit(code=1)
+
+    db_url = os.getenv("DATABASE_URL")
+    if not db_url:
+        typer.echo("❌ DATABASE_URL is not configured.", err=True)
+        raise typer.Exit(code=1)
+
+    try:
+        result = run_auto_repair(db_url=db_url, verbose=verbose)
+        typer.echo("✅ Repair completed.")
+        if result["migration_result"]["pending"]:
+            typer.echo("⚠️  Schema still not at head; retry repair or contact support.")
+            raise typer.Exit(code=1)
+        if not result["health_after"]["ok"]:
+            typer.echo("⚠️  Database is reachable but missing core tables after repair.", err=True)
+            raise typer.Exit(code=1)
+        typer.echo("ℹ️  Database is healthy and migration-compatible.")
+    except RepairError as e:
+        typer.echo("❌ Automatic repair failed.", err=True)
+        typer.echo(str(e), err=True)
+        raise typer.Exit(code=1)
+    except Exception as e:
+        typer.echo(f"❌ Unexpected repair failure: {e}", err=True)
+        raise typer.Exit(code=1)
+
+
+def _print_upgrade_check(update_info: dict) -> None:
+    if "error" in update_info:
+        typer.echo(f"❌ Failed to check for updates: {update_info['error']}", err=True)
+        raise typer.Exit(code=1)
+
+    typer.echo(f"📋 Current version: {update_info['current_version']}")
+    typer.echo(f"📋 Latest version:  {update_info['latest_version']}")
+
+    if not update_info.get("is_newer"):
+        typer.echo("✅ Already on latest version.")
+        return
+    if update_info.get("asset_available"):
+        typer.echo("🎯 Update available! Run 'upgrade' without --check to install.")
+        return
+
+    typer.echo("⚠️  Update available but no compatible asset found.")
+    release_url = update_info.get("release_url")
+    if release_url:
+        typer.echo(f"   Manual download: {release_url}")
+
+
+def _run_cli_subcommand(args: list[str]) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [sys.executable, *args],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def _print_subprocess_logs(proc: subprocess.CompletedProcess[str], verbose: bool) -> None:
+    if not verbose:
+        return
+    if proc.stdout:
+        typer.echo(proc.stdout.strip())
+    if proc.stderr:
+        typer.echo(proc.stderr.strip(), err=True)
+
+
+def _run_migration_after_upgrade(verbose: bool) -> None:
+    typer.echo("🔄 Running database migration...")
+    migrate_proc = _run_cli_subcommand(["db-migrate", "--yes"])
+    if migrate_proc.returncode == 0:
+        typer.echo("✅ Database migration completed.")
+        return
+
+    typer.echo("⚠️  Upgrade succeeded but DB migration failed.", err=True)
+    _print_subprocess_logs(migrate_proc, verbose)
+    typer.echo("🛠 Attempting automatic rollback repair...")
+
+    repair_proc = _run_cli_subcommand(["repair", "--auto"])
+    if repair_proc.returncode == 0:
+        typer.echo("✅ Auto-repair succeeded. Data restored to a safe state.")
+        return
+
+    typer.echo("❌ Auto-repair failed. Please run: adm-agent repair --auto", err=True)
+    _print_subprocess_logs(repair_proc, verbose)
+    raise typer.Exit(code=1)
+
+
+def _perform_upgrade(force: bool, migrate: bool, verbose: bool) -> None:
+    if not upgrade_backend(force=force, verbose=verbose):
+        typer.echo("ℹ️  No upgrade needed.")
+        return
+
+    typer.echo("🎉 Upgrade completed successfully!")
+    if migrate:
+        _run_migration_after_upgrade(verbose)
+    typer.echo("ℹ️  Restart the server if it's currently running.")
+
+
+@app.command()
 def upgrade(
     check_only: bool = typer.Option(False, "--check", help="Only check for updates, don't install"),
     force: bool = typer.Option(False, "--force", help="Force upgrade even if already on latest version"),
+    migrate: bool = typer.Option(True, "--migrate/--no-migrate", help="Run DB migration after backend upgrade"),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Debug logging"),
 ) -> None:
     """Check for and install backend updates from GitHub releases."""
     _setup_logging(verbose)
-    
+
     try:
         if check_only:
-            # Only check for updates
-            update_info = check_for_updates(verbose=verbose)
-            
-            current = update_info["current_version"]
-            latest = update_info["latest_version"]
-            
-            if "error" in update_info:
-                typer.echo(f"❌ Failed to check for updates: {update_info['error']}", err=True)
-                raise typer.Exit(code=1)
-            
-            typer.echo(f"📋 Current version: {current}")
-            typer.echo(f"📋 Latest version:  {latest}")
-            
-            if update_info["is_newer"]:
-                if update_info["asset_available"]:
-                    typer.echo("🎯 Update available! Run 'upgrade' without --check to install.")
-                else:
-                    typer.echo("⚠️  Update available but no compatible asset found.")
-                    if "release_url" in update_info:
-                        typer.echo(f"   Manual download: {update_info['release_url']}")
-            else:
-                typer.echo("✅ Already on latest version.")
-        else:
-            # Perform upgrade
-            if upgrade_backend(force=force, verbose=verbose):
-                typer.echo("🎉 Upgrade completed successfully!")
-                typer.echo("ℹ️  Restart the server if it's currently running.")
-            else:
-                typer.echo("ℹ️  No upgrade needed.")
-                
+            _print_upgrade_check(check_for_updates(verbose=verbose))
+            return
+        _perform_upgrade(force=force, migrate=migrate, verbose=verbose)
+    except typer.Exit:
+        raise
     except Exception as e:
         typer.echo(f"❌ Upgrade failed: {e}", err=True)
         raise typer.Exit(code=1)
