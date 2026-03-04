@@ -61,6 +61,31 @@ from src.storage.db_manager import DatabaseManager
 
 logger = logging.getLogger(__name__)
 
+# Stage progress mapping for frontend progress bars
+STAGE_PROGRESS_RANGES: dict[str, tuple[float, float]] = {
+    "fetch_raw": (10.0, 45.0),
+    "extract_structured": (45.0, 70.0),
+    "validate_rules": (70.0, 88.0),
+    "persist_versioned": (88.0, 98.0),
+}
+
+
+def _stage_progress_start(stage: str) -> float:
+    start, _ = STAGE_PROGRESS_RANGES.get(stage, (10.0, 90.0))
+    return start
+
+
+def _stage_progress_end(stage: str) -> float:
+    _, end = STAGE_PROGRESS_RANGES.get(stage, (10.0, 90.0))
+    return end
+
+
+def _stage_progress_interpolate(stage: str, ratio: float) -> float:
+    start, end = STAGE_PROGRESS_RANGES.get(stage, (10.0, 90.0))
+    bounded_ratio = max(0.0, min(1.0, float(ratio)))
+    return start + ((end - start) * bounded_ratio)
+
+
 # ---------------------------------------------------------------------------
 #  Logging Utils
 # ---------------------------------------------------------------------------
@@ -281,7 +306,13 @@ async def api_crawl(body: CrawlRequest) -> CrawlResponse:
         root_logger = logging.getLogger()
         root_logger.addHandler(log_handler)
         
-        task_manager.update_task(task_id, state=TaskState.RUNNING, progress="Crawling…")
+        task_manager.update_task(
+            task_id,
+            state=TaskState.RUNNING,
+            progress="Queued…",
+            progress_percent=2.0,
+            progress_meta={"event": "task_started"},
+        )
         
         # Snapshot start tokens
         from src.core.token_tracker import tracker
@@ -291,15 +322,90 @@ async def api_crawl(body: CrawlRequest) -> CrawlResponse:
             def _on_ingestion_event(event_type: str, payload: dict) -> None:
                 stage = payload.get("stage")
                 if event_type == "stage_started" and stage:
-                    task_manager.update_task(task_id, progress=f"{stage}…")
+                    task_manager.update_task(
+                        task_id,
+                        progress=f"{stage}…",
+                        progress_percent=_stage_progress_start(str(stage)),
+                        progress_meta={
+                            "event": event_type,
+                            "stage": stage,
+                        },
+                    )
+                elif event_type == "stage_succeeded" and stage:
+                    task_manager.update_task(
+                        task_id,
+                        progress=f"{stage} completed",
+                        progress_percent=_stage_progress_end(str(stage)),
+                        progress_meta={
+                            "event": event_type,
+                            "stage": stage,
+                        },
+                    )
                 elif event_type == "stage_retry_scheduled" and stage:
                     backoff = payload.get("backoff_seconds")
                     task_manager.update_task(
                         task_id,
                         progress=f"{stage} retry in {backoff}s…",
+                        progress_percent=_stage_progress_start(str(stage)),
+                        progress_meta={
+                            "event": event_type,
+                            "stage": stage,
+                            "backoff_seconds": backoff,
+                        },
                     )
                 elif event_type == "stage_poisoned" and stage:
-                    task_manager.update_task(task_id, progress=f"{stage} poisoned")
+                    task_manager.update_task(
+                        task_id,
+                        progress=f"{stage} poisoned",
+                        progress_percent=_stage_progress_start(str(stage)),
+                        progress_meta={
+                            "event": event_type,
+                            "stage": stage,
+                        },
+                    )
+                elif event_type == "fetch_phase":
+                    stage_name = str(payload.get("stage") or "fetch_raw")
+                    message = str(payload.get("message") or "fetch_raw…")
+                    task_manager.update_task(
+                        task_id,
+                        progress=message,
+                        progress_percent=_stage_progress_start(stage_name),
+                        progress_meta={
+                            "event": event_type,
+                            **payload,
+                        },
+                    )
+                elif event_type == "fetch_candidates_identified":
+                    total_candidates = int(payload.get("total_candidates") or 0)
+                    source = str(payload.get("source") or "index")
+                    task_manager.update_task(
+                        task_id,
+                        progress=(
+                            f"fetch_raw: identified {total_candidates} detail links "
+                            f"from {source}"
+                        ),
+                        progress_percent=_stage_progress_interpolate("fetch_raw", 0.25),
+                        progress_meta={
+                            "event": event_type,
+                            **payload,
+                        },
+                    )
+                elif event_type == "fetch_url_progress":
+                    current = int(payload.get("current") or 0)
+                    total = max(1, int(payload.get("total") or 1))
+                    status = str(payload.get("status") or "started")
+                    phase = str(payload.get("phase") or "detail")
+                    is_finished_one = status in {"succeeded", "failed"}
+                    ratio = current / total if is_finished_one else (max(current - 1, 0) / total)
+                    task_manager.update_task(
+                        task_id,
+                        progress=f"fetch_raw ({phase}): {current}/{total}",
+                        progress_percent=_stage_progress_interpolate("fetch_raw", max(0.3, ratio)),
+                        progress_meta={
+                            "event": event_type,
+                            **payload,
+                        },
+                    )
 
             # We need to periodically update token usage? 
             # Or just update it at the end? 
@@ -359,7 +465,9 @@ async def api_crawl(body: CrawlRequest) -> CrawlResponse:
                 state=TaskState.DONE,
                 progress="Complete",
                 result=result.model_dump(),
-                tokens_used=final_tokens - initial_tokens
+                tokens_used=final_tokens - initial_tokens,
+                progress_percent=100.0,
+                progress_meta={"event": "job_succeeded"},
             )
         except asyncio.CancelledError:
             logger.info(f"Task {task_id} cancelled")
@@ -372,6 +480,8 @@ async def api_crawl(body: CrawlRequest) -> CrawlResponse:
                 task_id,
                 state=TaskState.FAILED,
                 error=str(exc),
+                progress_percent=100.0,
+                progress_meta={"event": "job_failed"},
             )
         finally:
             root_logger.removeHandler(log_handler)

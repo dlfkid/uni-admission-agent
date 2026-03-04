@@ -33,6 +33,8 @@ def test_task_info_defaults() -> None:
     assert info.state == TaskState.PENDING
     assert info.logs == []
     assert info.tokens_used == 0
+    assert info.progress_percent == 0.0
+    assert info.progress_meta == {}
     assert info.completed_at is None
     assert info.created_at > 0
 
@@ -47,6 +49,8 @@ def test_task_info_to_dict() -> None:
     assert d["progress"] == "Complete"
     assert "logs" in d
     assert "tokens_used" in d
+    assert d["progress_percent"] == 0.0
+    assert d["progress_meta"] == {}
 
 
 # ── create_task ───────────────────────────────────────────────────────
@@ -93,10 +97,19 @@ def test_update_task_state_transitions() -> None:
     assert info.state == TaskState.RUNNING
     assert info.progress == "Working"
 
-    mgr.update_task(tid, state=TaskState.DONE, result={"ok": True}, tokens_used=100)
+    mgr.update_task(
+        tid,
+        state=TaskState.DONE,
+        result={"ok": True},
+        tokens_used=100,
+        progress_percent=120,
+        progress_meta={"stage": "persist_versioned"},
+    )
     assert info.state == TaskState.DONE
     assert info.result == {"ok": True}
     assert info.tokens_used == 100
+    assert info.progress_percent == 100.0
+    assert info.progress_meta == {"stage": "persist_versioned"}
     assert info.completed_at is not None
 
 

@@ -38,7 +38,7 @@ class TaskInfo:
 
     __slots__ = (
         "task_id", "state", "progress", "result", "error",
-        "logs", "params", "tokens_used",
+        "logs", "params", "tokens_used", "progress_percent", "progress_meta",
         "created_at", "completed_at",
     )
 
@@ -51,6 +51,8 @@ class TaskInfo:
         self.logs: List[str] = []
         self.params: Dict[str, Any] = {}
         self.tokens_used: int = 0
+        self.progress_percent: float = 0.0
+        self.progress_meta: Dict[str, Any] = {}
         self.created_at: float = time.monotonic()
         self.completed_at: Optional[float] = None
 
@@ -65,6 +67,8 @@ class TaskInfo:
             "logs": self.logs,
             "params": self.params,
             "tokens_used": self.tokens_used,
+            "progress_percent": self.progress_percent,
+            "progress_meta": self.progress_meta,
         }
 
 
@@ -159,6 +163,8 @@ class TaskManager:
         result: Optional[Dict[str, Any]] = None,
         error: Optional[str] = None,
         tokens_used: Optional[int] = None,
+        progress_percent: Optional[float] = None,
+        progress_meta: Optional[Dict[str, Any]] = None,
     ) -> None:
         """Update fields on an existing task."""
         info = self._task_store.get(task_id)
@@ -184,6 +190,10 @@ class TaskManager:
             info.error = error
         if tokens_used is not None:
             info.tokens_used = tokens_used
+        if progress_percent is not None:
+            info.progress_percent = max(0.0, min(100.0, float(progress_percent)))
+        if progress_meta is not None:
+            info.progress_meta = dict(progress_meta)
 
     # ── Eviction ───────────────────────────────────────────────────────
 

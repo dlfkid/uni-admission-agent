@@ -297,6 +297,12 @@ button:active {
   margin-bottom: 12px;
 }
 
+.preflight-log-section {
+  display: flex;
+  flex-direction: column;
+  margin-top: 10px;
+}
+
 #logs-console {
   background: #0d1117;
   border-radius: var(--radius);
@@ -311,6 +317,21 @@ button:active {
   height: 180px;
   overflow-y: auto;
   transition: all 0.3s ease;
+}
+
+#preflight-log-console {
+  background: #0d1117;
+  border-radius: var(--radius);
+  padding: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  font-family: "Menlo", "Consolas", monospace;
+  font-size: 11px;
+  color: #a0a0b0;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  line-height: 1.4;
+  max-height: 110px;
+  overflow-y: auto;
 }
 
 /* Modal */

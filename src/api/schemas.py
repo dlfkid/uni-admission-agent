@@ -168,6 +168,14 @@ class TaskStatusResponse(BaseModel):
         default=0,
         description="Total LLM tokens consumed by this task",
     )
+    progress_percent: float = Field(
+        default=0.0,
+        description="Progress percentage (0-100) for UI rendering",
+    )
+    progress_meta: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Structured progress metadata for fine-grained UI display",
+    )
 
 
 class StatusResponse(BaseModel):
