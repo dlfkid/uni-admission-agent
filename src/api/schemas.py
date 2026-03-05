@@ -7,7 +7,7 @@ in ``src.services.crawler``.
 
 from typing import Optional, List, Dict, Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 # ---------------------------------------------------------------------------
@@ -45,6 +45,40 @@ class CrawlRequest(BaseModel):
         default=None,
         description="User-selected URLs to crawl (from index page analysis)",
     )
+    taxonomy_enabled: Optional[bool] = Field(
+        default=None,
+        description="Enable taxonomy-guided name matching for this crawl",
+    )
+    taxonomy_low_threshold: Optional[float] = Field(
+        default=None,
+        ge=0.0,
+        le=1.0,
+        description="Minimum score to inject taxonomy hints",
+    )
+    taxonomy_high_threshold: Optional[float] = Field(
+        default=None,
+        ge=0.0,
+        le=1.0,
+        description="Minimum score to allow high-confidence name override",
+    )
+    taxonomy_hint_top_k: Optional[int] = Field(
+        default=None,
+        ge=1,
+        le=5,
+        description="Maximum taxonomy hints injected into cleaner prompt",
+    )
+    taxonomy_override_enabled: Optional[bool] = Field(
+        default=None,
+        description="Enable high-confidence taxonomy override of extracted program name",
+    )
+
+    @model_validator(mode="after")
+    def _validate_taxonomy_thresholds(self) -> "CrawlRequest":
+        low = self.taxonomy_low_threshold
+        high = self.taxonomy_high_threshold
+        if low is not None and high is not None and low > high:
+            raise ValueError("taxonomy_low_threshold must be <= taxonomy_high_threshold")
+        return self
 
 
 class AnalyzeRequest(BaseModel):

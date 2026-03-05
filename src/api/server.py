@@ -454,6 +454,11 @@ async def api_crawl(body: CrawlRequest) -> CrawlResponse:
                     export_path=body.export_path,
                     html_content=body.html_content,
                     selected_urls=body.selected_urls,
+                    taxonomy_enabled=body.taxonomy_enabled,
+                    taxonomy_low_threshold=body.taxonomy_low_threshold,
+                    taxonomy_high_threshold=body.taxonomy_high_threshold,
+                    taxonomy_hint_top_k=body.taxonomy_hint_top_k,
+                    taxonomy_override_enabled=body.taxonomy_override_enabled,
                     progress_callback=_on_ingestion_event,
                 )
             finally:

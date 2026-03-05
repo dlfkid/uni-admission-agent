@@ -193,6 +193,11 @@ class IngestionPipeline:
         export_path: Optional[str] = None,
         html_content: Optional[str] = None,
         selected_urls: Optional[List[str]] = None,
+        taxonomy_enabled: Optional[bool] = None,
+        taxonomy_low_threshold: Optional[float] = None,
+        taxonomy_high_threshold: Optional[float] = None,
+        taxonomy_hint_top_k: Optional[int] = None,
+        taxonomy_override_enabled: Optional[bool] = None,
         event_callback: Optional[IngestionEventCallback] = None,
     ) -> Dict[str, Any]:
         request_payload = {
@@ -205,6 +210,11 @@ class IngestionPipeline:
             "export_path": export_path,
             "html_content": html_content,
             "selected_urls": selected_urls or [],
+            "taxonomy_enabled": taxonomy_enabled,
+            "taxonomy_low_threshold": taxonomy_low_threshold,
+            "taxonomy_high_threshold": taxonomy_high_threshold,
+            "taxonomy_hint_top_k": taxonomy_hint_top_k,
+            "taxonomy_override_enabled": taxonomy_override_enabled,
         }
         job_uid = self._create_job(request_payload)
         return await self._run_job(
