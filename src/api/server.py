@@ -57,6 +57,7 @@ from src.services.crawler import (
     query_programs,
     resume_crawl_job,
 )
+from src.services.subject_taxonomy import bootstrap_subject_taxonomy
 from src.storage.db_manager import DatabaseManager
 
 logger = logging.getLogger(__name__)
@@ -236,6 +237,7 @@ async def lifespan(app: FastAPI):
     """Lifespan context manager for database initialization."""
     try:
         DatabaseManager().init_db()
+        bootstrap_subject_taxonomy()
         logger.info("Database initialised")
     except Exception as e:
         logger.warning("Database init warning: %s", e)

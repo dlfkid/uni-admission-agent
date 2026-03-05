@@ -55,6 +55,7 @@ from src.services.migrations import (
     run_db_migrations,
 )
 from src.services.repair import RepairError, run_auto_repair
+from src.services.subject_taxonomy import bootstrap_subject_taxonomy
 from src.core.environment import install_playwright_browser
 from src.storage.db_manager import DatabaseManager
 
@@ -261,6 +262,12 @@ def _init_db(verbose: bool = False) -> None:
     except Exception as e:  # pragma: no cover - defensive logging path
         if verbose:
             logger.warning("Unexpected migration warning: %s", e)
+
+    try:
+        bootstrap_subject_taxonomy()
+    except Exception as e:
+        if verbose:
+            logger.warning("Subject taxonomy bootstrap warning: %s", e)
 
 
 # ---------------------------------------------------------------------------
