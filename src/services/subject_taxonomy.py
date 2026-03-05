@@ -12,6 +12,7 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 from sqlmodel import select
 
 from src.models.taxonomy import SubjectTaxonomy
+from src.scrapers.helpers import is_noise_program_name
 from src.storage.db_manager import DatabaseManager
 
 logger = logging.getLogger(__name__)
@@ -154,6 +155,105 @@ class SubjectTaxonomyService:
             "updated": int(upsert_result.get("updated") or 0),
             "skipped": 0,
             "missing": False,
+        }
+
+    def maybe_learn_name(
+        self,
+        *,
+        name_en: str,
+        confidence: float,
+        source_url: str,
+        enabled: bool,
+    ) -> dict:
+        if not enabled:
+            return {"learned": False, "reason": "disabled"}
+
+        learned_name = str(name_en or "").strip()
+        if not learned_name:
+            return {"learned": False, "reason": "empty_name"}
+        if is_noise_program_name(learned_name):
+            return {"learned": False, "reason": "noise_name"}
+
+        normalized = normalize_name(learned_name)
+        if not normalized:
+            return {"learned": False, "reason": "empty_normalized_name"}
+
+        parsed_confidence: Optional[float]
+        try:
+            parsed_confidence = float(confidence)
+        except (TypeError, ValueError):
+            parsed_confidence = None
+        if parsed_confidence is None:
+            return {"learned": False, "reason": "invalid_confidence"}
+
+        result = self.repository.upsert_many(
+            [
+                {
+                    "name_en": learned_name,
+                    "normalized_name": normalized,
+                    "aliases": [learned_name],
+                    "source": "learned",
+                    "first_seen_url": str(source_url or "").strip() or None,
+                    "confidence": parsed_confidence,
+                    "status": "active",
+                }
+            ]
+        )
+        self.reload_memory_index()
+        return {
+            "learned": True,
+            "normalized_name": normalized,
+            "inserted": int(result.get("inserted") or 0),
+            "updated": int(result.get("updated") or 0),
+        }
+
+    def export_to_json(
+        self,
+        *,
+        output_path: str,
+        include_learned: bool = False,
+        min_confidence: float = 0.9,
+    ) -> dict:
+        rows = self.repository.list_active()
+        output_rows: list[dict] = []
+        for row in rows:
+            source = str(row.get("source") or "seed").strip() or "seed"
+            confidence = row.get("confidence")
+
+            if source == "learned":
+                if not include_learned:
+                    continue
+                if confidence is not None:
+                    try:
+                        if float(confidence) < float(min_confidence):
+                            continue
+                    except (TypeError, ValueError):
+                        continue
+
+            output_rows.append(
+                {
+                    "name_en": str(row.get("name_en") or "").strip(),
+                    "normalized_name": str(row.get("normalized_name") or "").strip(),
+                    "aliases": list(row.get("aliases") or []),
+                    "source": source,
+                    "first_seen_url": row.get("first_seen_url"),
+                    "confidence": confidence,
+                    "status": str(row.get("status") or "active"),
+                }
+            )
+
+        output_rows.sort(key=lambda item: item.get("normalized_name") or "")
+        target = Path(output_path)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(
+            json.dumps(output_rows, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        return {
+            "path": str(target),
+            "exported_count": len(output_rows),
+            "include_learned": include_learned,
+            "min_confidence": float(min_confidence),
         }
 
     def reload_memory_index(self) -> None:
