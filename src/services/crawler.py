@@ -134,6 +134,7 @@ async def crawl_url(
     export_path: Optional[str] = None,
     html_content: Optional[str] = None,
     selected_urls: Optional[list[str]] = None,
+    selected_link_texts: Optional[dict[str, str]] = None,
     taxonomy_enabled: Optional[bool] = None,
     taxonomy_low_threshold: Optional[float] = None,
     taxonomy_high_threshold: Optional[float] = None,
@@ -160,6 +161,7 @@ async def crawl_url(
         export_path: Path to export markdown files.
         html_content: Pre-rendered HTML from browser (bypasses crawling).
         selected_urls: User-selected detail URLs (skips index analysis).
+        selected_link_texts: Optional mapping of selected URL → anchor text.
         taxonomy_enabled: Optional per-request taxonomy toggle.
         taxonomy_low_threshold: Optional hint injection score threshold.
         taxonomy_high_threshold: Optional override score threshold.
@@ -180,6 +182,7 @@ async def crawl_url(
         export_path=export_path,
         html_content=html_content,
         selected_urls=selected_urls,
+        selected_link_texts=selected_link_texts,
         taxonomy_enabled=taxonomy_enabled,
         taxonomy_low_threshold=taxonomy_low_threshold,
         taxonomy_high_threshold=taxonomy_high_threshold,

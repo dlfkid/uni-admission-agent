@@ -9,6 +9,7 @@ import logging
 import re
 from pathlib import Path
 from typing import List
+from urllib.parse import unquote, urlparse
 
 from src.core.paths import get_prompts_dir
 
@@ -149,7 +150,12 @@ _NOISE_HEADING_RE = re.compile(
     r"(?:cookie|privacy|navigation|menu|search|skip to|accept|"
     r"your .* options|tell us|changes to our|"
     r"related content|course terms|how to apply|"
-    r"footer|header|breadcrumb|sidebar)",
+    r"footer|header|breadcrumb|sidebar|what'?s new|latest news|news)",
+    re.IGNORECASE,
+)
+
+_NOISE_PROGRAM_NAME_RE = re.compile(
+    r"^(?:what'?s new|news|overview|home|admissions?|programme(?:s)? list)$",
     re.IGNORECASE,
 )
 
@@ -197,23 +203,47 @@ def extract_program_name(markdown: str) -> str:
     # Pass 1: heading with a degree keyword (strongest signal)
     for level, text in headings:
         if level <= 3 and _DEGREE_KEYWORDS_RE.search(text):
-            if not _NOISE_HEADING_RE.search(text):
+            if not is_noise_program_name(text):
                 return text
 
     # Pass 2: first non-noise H1
     for level, text in headings:
-        if level == 1 and not _NOISE_HEADING_RE.search(text):
+        if level == 1 and not is_noise_program_name(text):
             return text
 
     # Pass 3: first non-noise H2
     for level, text in headings:
-        if level == 2 and not _NOISE_HEADING_RE.search(text):
+        if level == 2 and not is_noise_program_name(text):
             return text
 
     # Pass 4: absolute fallback — first heading that isn't noise
     for _level, text in headings:
-        if not _NOISE_HEADING_RE.search(text):
+        if not is_noise_program_name(text):
             return text
 
     # Everything was noise — return first heading anyway
     return headings[0][1]
+
+
+def is_noise_program_name(text: str) -> bool:
+    stripped = str(text or "").strip()
+    if not stripped:
+        return True
+    return bool(
+        _NOISE_HEADING_RE.search(stripped)
+        or _NOISE_PROGRAM_NAME_RE.search(stripped)
+    )
+
+
+def build_url_name_signal(url: str) -> str:
+    parsed = urlparse(str(url or "").strip())
+    parts: list[str] = []
+    for segment in parsed.path.split("/"):
+        cleaned = unquote(segment).strip()
+        if cleaned:
+            cleaned = re.sub(r"[-_]+", " ", cleaned)
+            cleaned = re.sub(r"[^a-zA-Z0-9 ]+", " ", cleaned)
+            cleaned = re.sub(r"\s+", " ", cleaned).strip()
+            if cleaned:
+                parts.append(cleaned)
+    return " ".join(parts).strip()

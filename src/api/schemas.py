@@ -45,6 +45,10 @@ class CrawlRequest(BaseModel):
         default=None,
         description="User-selected URLs to crawl (from index page analysis)",
     )
+    selected_link_texts: Optional[Dict[str, str]] = Field(
+        default=None,
+        description="Optional mapping of selected URL to anchor text",
+    )
     taxonomy_enabled: Optional[bool] = Field(
         default=None,
         description="Enable taxonomy-guided name matching for this crawl",
