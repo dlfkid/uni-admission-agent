@@ -18,6 +18,12 @@
       "name": "Leeds",
       "index_url": "https://courses.leeds.ac.uk/course-search/masters-courses",
       "detail_url": "https://courses.leeds.ac.uk/k198/ai-for-business-msc?searchOrigin=query%3D%26type%3DPGT%26term%3D202627"
+    },
+    {
+      "case_id": "polyu_masters_asset_wealth",
+      "name": "PolyU",
+      "index_url": "https://www.polyu.edu.hk/study/pg/taught-postgraduate",
+      "detail_url": "https://www.polyu.edu.hk/study/pg/tpg/2026/02029-dfm-dpm-ffm-fpm"
     }
   ]
 }

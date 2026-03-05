@@ -1,0 +1,13 @@
+{
+  "expected_name": "Master of Science in Asset and Wealth Management",
+  "expected_keywords": [
+    "Master",
+    "Science",
+    "Asset",
+    "Wealth Management"
+  ],
+  "required_fields": [
+    "name_en"
+  ],
+  "case_threshold": 0.60
+}

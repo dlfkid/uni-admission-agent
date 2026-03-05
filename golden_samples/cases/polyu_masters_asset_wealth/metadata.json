@@ -1,0 +1,27 @@
+{
+  "case_id": "polyu_masters_asset_wealth",
+  "name": "PolyU",
+  "index_url": "https://www.polyu.edu.hk/study/pg/taught-postgraduate",
+  "detail_url": "https://www.polyu.edu.hk/study/pg/tpg/2026/02029-dfm-dpm-ffm-fpm",
+  "fetched_at": "2026-03-05T18:03:30.352762+00:00",
+  "pages": {
+    "index": {
+      "status": "ok",
+      "status_code": 200,
+      "url": "https://www.polyu.edu.hk/study/pg/taught-postgraduate",
+      "html_chars": 251841,
+      "markdown_chars": 54523,
+      "html_path": "golden_samples/cases/polyu_masters_asset_wealth/index.html",
+      "markdown_path": "golden_samples/cases/polyu_masters_asset_wealth/index.md"
+    },
+    "detail": {
+      "status": "ok",
+      "status_code": 200,
+      "url": "https://www.polyu.edu.hk/study/pg/tpg/2026/02029-dfm-dpm-ffm-fpm",
+      "html_chars": 118747,
+      "markdown_chars": 28859,
+      "html_path": "golden_samples/cases/polyu_masters_asset_wealth/detail.html",
+      "markdown_path": "golden_samples/cases/polyu_masters_asset_wealth/detail.md"
+    }
+  }
+}
