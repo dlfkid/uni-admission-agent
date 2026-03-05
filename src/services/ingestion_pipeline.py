@@ -840,8 +840,7 @@ class IngestionPipeline:
             request_payload.get("taxonomy_high_threshold"),
             default=0.92,
         )
-        if taxonomy_high_threshold < taxonomy_low_threshold:
-            taxonomy_high_threshold = taxonomy_low_threshold
+        taxonomy_high_threshold = max(taxonomy_high_threshold, taxonomy_low_threshold)
         taxonomy_hint_top_k = self._coerce_int(
             request_payload.get("taxonomy_hint_top_k"),
             default=3,
@@ -903,53 +902,20 @@ class IngestionPipeline:
                 name_hints=name_hints,
             )
             if program_data:
-                metadata = program_data.setdefault("extra_metadata", {})
-                if isinstance(metadata, dict):
-                    taxonomy_trace: dict[str, Any] = {
-                        "enabled": taxonomy_enabled,
-                        "signals": taxonomy_signals,
-                        "best_score": round(best_score, 4),
-                        "low_threshold": taxonomy_low_threshold,
-                        "high_threshold": taxonomy_high_threshold,
-                        "hint_top_k": taxonomy_hint_top_k,
-                        "hints_injected": bool(name_hints),
-                        "override_enabled": taxonomy_override_enabled,
-                        "override_applied": False,
-                        "matches": [
-                            {
-                                "name_en": str(item.get("name_en") or ""),
-                                "score": float(item.get("score") or 0.0),
-                                "normalized_name": item.get("normalized_name"),
-                            }
-                            for item in taxonomy_matches[:taxonomy_hint_top_k]
-                        ],
-                    }
-
-                    if (
-                        taxonomy_enabled
-                        and taxonomy_override_enabled
-                        and best_match
-                        and best_score >= taxonomy_high_threshold
-                    ):
-                        canonical_name = str(best_match.get("name_en") or "").strip()
-                        current_name = str(program_data.get("name_en") or "").strip()
-                        if canonical_name and (
-                            is_noise_program_name(current_name)
-                            or normalize_taxonomy_name(current_name)
-                            != normalize_taxonomy_name(canonical_name)
-                        ):
-                            program_data["name_en"] = canonical_name
-                            if univ_slug:
-                                program_data["program_group_code"] = generate_program_group_code(
-                                    univ_slug,
-                                    canonical_name,
-                                )
-                            taxonomy_trace["override_applied"] = True
-                            taxonomy_trace["override_name"] = canonical_name
-                            taxonomy_trace["override_reason"] = "high_confidence_match"
-
-                    metadata["taxonomy_match"] = taxonomy_trace
-
+                self._attach_taxonomy_trace(
+                    program_data=program_data,
+                    univ_slug=univ_slug,
+                    taxonomy_enabled=taxonomy_enabled,
+                    taxonomy_signals=taxonomy_signals,
+                    taxonomy_matches=taxonomy_matches,
+                    best_match=best_match,
+                    best_score=best_score,
+                    taxonomy_low_threshold=taxonomy_low_threshold,
+                    taxonomy_high_threshold=taxonomy_high_threshold,
+                    taxonomy_hint_top_k=taxonomy_hint_top_k,
+                    taxonomy_override_enabled=taxonomy_override_enabled,
+                    hints_injected=bool(name_hints),
+                )
                 candidates.append(_json_safe(program_data))
             else:
                 extract_errors.append(
@@ -965,6 +931,72 @@ class IngestionPipeline:
             "extract_errors": extract_errors,
             "candidate_hash": _hash_payload(candidates),
         }
+
+    def _attach_taxonomy_trace(
+        self,
+        *,
+        program_data: Dict[str, Any],
+        univ_slug: str,
+        taxonomy_enabled: bool,
+        taxonomy_signals: list[str],
+        taxonomy_matches: list[dict],
+        best_match: Optional[dict],
+        best_score: float,
+        taxonomy_low_threshold: float,
+        taxonomy_high_threshold: float,
+        taxonomy_hint_top_k: int,
+        taxonomy_override_enabled: bool,
+        hints_injected: bool,
+    ) -> None:
+        metadata = program_data.setdefault("extra_metadata", {})
+        if not isinstance(metadata, dict):
+            return
+
+        taxonomy_trace: dict[str, Any] = {
+            "enabled": taxonomy_enabled,
+            "signals": taxonomy_signals,
+            "best_score": round(best_score, 4),
+            "low_threshold": taxonomy_low_threshold,
+            "high_threshold": taxonomy_high_threshold,
+            "hint_top_k": taxonomy_hint_top_k,
+            "hints_injected": hints_injected,
+            "override_enabled": taxonomy_override_enabled,
+            "override_applied": False,
+            "matches": [
+                {
+                    "name_en": str(item.get("name_en") or ""),
+                    "score": float(item.get("score") or 0.0),
+                    "normalized_name": item.get("normalized_name"),
+                }
+                for item in taxonomy_matches[:taxonomy_hint_top_k]
+            ],
+        }
+
+        should_override = (
+            taxonomy_enabled
+            and taxonomy_override_enabled
+            and bool(best_match)
+            and best_score >= taxonomy_high_threshold
+        )
+        if should_override and best_match:
+            canonical_name = str(best_match.get("name_en") or "").strip()
+            current_name = str(program_data.get("name_en") or "").strip()
+            if canonical_name and (
+                is_noise_program_name(current_name)
+                or normalize_taxonomy_name(current_name)
+                != normalize_taxonomy_name(canonical_name)
+            ):
+                program_data["name_en"] = canonical_name
+                if univ_slug:
+                    program_data["program_group_code"] = generate_program_group_code(
+                        univ_slug,
+                        canonical_name,
+                    )
+                taxonomy_trace["override_applied"] = True
+                taxonomy_trace["override_name"] = canonical_name
+                taxonomy_trace["override_reason"] = "high_confidence_match"
+
+        metadata["taxonomy_match"] = taxonomy_trace
 
     def _stage_validate_rules(
         self,

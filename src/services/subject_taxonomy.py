@@ -6,6 +6,7 @@ import re
 from collections import OrderedDict
 from datetime import datetime, timezone
 from difflib import SequenceMatcher
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
@@ -456,14 +457,9 @@ class SubjectTaxonomyService:
         return best
 
 
-_SERVICE_SINGLETON: Optional[SubjectTaxonomyService] = None
-
-
+@lru_cache(maxsize=1)
 def get_subject_taxonomy_service() -> SubjectTaxonomyService:
-    global _SERVICE_SINGLETON
-    if _SERVICE_SINGLETON is None:
-        _SERVICE_SINGLETON = SubjectTaxonomyService()
-    return _SERVICE_SINGLETON
+    return SubjectTaxonomyService()
 
 
 def bootstrap_subject_taxonomy(
