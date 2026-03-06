@@ -318,7 +318,8 @@ def test_process_pages_batch_partial_failure() -> None:
 
     call_count = 0
 
-    def mock_clean_markdown(markdown, source_url=""):
+    def mock_clean_markdown(markdown, source_url="", name_hints=None):
+        _ = markdown, source_url, name_hints
         nonlocal call_count
         call_count += 1
         if call_count == 1:

@@ -55,6 +55,10 @@ from src.services.migrations import (
     run_db_migrations,
 )
 from src.services.repair import RepairError, run_auto_repair
+from src.services.subject_taxonomy import (
+    bootstrap_subject_taxonomy,
+    get_subject_taxonomy_service,
+)
 from src.core.environment import install_playwright_browser
 from src.storage.db_manager import DatabaseManager
 
@@ -82,6 +86,7 @@ DATABASE & STATUS:
     ingestion-resume Resume a failed Phase 2 ingestion job
     golden-collect   Collect Phase 3 golden sample snapshots
     quality-score    Run Phase 3 quality scoring and threshold checks
+    taxonomy-export  Export canonical taxonomy names to JSON
     
 LLM CONFIGURATION:
     llm-config Interactive wizard to configure LLM providers
@@ -261,6 +266,12 @@ def _init_db(verbose: bool = False) -> None:
     except Exception as e:  # pragma: no cover - defensive logging path
         if verbose:
             logger.warning("Unexpected migration warning: %s", e)
+
+    try:
+        bootstrap_subject_taxonomy()
+    except Exception as e:
+        if verbose:
+            logger.warning("Subject taxonomy bootstrap warning: %s", e)
 
 
 # ---------------------------------------------------------------------------
@@ -577,6 +588,43 @@ def quality_score_cmd(
         raise
     except Exception as e:
         logger.exception("Quality scoring failed: %s", e)
+        raise typer.Exit(code=1)
+
+
+@app.command(name="taxonomy-export")
+def taxonomy_export_cmd(
+    output: str = typer.Option(
+        "golden_samples/program_names/cleaned_programs_names.json",
+        "--output",
+        help="Output taxonomy JSON path",
+    ),
+    include_learned: bool = typer.Option(
+        False,
+        "--include-learned",
+        help="Include learned names in addition to seed names",
+    ),
+    min_confidence: float = typer.Option(
+        0.9,
+        "--min-confidence",
+        help="Minimum confidence for learned names",
+    ),
+    verbose: bool = typer.Option(False, "--verbose", "-v"),
+) -> None:
+    """Export current subject taxonomy to JSON."""
+    _setup_logging(verbose)
+    _init_db(verbose)
+    try:
+        service = get_subject_taxonomy_service()
+        result = service.export_to_json(
+            output_path=output,
+            include_learned=include_learned,
+            min_confidence=min_confidence,
+        )
+        typer.echo(
+            f"✅ Taxonomy export complete: {result['exported_count']} names → {result['path']}"
+        )
+    except Exception as e:
+        logger.exception("Taxonomy export failed: %s", e)
         raise typer.Exit(code=1)
 
 

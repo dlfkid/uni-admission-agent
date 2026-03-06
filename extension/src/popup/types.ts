@@ -41,6 +41,24 @@ export interface AnalyzeResult {
     total_found: number;
 }
 
+export interface CrawlPayload {
+    url: string;
+    univ_slug: string;
+    year: number;
+    continue_depth: number;
+    page_type_hint: string;
+    export_md?: boolean;
+    export_path?: string;
+    html_content?: string;
+    selected_urls?: string[];
+    selected_link_texts?: Record<string, string>;
+    taxonomy_enabled: boolean;
+    taxonomy_low_threshold: number;
+    taxonomy_high_threshold: number;
+    taxonomy_hint_top_k: number;
+    taxonomy_override_enabled: boolean;
+}
+
 export interface ProgramRecord {
     id: number | null;
     name_en: string;

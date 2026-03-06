@@ -9,6 +9,7 @@ interface SubmitCrawlOptions {
     exportPath: string;
     htmlContent?: string;
     selectedUrls?: string[];
+    selectedLinkTexts?: Record<string, string>;
 }
 
 interface LinkSelectionFlowDeps {
@@ -127,12 +128,16 @@ export function initLinkSelectionFlow(deps: LinkSelectionFlowDeps): {
     confirmLinksBtn.addEventListener("click", async () => {
         const checkboxes = linkListEl.querySelectorAll<HTMLInputElement>("input[type=checkbox]");
         const selectedUrls: string[] = [];
+        const selectedLinkTexts: Record<string, string> = {};
 
         checkboxes.forEach(cb => {
             if (cb.checked) {
                 const idx = parseInt(cb.dataset.idx!, 10);
                 if (candidateLinks[idx]) {
                     selectedUrls.push(candidateLinks[idx].url);
+                    if (candidateLinks[idx].text) {
+                        selectedLinkTexts[candidateLinks[idx].url] = candidateLinks[idx].text;
+                    }
                 }
             }
         });
@@ -154,6 +159,7 @@ export function initLinkSelectionFlow(deps: LinkSelectionFlowDeps): {
                 exportMd: getExportMd(),
                 exportPath: getExportPath(),
                 selectedUrls,
+                selectedLinkTexts,
             });
         } catch (err) {
             showStatus(String(err), "error");

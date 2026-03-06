@@ -30,6 +30,7 @@ from src.models.requirement import (
     RequirementCategory,
 )
 from src.models.ingestion import IngestionJob, IngestionTask  # noqa: F401
+from src.models.taxonomy import SubjectTaxonomy  # noqa: F401
 from src.models.scraper_models import ProgramContext
 from src.storage.db_helpers import (
     load_database_env,

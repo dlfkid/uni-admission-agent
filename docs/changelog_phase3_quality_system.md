@@ -53,3 +53,40 @@ uv run python scripts/score_golden_samples.py --manifest golden_samples/manifest
 ## Notes
 - This is a Phase 3 seed implementation to establish repeatable quality gates.
 - Additional universities and stricter expected outputs should be added incrementally.
+
+---
+
+## 2026-03-06: Taxonomy-Guided Name Accuracy (PolyU)
+
+### Scope
+- Added a canonical `subject_taxonomy` data model and migration.
+- Added runtime taxonomy service with seed sync, in-memory token index, and fuzzy matching.
+- Added per-request taxonomy override controls from API and Chrome extension.
+- Added online learning and export path for taxonomy maintenance.
+- Added PolyU golden case: `polyu_masters_asset_wealth`.
+
+### Runtime behavior
+- Server startup now attempts taxonomy bootstrap from:
+  - `golden_samples/program_names/cleaned_programs_names.json`
+- During detail extraction, pipeline now:
+  - builds signals in priority: selected anchor text → URL tokens → heading fallback
+  - injects name hints only when match score ≥ low threshold
+  - applies canonical-name override only when score ≥ high threshold and override is enabled
+  - records matching trace under `extra_metadata.taxonomy_match`
+
+### New interfaces
+- `POST /crawl` request fields:
+  - `taxonomy_enabled`
+  - `taxonomy_low_threshold`
+  - `taxonomy_high_threshold`
+  - `taxonomy_hint_top_k`
+  - `taxonomy_override_enabled`
+  - `selected_link_texts`
+- New CLI command:
+  - `adm-agent taxonomy-export --output <path> --include-learned --min-confidence 0.9`
+
+### Quality updates
+- Golden manifest extended to 4 benchmark cases (added PolyU).
+- Manual regression checks:
+  - `uv run python scripts/collect_golden_samples.py --manifest golden_samples/manifest.json --overwrite`
+  - `uv run python scripts/score_golden_samples.py --manifest golden_samples/manifest.json --threshold 0.60`

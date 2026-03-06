@@ -193,7 +193,11 @@ class LLMCleanerAgent:
         else:
             self.router = create_router()
 
-    def clean_row(self, raw_row: Dict[str, str]) -> Optional[ParsedProgramData]:
+    def clean_row(
+        self,
+        raw_row: Dict[str, str],
+        name_hints: Optional[List[str]] = None,
+    ) -> Optional[ParsedProgramData]:
         """
         Parse a dictionary of raw row data into structured ParsedProgramData.
 
@@ -203,12 +207,23 @@ class LLMCleanerAgent:
         Returns:
             ParsedProgramData object or None if parsing fails.
         """
+        hints = self._normalize_name_hints(name_hints)
+        hints_block = ""
+        if hints:
+            lines = "\n".join(f"- {item}" for item in hints)
+            hints_block = (
+                "Program Name Hints (canonical_name|score):\n"
+                f"{lines}\n"
+                "Use these only as guidance for program identity; do not invent fields.\n"
+            )
+
         prompt = f"""
         You are an expert data parsing assistant.
         Your task is to extract structured admission data from the following raw data.
 
         Raw Data:
         {raw_row}
+        {hints_block}
 
         Requirements:
         1. **Faculty**: Identify the top-level academic unit (Faculty, School, or College).
@@ -247,6 +262,7 @@ class LLMCleanerAgent:
         self,
         markdown: str,
         source_url: str = "",
+        name_hints: Optional[List[str]] = None,
     ) -> Optional[ParsedProgramData]:
         """Parse Markdown content from a detail page into structured data.
 
@@ -262,9 +278,9 @@ class LLMCleanerAgent:
             ParsedProgramData or None if parsing fails entirely.
         """
         if len(markdown) <= MAX_DETAIL_CHARS:
-            return self._parse_single_pass(markdown, source_url)
+            return self._parse_single_pass(markdown, source_url, name_hints)
 
-        return self._parse_rolling_chunks(markdown, source_url)
+        return self._parse_rolling_chunks(markdown, source_url, name_hints)
 
     # ------------------------------------------------------------------ #
     #  Private helpers                                                     #
@@ -274,18 +290,20 @@ class LLMCleanerAgent:
         self,
         markdown: str,
         source_url: str,
+        name_hints: Optional[List[str]],
     ) -> Optional[ParsedProgramData]:
         """Parse a small detail page in one LLM call."""
         raw_row: Dict[str, str] = {
             "source_url": source_url,
             "raw_content": markdown,
         }
-        return self.clean_row(raw_row)
+        return self.clean_row(raw_row, name_hints=name_hints)
 
     def _parse_rolling_chunks(
         self,
         markdown: str,
         source_url: str,
+        name_hints: Optional[List[str]],
     ) -> Optional[ParsedProgramData]:
         """Parse a large detail page using rolling-window sequential chunks.
 
@@ -305,6 +323,8 @@ class LLMCleanerAgent:
         accumulated = ParsedProgramData()
         context_summary = "No previous context. This is the first chunk."
 
+        hints = self._normalize_name_hints(name_hints)
+
         for i, chunk in enumerate(chunks):
             chunk_num = i + 1
             logger.info(
@@ -318,6 +338,13 @@ class LLMCleanerAgent:
                 total_chunks=total_chunks,
                 chunk_content=chunk,
             )
+            if hints:
+                hints_lines = "\n".join(f"- {item}" for item in hints)
+                prompt = (
+                    "Program Name Hints (canonical_name|score):\n"
+                    f"{hints_lines}\n\n"
+                    f"{prompt}"
+                )
 
             try:
                 response = self.router.generate(prompt, ChunkParseResult)
@@ -351,6 +378,17 @@ class LLMCleanerAgent:
             return None
 
         return accumulated
+
+    @staticmethod
+    def _normalize_name_hints(name_hints: Optional[List[str]]) -> List[str]:
+        if not name_hints:
+            return []
+        normalized: List[str] = []
+        for item in name_hints:
+            text = str(item or "").strip()
+            if text and text not in normalized:
+                normalized.append(text)
+        return normalized[:5]
 
     @staticmethod
     def _split_chunks(text: str, max_chars: int, overlap_ratio: float = CHUNK_OVERLAP_RATIO) -> List[str]:

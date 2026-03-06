@@ -77,6 +77,7 @@ def extract_program_data_from_page(
     year: int,
     current_depth: int,
     from_browser: bool = False,
+    name_hints: Optional[List[str]] = None,
 ) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
     """Extract structured program payload from one page without DB persistence."""
     if not page.markdown:
@@ -100,6 +101,7 @@ def extract_program_data_from_page(
         parsed: Optional[ParsedProgramData] = cleaner.clean_markdown(
             markdown=content_for_llm,
             source_url=page.url,
+            name_hints=name_hints,
         )
         
         if content_type == "html":

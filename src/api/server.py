@@ -57,6 +57,7 @@ from src.services.crawler import (
     query_programs,
     resume_crawl_job,
 )
+from src.services.subject_taxonomy import bootstrap_subject_taxonomy
 from src.storage.db_manager import DatabaseManager
 
 logger = logging.getLogger(__name__)
@@ -236,6 +237,7 @@ async def lifespan(app: FastAPI):
     """Lifespan context manager for database initialization."""
     try:
         DatabaseManager().init_db()
+        bootstrap_subject_taxonomy()
         logger.info("Database initialised")
     except Exception as e:
         logger.warning("Database init warning: %s", e)
@@ -452,6 +454,12 @@ async def api_crawl(body: CrawlRequest) -> CrawlResponse:
                     export_path=body.export_path,
                     html_content=body.html_content,
                     selected_urls=body.selected_urls,
+                    selected_link_texts=body.selected_link_texts,
+                    taxonomy_enabled=body.taxonomy_enabled,
+                    taxonomy_low_threshold=body.taxonomy_low_threshold,
+                    taxonomy_high_threshold=body.taxonomy_high_threshold,
+                    taxonomy_hint_top_k=body.taxonomy_hint_top_k,
+                    taxonomy_override_enabled=body.taxonomy_override_enabled,
                     progress_callback=_on_ingestion_event,
                 )
             finally:

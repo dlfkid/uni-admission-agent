@@ -21,11 +21,14 @@ from src.models.ingestion import (
     IngestionTaskState,
 )
 from src.models.scraper_models import CrawlPageResult
+from src.scrapers.helpers import build_url_name_signal, extract_program_name, is_noise_program_name
 from src.scrapers.engine import AdmissionScraper
 from src.scrapers.link_parser import extract_links_with_text, filter_links_by_llm
 from src.scrapers.page_processor import extract_program_data_from_page
 from src.scrapers.scout import run_scout
+from src.services.subject_taxonomy import get_subject_taxonomy_service, normalize_name as normalize_taxonomy_name
 from src.storage.db_manager import DatabaseManager
+from src.utils.text import generate_program_group_code
 
 logger = logging.getLogger(__name__)
 
@@ -180,6 +183,7 @@ class IngestionPipeline:
     ) -> None:
         self.db_manager = db_manager or DatabaseManager()
         self.stage_max_retries = max(0, int(stage_max_retries))
+        self.taxonomy_service = get_subject_taxonomy_service()
 
     async def run_new_job(
         self,
@@ -193,6 +197,12 @@ class IngestionPipeline:
         export_path: Optional[str] = None,
         html_content: Optional[str] = None,
         selected_urls: Optional[List[str]] = None,
+        selected_link_texts: Optional[Dict[str, str]] = None,
+        taxonomy_enabled: Optional[bool] = None,
+        taxonomy_low_threshold: Optional[float] = None,
+        taxonomy_high_threshold: Optional[float] = None,
+        taxonomy_hint_top_k: Optional[int] = None,
+        taxonomy_override_enabled: Optional[bool] = None,
         event_callback: Optional[IngestionEventCallback] = None,
     ) -> Dict[str, Any]:
         request_payload = {
@@ -205,6 +215,12 @@ class IngestionPipeline:
             "export_path": export_path,
             "html_content": html_content,
             "selected_urls": selected_urls or [],
+            "selected_link_texts": dict(selected_link_texts or {}),
+            "taxonomy_enabled": taxonomy_enabled,
+            "taxonomy_low_threshold": taxonomy_low_threshold,
+            "taxonomy_high_threshold": taxonomy_high_threshold,
+            "taxonomy_hint_top_k": taxonomy_hint_top_k,
+            "taxonomy_override_enabled": taxonomy_override_enabled,
         }
         job_uid = self._create_job(request_payload)
         return await self._run_job(
@@ -564,6 +580,11 @@ class IngestionPipeline:
 
         continue_depth = max(0, int(request_payload.get("continue_depth") or 0))
         selected_urls = [u for u in (request_payload.get("selected_urls") or []) if u]
+        selected_link_texts = {
+            str(url).strip(): str(text).strip()
+            for url, text in dict(request_payload.get("selected_link_texts") or {}).items()
+            if str(url).strip() and str(text).strip()
+        }
         html_content = request_payload.get("html_content")
         page_type_hint = str(request_payload.get("page_type_hint") or "auto")
 
@@ -597,6 +618,7 @@ class IngestionPipeline:
                     pages=pages,
                     depth=depth,
                     from_browser=from_browser,
+                    selected_link_texts=selected_link_texts,
                 )
             )
             for page in pages:
@@ -648,7 +670,8 @@ class IngestionPipeline:
                         "message": "fetch_raw: selecting detail links from index page",
                     },
                 )
-                detail_urls = await self._select_detail_urls(scraper, probe)
+                detail_urls, detail_link_texts = await self._select_detail_urls(scraper, probe)
+                selected_link_texts.update(detail_link_texts)
                 crawl_urls = self._dedupe_urls(detail_urls, visited_urls)
                 self._emit_event(
                     event_callback,
@@ -698,7 +721,8 @@ class IngestionPipeline:
                         "message": "fetch_raw: selecting detail links from entry index",
                     },
                 )
-                detail_urls = await self._select_detail_urls(scraper, seed_page)
+                detail_urls, detail_link_texts = await self._select_detail_urls(scraper, seed_page)
+                selected_link_texts.update(detail_link_texts)
                 crawl_urls = self._dedupe_urls(detail_urls, visited_urls)
                 self._emit_event(
                     event_callback,
@@ -802,6 +826,31 @@ class IngestionPipeline:
     ) -> Dict[str, Any]:
         raw_pages = context.get("raw_pages") or []
         cleaner = LLMCleanerAgent()
+        univ_slug = str(request_payload.get("univ_slug") or "")
+
+        taxonomy_enabled = self._coerce_bool(
+            request_payload.get("taxonomy_enabled"),
+            default=True,
+        )
+        taxonomy_low_threshold = self._coerce_float(
+            request_payload.get("taxonomy_low_threshold"),
+            default=0.8,
+        )
+        taxonomy_high_threshold = self._coerce_float(
+            request_payload.get("taxonomy_high_threshold"),
+            default=0.92,
+        )
+        taxonomy_high_threshold = max(taxonomy_high_threshold, taxonomy_low_threshold)
+        taxonomy_hint_top_k = self._coerce_int(
+            request_payload.get("taxonomy_hint_top_k"),
+            default=3,
+            minimum=1,
+            maximum=5,
+        )
+        taxonomy_override_enabled = self._coerce_bool(
+            request_payload.get("taxonomy_override_enabled"),
+            default=True,
+        )
 
         candidates: List[Dict[str, Any]] = []
         extract_errors: List[Dict[str, str]] = []
@@ -819,15 +868,54 @@ class IngestionPipeline:
                 ),
                 html=row.get("html"),
             )
+            taxonomy_signals = self._build_taxonomy_signals(
+                page_url=page.url,
+                markdown=page.markdown,
+                selected_anchor_text=row.get("selected_anchor_text"),
+            )
+
+            taxonomy_matches: list[dict] = []
+            best_match: Optional[dict] = None
+            best_score = 0.0
+            name_hints: list[str] = []
+            if taxonomy_enabled and taxonomy_signals:
+                taxonomy_matches = self.taxonomy_service.match_signals(
+                    taxonomy_signals,
+                    top_k=taxonomy_hint_top_k,
+                )
+                if taxonomy_matches:
+                    best_match = dict(taxonomy_matches[0])
+                    best_score = float(best_match.get("score") or 0.0)
+                if best_score >= taxonomy_low_threshold:
+                    name_hints = self._build_name_hints(
+                        taxonomy_matches,
+                        top_k=taxonomy_hint_top_k,
+                    )
+
             program_data, error = extract_program_data_from_page(
                 page=page,
                 cleaner=cleaner,
-                univ_slug=str(request_payload.get("univ_slug") or ""),
+                univ_slug=univ_slug,
                 year=int(request_payload.get("year") or 0),
                 current_depth=int(row.get("crawl_depth") or 0),
                 from_browser=bool(row.get("from_browser")),
+                name_hints=name_hints,
             )
             if program_data:
+                self._attach_taxonomy_trace(
+                    program_data=program_data,
+                    univ_slug=univ_slug,
+                    taxonomy_enabled=taxonomy_enabled,
+                    taxonomy_signals=taxonomy_signals,
+                    taxonomy_matches=taxonomy_matches,
+                    best_match=best_match,
+                    best_score=best_score,
+                    taxonomy_low_threshold=taxonomy_low_threshold,
+                    taxonomy_high_threshold=taxonomy_high_threshold,
+                    taxonomy_hint_top_k=taxonomy_hint_top_k,
+                    taxonomy_override_enabled=taxonomy_override_enabled,
+                    hints_injected=bool(name_hints),
+                )
                 candidates.append(_json_safe(program_data))
             else:
                 extract_errors.append(
@@ -843,6 +931,72 @@ class IngestionPipeline:
             "extract_errors": extract_errors,
             "candidate_hash": _hash_payload(candidates),
         }
+
+    def _attach_taxonomy_trace(
+        self,
+        *,
+        program_data: Dict[str, Any],
+        univ_slug: str,
+        taxonomy_enabled: bool,
+        taxonomy_signals: list[str],
+        taxonomy_matches: list[dict],
+        best_match: Optional[dict],
+        best_score: float,
+        taxonomy_low_threshold: float,
+        taxonomy_high_threshold: float,
+        taxonomy_hint_top_k: int,
+        taxonomy_override_enabled: bool,
+        hints_injected: bool,
+    ) -> None:
+        metadata = program_data.setdefault("extra_metadata", {})
+        if not isinstance(metadata, dict):
+            return
+
+        taxonomy_trace: dict[str, Any] = {
+            "enabled": taxonomy_enabled,
+            "signals": taxonomy_signals,
+            "best_score": round(best_score, 4),
+            "low_threshold": taxonomy_low_threshold,
+            "high_threshold": taxonomy_high_threshold,
+            "hint_top_k": taxonomy_hint_top_k,
+            "hints_injected": hints_injected,
+            "override_enabled": taxonomy_override_enabled,
+            "override_applied": False,
+            "matches": [
+                {
+                    "name_en": str(item.get("name_en") or ""),
+                    "score": float(item.get("score") or 0.0),
+                    "normalized_name": item.get("normalized_name"),
+                }
+                for item in taxonomy_matches[:taxonomy_hint_top_k]
+            ],
+        }
+
+        should_override = (
+            taxonomy_enabled
+            and taxonomy_override_enabled
+            and bool(best_match)
+            and best_score >= taxonomy_high_threshold
+        )
+        if should_override and best_match:
+            canonical_name = str(best_match.get("name_en") or "").strip()
+            current_name = str(program_data.get("name_en") or "").strip()
+            if canonical_name and (
+                is_noise_program_name(current_name)
+                or normalize_taxonomy_name(current_name)
+                != normalize_taxonomy_name(canonical_name)
+            ):
+                program_data["name_en"] = canonical_name
+                if univ_slug:
+                    program_data["program_group_code"] = generate_program_group_code(
+                        univ_slug,
+                        canonical_name,
+                    )
+                taxonomy_trace["override_applied"] = True
+                taxonomy_trace["override_name"] = canonical_name
+                taxonomy_trace["override_reason"] = "high_confidence_match"
+
+        metadata["taxonomy_match"] = taxonomy_trace
 
     def _stage_validate_rules(
         self,
@@ -932,17 +1086,89 @@ class IngestionPipeline:
             ),
         }
 
+    @staticmethod
+    def _coerce_bool(value: Any, default: bool) -> bool:
+        if value is None:
+            return default
+        if isinstance(value, bool):
+            return value
+        text = str(value).strip().lower()
+        if text in {"1", "true", "yes", "on"}:
+            return True
+        if text in {"0", "false", "no", "off"}:
+            return False
+        return default
+
+    @staticmethod
+    def _coerce_float(value: Any, default: float) -> float:
+        if value is None:
+            return float(default)
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return float(default)
+
+    @staticmethod
+    def _coerce_int(
+        value: Any,
+        default: int,
+        *,
+        minimum: int,
+        maximum: int,
+    ) -> int:
+        if value is None:
+            return default
+        try:
+            parsed = int(value)
+        except (TypeError, ValueError):
+            return default
+        return max(minimum, min(maximum, parsed))
+
+    @staticmethod
+    def _build_name_hints(matches: list[dict], top_k: int) -> list[str]:
+        hints: list[str] = []
+        for item in matches[: max(1, int(top_k))]:
+            name = str(item.get("name_en") or "").strip()
+            if not name:
+                continue
+            score = float(item.get("score") or 0.0)
+            hints.append(f"{name}|{score:.2f}")
+        return hints
+
+    @staticmethod
+    def _build_taxonomy_signals(
+        *,
+        page_url: str,
+        markdown: str,
+        selected_anchor_text: Any = None,
+    ) -> list[str]:
+        signals: list[str] = []
+
+        anchor_text = str(selected_anchor_text or "").strip()
+        if anchor_text:
+            signals.append(anchor_text)
+
+        url_signal = build_url_name_signal(page_url)
+        if url_signal and url_signal not in signals:
+            signals.append(url_signal)
+
+        heading_signal = extract_program_name(markdown)
+        if heading_signal and heading_signal not in signals:
+            signals.append(heading_signal)
+
+        return signals
+
     async def _select_detail_urls(
         self,
         scraper: AdmissionScraper,
         page: CrawlPageResult,
-    ) -> List[str]:
+    ) -> tuple[List[str], Dict[str, str]]:
         if not page.markdown:
-            return []
+            return [], {}
 
         link_pairs = extract_links_with_text(page.markdown, page.url)
         if not link_pairs:
-            return []
+            return [], {}
 
         detail_urls = await asyncio.to_thread(
             filter_links_by_llm,
@@ -961,7 +1187,12 @@ class IngestionPipeline:
                 continue
             seen.add(url)
             deduped.append(url)
-        return deduped
+        text_map = {
+            str(url).strip(): str(text).strip()
+            for url, text in link_pairs
+            if str(url).strip() and str(text).strip() and str(url).strip() in seen
+        }
+        return deduped, text_map
 
     async def _crawl_urls_with_failures(
         self,
@@ -1044,9 +1275,12 @@ class IngestionPipeline:
         *,
         depth: int,
         from_browser: bool,
+        selected_link_texts: Optional[Dict[str, str]] = None,
     ) -> List[Dict[str, Any]]:
+        selected_link_texts = selected_link_texts or {}
         out: List[Dict[str, Any]] = []
         for page in pages:
+            page_url = str(page.url or "").strip()
             out.append(
                 {
                     "url": page.url,
@@ -1057,6 +1291,7 @@ class IngestionPipeline:
                     "html": page.html,
                     "crawl_depth": depth,
                     "from_browser": from_browser,
+                    "selected_anchor_text": selected_link_texts.get(page_url),
                 }
             )
         return out

@@ -226,3 +226,24 @@ def test_extract_program_name_whitespace_only() -> None:
     """Test extraction with whitespace-only markdown."""
     result = extract_program_name("   \n\n   \n")
     assert result == ""
+
+
+def test_extract_program_name_prefers_hero_plain_title_over_later_curriculum_heading() -> None:
+    """Hero plain title should win when markdown conversion drops heading markers."""
+    markdown = """
+## Breadcrumb
+  1. [Postgraduate Programmes](https://www.polyu.edu.hk/study/pg)
+  2. [Programmes](https://www.polyu.edu.hk/study/ug/programmes)
+
+Master of Design
+Design
+設計學碩士學位
+
+##  What's New
+[More News __](https://www.polyu.edu.hk/study/ug/news)
+
+Curriculum
+## **Curriculum of the Master of Design Scheme**
+"""
+    result = extract_program_name(markdown)
+    assert result == "Master of Design"

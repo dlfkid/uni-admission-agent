@@ -11,6 +11,7 @@ Build a trusted, self-updating database of university admission requirements.
 - Multi-provider LLM routing (Google Gemini, DeepSeek, OpenAI, VolcEngine)
 - **Phase 2 staged ingestion pipeline** with persisted job/task state and resume-from-stage
 - **Phase 3 golden-sample quality system** with offline scoring + CI regression gate
+- **Taxonomy-guided program-name resolution** (signal matching + conditional hint injection + high-confidence override)
 - Stealth browsing with anti-detection mechanisms
 - **Cookie consent auto-dismissal** with JS injection to prevent navigation hijacking
 - **Resilient Pydantic validation** with field validators for LLM response edge cases
@@ -65,6 +66,7 @@ The system exposes a REST API and MCP server for external control.
     -   Manages crawler configuration
     -   **Database Preview**: Browse stored programs with filtering by university/year
     -   **Two-phase crawl**: Analyze index pages → select links → crawl detail pages
+    -   **Per-task taxonomy controls**: enable/disable matching, low/high thresholds, top-k hints, override toggle
     -   **Export to Excel**: Download program data via REST API
 
 ### 3.3 Data Flow
@@ -102,7 +104,26 @@ The project includes a seed quality framework for offline regression checks:
 - scoring runner: `scripts/score_golden_samples.py`
 - CI gate: `.github/workflows/ci.yml` fails when quality threshold is not met
 
-Current seed set includes 3 benchmark universities (UCL, Manchester, Leeds).
+Current seed set includes 4 benchmark universities (UCL, Manchester, Leeds, PolyU).
+
+### 3.6 Taxonomy Runtime Matching
+
+At server startup, taxonomy seed sync is attempted from:
+- `golden_samples/program_names/cleaned_programs_names.json`
+
+During `extract_structured`, detail-page name resolution now uses:
+- signal priority: selected anchor text → URL tokens → heading fallback
+- low-threshold gating for cleaner prompt hint injection
+- high-threshold gating for optional canonical-name override
+- trace output in `extra_metadata.taxonomy_match`
+
+Per-request overrides are supported on `/crawl`:
+- `taxonomy_enabled`
+- `taxonomy_low_threshold`
+- `taxonomy_high_threshold`
+- `taxonomy_hint_top_k`
+- `taxonomy_override_enabled`
+- `selected_link_texts`
 
 ---
 
@@ -179,6 +200,7 @@ uv run src/cmd/cli.py ingestion-resume --job <job_uid> --stage validate_rules
 # Phase 3 operations
 uv run src/cmd/cli.py golden-collect --overwrite
 uv run src/cmd/cli.py quality-score --threshold 0.60
+uv run src/cmd/cli.py taxonomy-export --output golden_samples/program_names/cleaned_programs_names.json --include-learned --min-confidence 0.90
 ```
 
 ---
@@ -233,7 +255,7 @@ DATABASE_URL=postgresql+psycopg2://user:pass@localhost:5432/uni_admission
 
 - **Phase 1**: complete (data layer versioning + evidence chain)
 - **Phase 2**: complete (staged execution pipeline + resume + continue-depth unified path)
-- **Phase 3 (seed)**: complete (golden samples + scoring + CI quality gate)
+- **Phase 3**: complete for seed quality gates + taxonomy-guided name accuracy + PolyU benchmark coverage
 
 ### 8.1 Custom LLM Provider Integration (2026-02-28)
 

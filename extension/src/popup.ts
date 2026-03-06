@@ -56,6 +56,12 @@ import {
     statusDiv,
     stopBtn,
     taskIdDisplay,
+    taxonomyEnabledCheckbox,
+    taxonomyHighThresholdInput,
+    taxonomyHintTopKInput,
+    taxonomyLowThresholdInput,
+    taxonomyOverrideEnabledCheckbox,
+    taxonomySettings,
     toggleLogsBtn,
     tokenDisplay,
     urlDisplay,
@@ -66,7 +72,7 @@ import { initExportFlow } from "./popup/exportFlow";
 import { initLinkSelectionFlow } from "./popup/linkSelectionFlow";
 import { initMonitorFlow } from "./popup/monitorFlow";
 import { initPreviewFlow } from "./popup/previewFlow";
-import type { AnalyzeResult, TaskInfo, UniversityOption } from "./popup/types";
+import type { AnalyzeResult, CrawlPayload, TaskInfo, UniversityOption } from "./popup/types";
 
 const API_BASE = "http://localhost:8910";
 
@@ -83,6 +89,11 @@ const PAGE_TYPE_KEY = "crawl_page_type";
 const EXPORT_MD_KEY = "crawl_export_md";
 const EXPORT_PATH_KEY = "crawl_export_path";
 const UNIV_SLUG_KEY = "crawl_univ_slug";
+const TAXONOMY_ENABLED_KEY = "crawl_taxonomy_enabled";
+const TAXONOMY_LOW_THRESHOLD_KEY = "crawl_taxonomy_low_threshold";
+const TAXONOMY_HIGH_THRESHOLD_KEY = "crawl_taxonomy_high_threshold";
+const TAXONOMY_HINT_TOP_K_KEY = "crawl_taxonomy_hint_top_k";
+const TAXONOMY_OVERRIDE_ENABLED_KEY = "crawl_taxonomy_override_enabled";
 
 // Slug autocomplete state
 let cachedUniversities: UniversityOption[] = [];
@@ -96,6 +107,11 @@ function setFormEnabled(enabled: boolean) {
     pageTypeSelect.disabled = !enabled;
     exportMdCheckbox.disabled = !enabled;
     exportPathInput.disabled = !enabled;
+    taxonomyEnabledCheckbox.disabled = !enabled;
+    taxonomyLowThresholdInput.disabled = !enabled;
+    taxonomyHighThresholdInput.disabled = !enabled;
+    taxonomyHintTopKInput.disabled = !enabled;
+    taxonomyOverrideEnabledCheckbox.disabled = !enabled;
     sendBtn.disabled = !enabled;
     // We don't disable config btn as user might want to check settings?
     // But changing settings while running is risky. Let's leave config enabled for now.
@@ -172,6 +188,47 @@ function appendPreflightLog(message: string): void {
     preflightLogConsole.scrollTop = preflightLogConsole.scrollHeight;
 }
 
+function updateTaxonomySettingsVisibility(): void {
+    taxonomySettings.style.display = taxonomyEnabledCheckbox.checked ? "block" : "none";
+}
+
+function getTaxonomyOptions(): {
+    enabled: boolean;
+    lowThreshold: number;
+    highThreshold: number;
+    hintTopK: number;
+    overrideEnabled: boolean;
+} {
+    const enabled = taxonomyEnabledCheckbox.checked;
+    let lowThreshold = parseFloat(taxonomyLowThresholdInput.value);
+    let highThreshold = parseFloat(taxonomyHighThresholdInput.value);
+    let hintTopK = parseInt(taxonomyHintTopKInput.value, 10);
+
+    if (Number.isNaN(lowThreshold)) lowThreshold = 0.8;
+    if (Number.isNaN(highThreshold)) highThreshold = 0.92;
+    if (Number.isNaN(hintTopK)) hintTopK = 3;
+
+    lowThreshold = Math.min(1, Math.max(0, lowThreshold));
+    highThreshold = Math.min(1, Math.max(0, highThreshold));
+    hintTopK = Math.min(5, Math.max(1, hintTopK));
+
+    if (lowThreshold > highThreshold) {
+        throw new Error("Taxonomy low threshold must be less than or equal to high threshold.");
+    }
+
+    taxonomyLowThresholdInput.value = lowThreshold.toFixed(2);
+    taxonomyHighThresholdInput.value = highThreshold.toFixed(2);
+    taxonomyHintTopKInput.value = String(hintTopK);
+
+    return {
+        enabled,
+        lowThreshold,
+        highThreshold,
+        hintTopK,
+        overrideEnabled: taxonomyOverrideEnabledCheckbox.checked,
+    };
+}
+
 function switchView(view: "input" | "link-selection" | "monitor") {
     inputSection.classList.add("hidden");
     linkSelectionSection.classList.add("hidden");
@@ -220,6 +277,23 @@ function restoreCachedPreferences() {
     if (cachedUnivSlug) {
         slugInput.value = cachedUnivSlug;
     }
+
+    const cachedTaxonomyEnabled = localStorage.getItem(TAXONOMY_ENABLED_KEY);
+    taxonomyEnabledCheckbox.checked = cachedTaxonomyEnabled !== "false";
+
+    const cachedTaxonomyLow = localStorage.getItem(TAXONOMY_LOW_THRESHOLD_KEY);
+    taxonomyLowThresholdInput.value = cachedTaxonomyLow || "0.80";
+
+    const cachedTaxonomyHigh = localStorage.getItem(TAXONOMY_HIGH_THRESHOLD_KEY);
+    taxonomyHighThresholdInput.value = cachedTaxonomyHigh || "0.92";
+
+    const cachedTaxonomyTopK = localStorage.getItem(TAXONOMY_HINT_TOP_K_KEY);
+    taxonomyHintTopKInput.value = cachedTaxonomyTopK || "3";
+
+    const cachedTaxonomyOverride = localStorage.getItem(TAXONOMY_OVERRIDE_ENABLED_KEY);
+    taxonomyOverrideEnabledCheckbox.checked = cachedTaxonomyOverride !== "false";
+
+    updateTaxonomySettingsVisibility();
 }
 
 // ---------------------------------------------------------------------------
@@ -248,6 +322,30 @@ pageTypeSelect.addEventListener("change", () => {
 exportPathInput.addEventListener("blur", () => {
     // Save to cache when user leaves the input
     localStorage.setItem(EXPORT_PATH_KEY, exportPathInput.value.trim());
+});
+
+taxonomyEnabledCheckbox.addEventListener("change", () => {
+    localStorage.setItem(TAXONOMY_ENABLED_KEY, String(taxonomyEnabledCheckbox.checked));
+    updateTaxonomySettingsVisibility();
+});
+
+taxonomyLowThresholdInput.addEventListener("blur", () => {
+    localStorage.setItem(TAXONOMY_LOW_THRESHOLD_KEY, taxonomyLowThresholdInput.value.trim());
+});
+
+taxonomyHighThresholdInput.addEventListener("blur", () => {
+    localStorage.setItem(TAXONOMY_HIGH_THRESHOLD_KEY, taxonomyHighThresholdInput.value.trim());
+});
+
+taxonomyHintTopKInput.addEventListener("blur", () => {
+    localStorage.setItem(TAXONOMY_HINT_TOP_K_KEY, taxonomyHintTopKInput.value.trim());
+});
+
+taxonomyOverrideEnabledCheckbox.addEventListener("change", () => {
+    localStorage.setItem(
+        TAXONOMY_OVERRIDE_ENABLED_KEY,
+        String(taxonomyOverrideEnabledCheckbox.checked),
+    );
 });
 
 /**
@@ -561,6 +659,14 @@ sendBtn.addEventListener("click", async () => {
         return;
     }
 
+    try {
+        getTaxonomyOptions();
+    } catch (err) {
+        appendPreflightLog(`Input validation failed: ${String(err)}`);
+        showStatus(String(err), "error");
+        return;
+    }
+
     sendBtn.disabled = true;
     sendBtn.textContent = "Reading page…";
     appendPreflightLog("Reading current tab HTML content…");
@@ -637,13 +743,20 @@ async function submitCrawl(opts: {
     exportPath: string;
     htmlContent?: string;
     selectedUrls?: string[];
+    selectedLinkTexts?: Record<string, string>;
 }) {
-    const payload: any = {
+    const taxonomyOptions = getTaxonomyOptions();
+    const payload: CrawlPayload = {
         url: opts.url,
         univ_slug: opts.slug,
         year: opts.year,
         continue_depth: 0,
         page_type_hint: opts.pageType,
+        taxonomy_enabled: taxonomyOptions.enabled,
+        taxonomy_low_threshold: taxonomyOptions.lowThreshold,
+        taxonomy_high_threshold: taxonomyOptions.highThreshold,
+        taxonomy_hint_top_k: taxonomyOptions.hintTopK,
+        taxonomy_override_enabled: taxonomyOptions.overrideEnabled,
     };
 
     if (opts.htmlContent) {
@@ -651,6 +764,9 @@ async function submitCrawl(opts: {
     }
     if (opts.selectedUrls) {
         payload.selected_urls = opts.selectedUrls;
+    }
+    if (opts.selectedLinkTexts) {
+        payload.selected_link_texts = opts.selectedLinkTexts;
     }
     if (opts.exportMd && opts.exportPath) {
         payload.export_md = true;

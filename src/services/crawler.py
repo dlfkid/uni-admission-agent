@@ -134,6 +134,12 @@ async def crawl_url(
     export_path: Optional[str] = None,
     html_content: Optional[str] = None,
     selected_urls: Optional[list[str]] = None,
+    selected_link_texts: Optional[dict[str, str]] = None,
+    taxonomy_enabled: Optional[bool] = None,
+    taxonomy_low_threshold: Optional[float] = None,
+    taxonomy_high_threshold: Optional[float] = None,
+    taxonomy_hint_top_k: Optional[int] = None,
+    taxonomy_override_enabled: Optional[bool] = None,
     progress_callback: Optional[Callable[[str, dict[str, Any]], None]] = None,
 ) -> CrawlResult:
     """Crawl a university admission page and import structured data.
@@ -155,6 +161,12 @@ async def crawl_url(
         export_path: Path to export markdown files.
         html_content: Pre-rendered HTML from browser (bypasses crawling).
         selected_urls: User-selected detail URLs (skips index analysis).
+        selected_link_texts: Optional mapping of selected URL → anchor text.
+        taxonomy_enabled: Optional per-request taxonomy toggle.
+        taxonomy_low_threshold: Optional hint injection score threshold.
+        taxonomy_high_threshold: Optional override score threshold.
+        taxonomy_hint_top_k: Optional cap for injected taxonomy hints.
+        taxonomy_override_enabled: Optional per-request name override toggle.
 
     Returns:
         CrawlResult with the number of programs imported.
@@ -170,6 +182,12 @@ async def crawl_url(
         export_path=export_path,
         html_content=html_content,
         selected_urls=selected_urls,
+        selected_link_texts=selected_link_texts,
+        taxonomy_enabled=taxonomy_enabled,
+        taxonomy_low_threshold=taxonomy_low_threshold,
+        taxonomy_high_threshold=taxonomy_high_threshold,
+        taxonomy_hint_top_k=taxonomy_hint_top_k,
+        taxonomy_override_enabled=taxonomy_override_enabled,
         event_callback=progress_callback,
     )
     imported = int(result.get("imported_count") or 0)

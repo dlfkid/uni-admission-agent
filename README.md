@@ -39,11 +39,12 @@ Entry Points                    Services Layer              Infrastructure
 - [Phase 3: Quality System Seed (golden samples + scoring + CI gate)](docs/changelog_phase3_quality_system.md)
 - [Consolidated Progress Log](change_log.md)
 
-## ✅ Current Optimization Status (2026-03-03)
+## ✅ Current Optimization Status (2026-03-06)
 - Phase 1 complete: versioned requirement data model and evidence chain are in place.
 - Phase 2 complete: crawl flow now runs through staged ingestion pipeline by default, including `--continue > 0` paths.
 - Phase 3 seed complete: golden sample collection, offline quality scoring, and CI regression gate are enabled.
-- Latest seed benchmark: `golden_samples/reports/quality_report.json` with global pass at threshold `0.60`.
+- Taxonomy-guided name accuracy is enabled for crawl requests (hint injection + optional high-confidence override).
+- Latest benchmark includes 4 cases (UCL/Manchester/Leeds/PolyU) and passes global threshold `0.60`.
 
 ## Production Usage (No Code Required)
 
@@ -200,6 +201,9 @@ The agent needs a database connection.
 # Run Phase 3 quality scoring (fails on regression threshold)
 ./adm-agent quality-score --threshold 0.60
 
+# Export current taxonomy snapshot (optionally include learned names)
+./adm-agent taxonomy-export --output golden_samples/program_names/cleaned_programs_names.json --include-learned --min-confidence 0.90
+
 # Show current version
 ./adm-agent version
 
@@ -259,6 +263,9 @@ The agent needs a database connection.
 
 # Run Phase 3 quality scoring (fails on regression threshold)
 .\adm-agent.exe quality-score --threshold 0.60
+
+# Export current taxonomy snapshot (optionally include learned names)
+.\adm-agent.exe taxonomy-export --output golden_samples/program_names/cleaned_programs_names.json --include-learned --min-confidence 0.90
 
 # Show current version
 .\adm-agent.exe version
@@ -384,7 +391,16 @@ With the server running (`uv run src/cmd/cli.py serve`):
 # Submit a crawl job (returns task_id)
 curl -X POST http://localhost:8910/crawl \
   -H "Content-Type: application/json" \
-  -d '{"url": "https://admissions.hku.hk/programmes", "univ_slug": "hku", "year": 2026}'
+  -d '{
+    "url": "https://admissions.hku.hk/programmes",
+    "univ_slug": "hku",
+    "year": 2026,
+    "taxonomy_enabled": true,
+    "taxonomy_low_threshold": 0.8,
+    "taxonomy_high_threshold": 0.92,
+    "taxonomy_hint_top_k": 3,
+    "taxonomy_override_enabled": true
+  }'
 
 # Analyze page for link selection (two-phase crawl)
 curl -X POST http://localhost:8910/analyze \
@@ -441,6 +457,7 @@ The extension provides a UI to interact with the agent.
 - Click the extension icon in your browser toolbar.
 - Configure settings (database URL, LLM keys) via the gear icon.
 - Enter a university slug (e.g., `hku`) and year, then start crawling.
+- Adjust per-task taxonomy overrides in popup (enable, low/high thresholds, top-k hints, override toggle).
 - **Preview Database** (👁 icon): Browse stored programs with filters by university and year.
 - **Export to Excel** (📥 icon): Download program data as XLSX files.
 
