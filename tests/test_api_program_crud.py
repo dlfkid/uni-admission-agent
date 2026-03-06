@@ -104,6 +104,10 @@ def test_delete_program_removes_single_snapshot() -> None:
     fake_db = _FakeDbManager()
     with (
         patch("src.api.server.DatabaseManager", return_value=fake_db),
+        patch(
+            "src.api.server.delete_program_snapshot",
+            side_effect=fake_db.delete_program_snapshot,
+        ),
         patch("src.api.server.bootstrap_subject_taxonomy", return_value=None),
         TestClient(app) as client,
     ):
@@ -118,6 +122,10 @@ def test_patch_program_updates_only_changed_fields() -> None:
     fake_db = _FakeDbManager()
     with (
         patch("src.api.server.DatabaseManager", return_value=fake_db),
+        patch(
+            "src.api.server.patch_program_snapshot",
+            side_effect=fake_db.patch_program_snapshot,
+        ),
         patch("src.api.server.bootstrap_subject_taxonomy", return_value=None),
         TestClient(app) as client,
     ):

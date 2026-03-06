@@ -7,7 +7,7 @@ in ``src.services.crawler``.
 
 from typing import Optional, List, Dict, Any
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, ConfigDict, model_validator
 
 
 # ---------------------------------------------------------------------------
@@ -101,6 +101,30 @@ class QueryRequest(BaseModel):
 
     univ_slug: str = Field(description="University slug")
     year: Optional[int] = Field(default=None, description="Academic year filter")
+
+
+class ProgramPatchRequest(BaseModel):
+    """Body for ``PATCH /programs/{program_id}``."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    # Editable fields
+    name_en: Optional[str] = Field(default=None)
+    name_zh: Optional[str] = Field(default=None)
+    faculty: Optional[str] = Field(default=None)
+    program_group_code: Optional[str] = Field(default=None)
+    tuition_amount: Optional[float] = Field(default=None)
+    currency: Optional[str] = Field(default=None)
+    study_options: Optional[List[Dict[str, Any]]] = Field(default=None)
+    deadlines: Optional[List[Dict[str, Any]]] = Field(default=None)
+    requirements: Optional[List[Dict[str, Any]]] = Field(default=None)
+    source_url: Optional[str] = Field(default=None)
+
+    # Blocked fields (accepted only to return explicit 400 detail)
+    id: Optional[int] = Field(default=None)
+    university_id: Optional[int] = Field(default=None)
+    program_catalog_id: Optional[int] = Field(default=None)
+    academic_year: Optional[int] = Field(default=None)
 
 
 class ConfigRequest(BaseModel):
@@ -240,6 +264,14 @@ class ProgramResponse(BaseModel):
     requirements: list = Field(default_factory=list)
     requirement_version: Optional[Dict[str, Any]] = None
     source_url: Optional[str] = None
+
+
+class DeleteProgramResponse(BaseModel):
+    """Response for ``DELETE /programs/{program_id}``."""
+
+    program_id: int
+    deleted: bool
+    message: str
 
 
 class ConfigResponse(BaseModel):
