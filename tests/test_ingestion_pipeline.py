@@ -189,3 +189,78 @@ async def test_fetch_raw_uses_scout_when_continue_depth_enabled(monkeypatch) -> 
     assert len(result["scouted_links"]) == 1
     depths = [row["crawl_depth"] for row in result["raw_pages"]]
     assert depths == [0, 1]
+
+
+def test_extract_structured_skips_antibot_pages_in_index_mode(monkeypatch) -> None:
+    pipeline = IngestionPipeline(db_manager=MagicMock())
+    extract_mock = MagicMock(return_value=({"name_en": "ShouldNotBeUsed"}, None))
+    monkeypatch.setattr(
+        "src.services.ingestion_pipeline.extract_program_data_from_page",
+        extract_mock,
+    )
+
+    request_payload = {
+        "univ_slug": "polyu",
+        "year": 2026,
+        "page_type_hint": "index",
+        "selected_urls": ["https://www.polyu.edu.hk/study/pg/tpg/2026/62027-dfm-dpm"],
+    }
+    context = {
+        "raw_pages": [
+            {
+                "url": "https://www.polyu.edu.hk/study/pg/tpg/2026/62027-dfm-dpm",
+                "markdown": "\n",
+                "char_count": 1,
+                "links": [],
+                "status_code": 200,
+                "html": "<html>" + ("x" * 15000) + "</html>",
+                "crawl_depth": 0,
+                "from_browser": False,
+                "selected_anchor_text": "Doctor of Financial Management",
+            }
+        ]
+    }
+
+    result = pipeline._stage_extract_structured(request_payload, context)
+
+    extract_mock.assert_not_called()
+    assert result["extracted_count"] == 0
+    assert len(result["extract_errors"]) == 1
+    assert "Anti-crawl suspected" in result["extract_errors"][0]["error"]
+
+
+def test_extract_structured_allows_browser_html_in_detail_mode(monkeypatch) -> None:
+    pipeline = IngestionPipeline(db_manager=MagicMock())
+    extract_mock = MagicMock(return_value=({"name_en": "Doctor of Financial Management"}, None))
+    monkeypatch.setattr(
+        "src.services.ingestion_pipeline.extract_program_data_from_page",
+        extract_mock,
+    )
+
+    request_payload = {
+        "univ_slug": "polyu",
+        "year": 2026,
+        "page_type_hint": "detail",
+        "selected_urls": [],
+    }
+    context = {
+        "raw_pages": [
+            {
+                "url": "https://www.polyu.edu.hk/study/pg/tpg/2026/62027-dfm-dpm",
+                "markdown": "\n",
+                "char_count": 1,
+                "links": [],
+                "status_code": 200,
+                "html": "<html>" + ("x" * 15000) + "</html>",
+                "crawl_depth": 0,
+                "from_browser": True,
+                "selected_anchor_text": None,
+            }
+        ]
+    }
+
+    result = pipeline._stage_extract_structured(request_payload, context)
+
+    extract_mock.assert_called_once()
+    assert result["extracted_count"] == 1
+    assert len(result["extract_errors"]) == 0
