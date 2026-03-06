@@ -254,13 +254,48 @@
                 <button id="close-preview-edit-btn" class="close-btn">&times;</button>
             </div>
             <div class="config-body">
+                <div class="program-edit-grid">
+                    <div class="field">
+                        <label for="preview-edit-name-en">Program Name (EN)</label>
+                        <input id="preview-edit-name-en" type="text" />
+                    </div>
+                    <div class="field">
+                        <label for="preview-edit-name-zh">Program Name (ZH)</label>
+                        <input id="preview-edit-name-zh" type="text" />
+                    </div>
+                    <div class="field">
+                        <label for="preview-edit-faculty">Faculty</label>
+                        <input id="preview-edit-faculty" type="text" />
+                    </div>
+                    <div class="field">
+                        <label for="preview-edit-group-code">Group Code</label>
+                        <input id="preview-edit-group-code" type="text" />
+                    </div>
+                    <div class="field">
+                        <label for="preview-edit-tuition">Tuition Amount</label>
+                        <input id="preview-edit-tuition" type="number" step="0.01" />
+                    </div>
+                    <div class="field">
+                        <label for="preview-edit-currency">Currency</label>
+                        <input id="preview-edit-currency" type="text" placeholder="HKD" />
+                    </div>
+                    <div class="field">
+                        <label for="preview-edit-source-url">Source URL</label>
+                        <input id="preview-edit-source-url" type="text" />
+                    </div>
+                </div>
+
                 <div class="field">
-                    <label for="preview-edit-name-en">Program Name (EN)</label>
-                    <input id="preview-edit-name-en" type="text" />
+                    <label for="preview-edit-study-options">Study Options (JSON Array)</label>
+                    <textarea id="preview-edit-study-options" rows="4"></textarea>
                 </div>
                 <div class="field">
-                    <label for="preview-edit-faculty">Faculty</label>
-                    <input id="preview-edit-faculty" type="text" />
+                    <label for="preview-edit-deadlines">Deadlines (JSON Array)</label>
+                    <textarea id="preview-edit-deadlines" rows="4"></textarea>
+                </div>
+                <div class="field">
+                    <label for="preview-edit-requirements">Requirements (JSON Array)</label>
+                    <textarea id="preview-edit-requirements" rows="6"></textarea>
                 </div>
             </div>
             <div class="modal-actions">

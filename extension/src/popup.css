@@ -792,6 +792,22 @@ button:disabled {
   font-size: 13px;
 }
 
+.program-edit-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+#preview-edit-modal .modal-content {
+  max-width: 900px;
+  width: 92%;
+}
+
+#preview-edit-modal textarea {
+  min-height: 88px;
+  resize: vertical;
+}
+
 /* Program Card */
 .program-card {
   background: var(--surface);

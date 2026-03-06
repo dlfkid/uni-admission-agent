@@ -16,6 +16,20 @@ interface PreviewFlowDeps {
     previewSummary: HTMLDivElement;
     previewCountBadge: HTMLSpanElement;
     previewList: HTMLDivElement;
+    previewEditModal: HTMLDivElement;
+    closePreviewEditBtn: HTMLButtonElement;
+    previewEditCancelBtn: HTMLButtonElement;
+    previewEditSaveBtn: HTMLButtonElement;
+    previewEditNameEnInput: HTMLInputElement;
+    previewEditNameZhInput: HTMLInputElement;
+    previewEditFacultyInput: HTMLInputElement;
+    previewEditGroupCodeInput: HTMLInputElement;
+    previewEditTuitionInput: HTMLInputElement;
+    previewEditCurrencyInput: HTMLInputElement;
+    previewEditSourceUrlInput: HTMLInputElement;
+    previewEditStudyOptionsInput: HTMLTextAreaElement;
+    previewEditDeadlinesInput: HTMLTextAreaElement;
+    previewEditRequirementsInput: HTMLTextAreaElement;
 }
 
 function stableStringify(value: unknown): string {
@@ -35,12 +49,28 @@ function valuesEqual(left: unknown, right: unknown): boolean {
     return stableStringify(left) === stableStringify(right);
 }
 
+function deepCloneProgram(record: ProgramRecord): ProgramRecord {
+    return JSON.parse(JSON.stringify(record)) as ProgramRecord;
+}
+
+function parseJsonArray(raw: string, fieldName: string): unknown[] {
+    const text = raw.trim();
+    if (!text) {
+        return [];
+    }
+    const parsed = JSON.parse(text);
+    if (!Array.isArray(parsed)) {
+        throw new Error(`${fieldName} must be a JSON array.`);
+    }
+    return parsed;
+}
+
 export function buildProgramPatch(
     original: ProgramRecord,
     edited: ProgramRecord,
 ): ProgramPatchPayload {
     const patch: ProgramPatchPayload = {};
-    const editableFields: (keyof ProgramPatchPayload)[] = [
+    const editableFields = [
         "name_en",
         "name_zh",
         "faculty",
@@ -51,11 +81,13 @@ export function buildProgramPatch(
         "deadlines",
         "requirements",
         "source_url",
-    ];
+    ] as const;
 
     for (const field of editableFields) {
-        if (!valuesEqual(original[field], edited[field])) {
-            patch[field] = edited[field];
+        const originalValue = original[field];
+        const editedValue = edited[field];
+        if (!valuesEqual(originalValue, editedValue)) {
+            (patch as Record<string, unknown>)[field] = editedValue as unknown;
         }
     }
     return patch;
@@ -78,9 +110,25 @@ export function initPreviewFlow(deps: PreviewFlowDeps): void {
         previewSummary,
         previewCountBadge,
         previewList,
+        previewEditModal,
+        closePreviewEditBtn,
+        previewEditCancelBtn,
+        previewEditSaveBtn,
+        previewEditNameEnInput,
+        previewEditNameZhInput,
+        previewEditFacultyInput,
+        previewEditGroupCodeInput,
+        previewEditTuitionInput,
+        previewEditCurrencyInput,
+        previewEditSourceUrlInput,
+        previewEditStudyOptionsInput,
+        previewEditDeadlinesInput,
+        previewEditRequirementsInput,
     } = deps;
 
     let activePreviewDropdownIndex = -1;
+    let previewPrograms: ProgramRecord[] = [];
+    let editingOriginal: ProgramRecord | null = null;
 
     function highlightPreviewItem(items: NodeListOf<Element>): void {
         items.forEach((item, idx) => {
@@ -180,6 +228,142 @@ export function initPreviewFlow(deps: PreviewFlowDeps): void {
         });
     }
 
+    function closeEditModal(): void {
+        previewEditModal.classList.add("hidden");
+        editingOriginal = null;
+    }
+
+    function openEditModal(program: ProgramRecord): void {
+        editingOriginal = deepCloneProgram(program);
+        previewEditNameEnInput.value = editingOriginal.name_en || "";
+        previewEditNameZhInput.value = editingOriginal.name_zh || "";
+        previewEditFacultyInput.value = editingOriginal.faculty || "";
+        previewEditGroupCodeInput.value = editingOriginal.program_group_code || "";
+        previewEditTuitionInput.value = editingOriginal.tuition_amount != null
+            ? String(editingOriginal.tuition_amount)
+            : "";
+        previewEditCurrencyInput.value = editingOriginal.currency || "";
+        previewEditSourceUrlInput.value = editingOriginal.source_url || "";
+        previewEditStudyOptionsInput.value = JSON.stringify(editingOriginal.study_options || [], null, 2);
+        previewEditDeadlinesInput.value = JSON.stringify(editingOriginal.deadlines || [], null, 2);
+        previewEditRequirementsInput.value = JSON.stringify(editingOriginal.requirements || [], null, 2);
+        previewEditModal.classList.remove("hidden");
+    }
+
+    function buildEditedProgramFromForm(original: ProgramRecord): ProgramRecord {
+        const edited = deepCloneProgram(original);
+
+        edited.name_en = previewEditNameEnInput.value.trim();
+        edited.name_zh = previewEditNameZhInput.value.trim() || null;
+        edited.faculty = previewEditFacultyInput.value.trim() || null;
+        edited.program_group_code = previewEditGroupCodeInput.value.trim() || null;
+
+        const tuitionText = previewEditTuitionInput.value.trim();
+        if (!tuitionText) {
+            edited.tuition_amount = null;
+        } else {
+            const parsed = Number(tuitionText);
+            if (Number.isNaN(parsed)) {
+                throw new Error("Tuition amount must be a number.");
+            }
+            edited.tuition_amount = parsed;
+        }
+
+        edited.currency = previewEditCurrencyInput.value.trim().toUpperCase() || null;
+        edited.source_url = previewEditSourceUrlInput.value.trim() || null;
+        edited.study_options = parseJsonArray(
+            previewEditStudyOptionsInput.value,
+            "study_options",
+        ) as ProgramRecord["study_options"];
+        edited.deadlines = parseJsonArray(
+            previewEditDeadlinesInput.value,
+            "deadlines",
+        ) as ProgramRecord["deadlines"];
+        edited.requirements = parseJsonArray(
+            previewEditRequirementsInput.value,
+            "requirements",
+        ) as NonNullable<ProgramRecord["requirements"]>;
+
+        return edited;
+    }
+
+    async function submitProgramEdit(): Promise<void> {
+        if (!editingOriginal || editingOriginal.id == null) {
+            showStatus("Program id is missing; cannot update.", "error");
+            return;
+        }
+
+        let edited: ProgramRecord;
+        try {
+            edited = buildEditedProgramFromForm(editingOriginal);
+        } catch (err) {
+            showStatus(String(err), "error");
+            return;
+        }
+
+        const patchPayload = buildProgramPatch(editingOriginal, edited);
+        if (Object.keys(patchPayload).length === 0) {
+            showStatus("No changes to save.", "info");
+            closeEditModal();
+            return;
+        }
+
+        previewEditSaveBtn.disabled = true;
+        previewEditSaveBtn.textContent = "Saving…";
+        try {
+            const response = await fetch(`${apiBase}/programs/${editingOriginal.id}`, {
+                method: "PATCH",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(patchPayload),
+            });
+            if (!response.ok) {
+                const err = await response.json().catch(() => ({ detail: `HTTP ${response.status}` }));
+                throw new Error(err.detail || `Update failed: ${response.status}`);
+            }
+            const updatedProgram: ProgramRecord = await response.json();
+            previewPrograms = previewPrograms.map((item) => (
+                item.id === updatedProgram.id ? updatedProgram : item
+            ));
+            renderPreviewResults(previewPrograms);
+            closeEditModal();
+            showStatus("Program updated.", "success");
+        } catch (err) {
+            showStatus(String(err), "error");
+        } finally {
+            previewEditSaveBtn.disabled = false;
+            previewEditSaveBtn.textContent = "Save";
+        }
+    }
+
+    async function requestDeleteProgram(program: ProgramRecord): Promise<void> {
+        if (program.id == null) {
+            showStatus("Program id is missing; cannot delete.", "error");
+            return;
+        }
+
+        const confirmed = window.confirm(
+            `Delete program snapshot "${program.name_en}" (${program.academic_year})?`,
+        );
+        if (!confirmed) {
+            return;
+        }
+
+        try {
+            const response = await fetch(`${apiBase}/programs/${program.id}`, {
+                method: "DELETE",
+            });
+            if (!response.ok) {
+                const err = await response.json().catch(() => ({ detail: `HTTP ${response.status}` }));
+                throw new Error(err.detail || `Delete failed: ${response.status}`);
+            }
+            previewPrograms = previewPrograms.filter((item) => item.id !== program.id);
+            renderPreviewResults(previewPrograms);
+            showStatus("Program snapshot deleted.", "success");
+        } catch (err) {
+            showStatus(String(err), "error");
+        }
+    }
+
     function renderPreviewResults(programs: ProgramRecord[]) {
         previewCountBadge.textContent = `${programs.length} program${programs.length !== 1 ? "s" : ""}`;
         previewSummary.classList.remove("hidden");
@@ -227,7 +411,7 @@ export function initPreviewFlow(deps: PreviewFlowDeps): void {
             deleteBtn.type = "button";
             deleteBtn.textContent = "Delete";
             deleteBtn.addEventListener("click", () => {
-                requestDeleteProgram(p);
+                void requestDeleteProgram(p);
             });
             actions.appendChild(deleteBtn);
 
@@ -255,9 +439,15 @@ export function initPreviewFlow(deps: PreviewFlowDeps): void {
                 for (const opt of p.study_options) {
                     const t = document.createElement("span");
                     t.className = "program-tag mode";
-                    const months = opt.duration_months;
-                    const dur = months >= 12 ? `${(months / 12).toFixed(months % 12 ? 1 : 0)}yr` : `${months}mo`;
-                    t.textContent = `${opt.mode} · ${dur}`;
+                    const months = Number(opt.duration_months || 0);
+                    if (months > 0) {
+                        const dur = months >= 12
+                            ? `${(months / 12).toFixed(months % 12 ? 1 : 0)}yr`
+                            : `${months}mo`;
+                        t.textContent = `${opt.mode} · ${dur}`;
+                    } else {
+                        t.textContent = opt.mode;
+                    }
                     meta.appendChild(t);
                 }
             }
@@ -395,8 +585,8 @@ export function initPreviewFlow(deps: PreviewFlowDeps): void {
                 const err = await res.json().catch(() => ({ detail: `HTTP ${res.status}` }));
                 throw new Error(err.detail || `Query failed: ${res.status}`);
             }
-            const programs: ProgramRecord[] = await res.json();
-            renderPreviewResults(programs);
+            previewPrograms = (await res.json()) as ProgramRecord[];
+            renderPreviewResults(previewPrograms);
         } catch (err) {
             previewList.innerHTML = `<div class="preview-empty" style="color:var(--error)">${String(err)}</div>`;
             previewSummary.classList.add("hidden");
@@ -415,20 +605,35 @@ export function initPreviewFlow(deps: PreviewFlowDeps): void {
 
     closePreviewBtn.addEventListener("click", () => {
         previewModal.classList.add("hidden");
+        closeEditModal();
     });
 
-    previewSearchBtn.addEventListener("click", () => loadPreview());
+    closePreviewEditBtn.addEventListener("click", () => {
+        closeEditModal();
+    });
+
+    previewEditCancelBtn.addEventListener("click", () => {
+        closeEditModal();
+    });
+
+    previewEditSaveBtn.addEventListener("click", () => {
+        void submitProgramEdit();
+    });
+
+    previewSearchBtn.addEventListener("click", () => {
+        void loadPreview();
+    });
 
     previewSlugInput.addEventListener("keydown", (e: KeyboardEvent) => {
         if (e.key === "Enter" && previewSlugDropdown.classList.contains("hidden")) {
             e.preventDefault();
-            loadPreview();
+            void loadPreview();
         }
     });
     previewYearInput.addEventListener("keydown", (e: KeyboardEvent) => {
         if (e.key === "Enter") {
             e.preventDefault();
-            loadPreview();
+            void loadPreview();
         }
     });
 
