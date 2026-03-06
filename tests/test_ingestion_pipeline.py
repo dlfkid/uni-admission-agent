@@ -194,7 +194,7 @@ async def test_fetch_raw_uses_scout_when_continue_depth_enabled(monkeypatch) -> 
 def test_extract_structured_skips_antibot_pages_in_index_mode(monkeypatch) -> None:
     monkeypatch.setattr(
         "src.services.ingestion_pipeline.LLMCleanerAgent",
-        lambda: MagicMock(),
+        MagicMock,
     )
     pipeline = IngestionPipeline(db_manager=MagicMock())
     extract_mock = MagicMock(return_value=({"name_en": "ShouldNotBeUsed"}, None))
@@ -236,7 +236,7 @@ def test_extract_structured_skips_antibot_pages_in_index_mode(monkeypatch) -> No
 def test_extract_structured_allows_browser_html_in_detail_mode(monkeypatch) -> None:
     monkeypatch.setattr(
         "src.services.ingestion_pipeline.LLMCleanerAgent",
-        lambda: MagicMock(),
+        MagicMock,
     )
     pipeline = IngestionPipeline(db_manager=MagicMock())
     extract_mock = MagicMock(return_value=({"name_en": "Doctor of Financial Management"}, None))
