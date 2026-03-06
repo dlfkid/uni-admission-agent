@@ -497,6 +497,58 @@ def query_programs(
         return out
 
 
+def _program_to_summary(program: Program) -> ProgramSummary:
+    return ProgramSummary(
+        id=program.id,
+        name_en=program.name_en,
+        name_zh=program.name_zh,
+        academic_year=program.academic_year,
+        faculty=program.faculty,
+        program_group_code=program.program_group_code,
+        tuition_amount=float(program.tuition_amount) if program.tuition_amount else None,
+        currency=program.currency.value if program.currency else None,
+        study_options=program.study_options or [],
+        deadlines=program.deadlines or [],
+        requirements=[],
+        requirement_version=None,
+        source_url=program.source_url or (program.extra_metadata or {}).get("source_url"),
+    )
+
+
+def delete_program_snapshot(program_id: int) -> bool:
+    """Delete one year-specific program snapshot by ID."""
+    return DatabaseManager().delete_program_snapshot(program_id)
+
+
+def patch_program_snapshot(
+    program_id: int,
+    patch_payload: dict[str, Any],
+) -> Optional[ProgramSummary]:
+    """Patch one year-specific program snapshot and return refreshed summary."""
+    db = DatabaseManager()
+    patched_program = db.patch_program_snapshot(program_id, patch_payload)
+    if not patched_program:
+        return None
+
+    if patched_program.id is None or patched_program.university_id is None:
+        return _program_to_summary(patched_program)
+
+    with db.get_session() as session:
+        university = session.get(University, patched_program.university_id)
+
+    if not university:
+        return _program_to_summary(patched_program)
+
+    summaries = query_programs(
+        univ_slug=university.slug,
+        year=patched_program.academic_year,
+    )
+    for summary in summaries:
+        if summary.id == patched_program.id:
+            return summary
+    return _program_to_summary(patched_program)
+
+
 def check_environment(verbose: bool = False) -> bool:
     """Run pre-flight environment checks.
 

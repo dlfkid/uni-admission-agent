@@ -19,7 +19,11 @@ from src.agents.cleaner_agent import (
 )
 from src.models.admission import CurrencyCode, StudyMode
 from src.models.scraper_models import CrawlPageResult
-from src.scrapers.page_processor import process_page_for_program, process_pages_batch
+from src.scrapers.page_processor import (
+    extract_program_data_from_page,
+    process_page_for_program,
+    process_pages_batch,
+)
 
 
 # ── Helpers ──────────────────────────────────────────────────────────
@@ -262,6 +266,68 @@ def test_process_page_no_program_name() -> None:
 
     assert success is False
     assert "program name" in (error or "").lower()
+
+
+def test_process_page_falls_back_to_html_title_for_program_name() -> None:
+    """When markdown has no heading but HTML title has program name, should still import."""
+    page = _make_page(
+        markdown="\n",
+        html=(
+            "<html><head><title>"
+            "02007-DFA-DPA - Doctor of Business Administration | "
+            "The Hong Kong Polytechnic University (PolyU)"
+            "</title></head><body></body></html>"
+        ),
+    )
+    parsed = ParsedProgramData(
+        faculty="Faculty of Business",
+        tuition=ParsedTuition(amount=Decimal("100"), currency=CurrencyCode.HKD),
+        study_options=[], deadlines=[],
+    )
+    cleaner = _make_mock_cleaner(parsed)
+    db = _make_mock_db()
+
+    success, error = process_page_for_program(
+        page=page, cleaner=cleaner, db_manager=db,
+        univ_slug="polyu", year=2026, current_depth=0,
+    )
+
+    assert success is True
+    assert error is None
+    call_args = db.upsert_program.call_args
+    program_data = call_args[0][0]
+    assert "Doctor of Business Administration" in str(program_data.get("name_en"))
+
+
+def test_extract_program_data_uses_selected_anchor_text_when_title_is_generic() -> None:
+    page = _make_page(
+        markdown="\n",
+        html="<html><head><title>Programmes | PolyU</title></head><body></body></html>",
+    )
+    cleaner = _make_mock_cleaner(
+        ParsedProgramData(
+            faculty="Faculty of Engineering",
+            tuition=ParsedTuition(amount=Decimal("500"), currency=CurrencyCode.HKD),
+            study_options=[],
+            deadlines=[],
+        )
+    )
+
+    program_data, error = extract_program_data_from_page(
+        page=page,
+        cleaner=cleaner,
+        univ_slug="polyu",
+        year=2026,
+        current_depth=0,
+        selected_anchor_text="MSc in Artificial Intelligence and Data Analytics",
+    )
+
+    assert error is None
+    assert program_data is not None
+    assert (
+        program_data.get("name_en")
+        == "MSc in Artificial Intelligence and Data Analytics"
+    )
 
 
 def test_process_page_llm_exception() -> None:

@@ -60,6 +60,20 @@ export const previewSearchBtn = document.getElementById("preview-search-btn") as
 export const previewSummary = document.getElementById("preview-summary") as HTMLDivElement;
 export const previewCountBadge = document.getElementById("preview-count-badge") as HTMLSpanElement;
 export const previewList = document.getElementById("preview-list") as HTMLDivElement;
+export const previewEditModal = document.getElementById("preview-edit-modal") as HTMLDivElement;
+export const closePreviewEditBtn = document.getElementById("close-preview-edit-btn") as HTMLButtonElement;
+export const previewEditCancelBtn = document.getElementById("preview-edit-cancel-btn") as HTMLButtonElement;
+export const previewEditSaveBtn = document.getElementById("preview-edit-save-btn") as HTMLButtonElement;
+export const previewEditNameEnInput = document.getElementById("preview-edit-name-en") as HTMLInputElement;
+export const previewEditNameZhInput = document.getElementById("preview-edit-name-zh") as HTMLInputElement;
+export const previewEditFacultyInput = document.getElementById("preview-edit-faculty") as HTMLInputElement;
+export const previewEditGroupCodeInput = document.getElementById("preview-edit-group-code") as HTMLInputElement;
+export const previewEditTuitionInput = document.getElementById("preview-edit-tuition") as HTMLInputElement;
+export const previewEditCurrencyInput = document.getElementById("preview-edit-currency") as HTMLInputElement;
+export const previewEditSourceUrlInput = document.getElementById("preview-edit-source-url") as HTMLInputElement;
+export const previewEditStudyOptionsInput = document.getElementById("preview-edit-study-options") as HTMLTextAreaElement;
+export const previewEditDeadlinesInput = document.getElementById("preview-edit-deadlines") as HTMLTextAreaElement;
+export const previewEditRequirementsInput = document.getElementById("preview-edit-requirements") as HTMLTextAreaElement;
 
 // Status
 export const statusDiv = document.getElementById("status") as HTMLDivElement;

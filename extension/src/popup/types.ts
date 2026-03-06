@@ -92,5 +92,21 @@ export interface ProgramRecord {
     source_url: string | null;
 }
 
+export type ProgramPatchPayload = Partial<
+    Pick<
+        ProgramRecord,
+        | "name_en"
+        | "name_zh"
+        | "faculty"
+        | "program_group_code"
+        | "tuition_amount"
+        | "currency"
+        | "study_options"
+        | "deadlines"
+        | "requirements"
+        | "source_url"
+    >
+>;
+
 export type StatusType = "success" | "error" | "info";
 export type ShowStatusFn = (msg: string, type: StatusType) => void;

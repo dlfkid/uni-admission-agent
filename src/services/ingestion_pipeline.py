@@ -827,6 +827,9 @@ class IngestionPipeline:
         raw_pages = context.get("raw_pages") or []
         cleaner = LLMCleanerAgent()
         univ_slug = str(request_payload.get("univ_slug") or "")
+        page_type_hint = str(request_payload.get("page_type_hint") or "auto").strip().lower()
+        selected_urls_count = len(request_payload.get("selected_urls") or [])
+        is_index_mode_request = page_type_hint == "index" or selected_urls_count > 0
 
         taxonomy_enabled = self._coerce_bool(
             request_payload.get("taxonomy_enabled"),
@@ -856,9 +859,20 @@ class IngestionPipeline:
         extract_errors: List[Dict[str, str]] = []
 
         for row in raw_pages:
+            row_markdown = str(row.get("markdown") or "")
+            row_html_raw = row.get("html")
+            row_html = str(row_html_raw or "")
+            markdown_length = len(row_markdown)
+            html_length = len(row_html)
+            from_browser = bool(row.get("from_browser"))
+            markdown_insufficient = (
+                html_length > 1000
+                and markdown_length < (html_length * 0.05)
+            )
+
             page = CrawlPageResult(
                 url=str(row.get("url") or ""),
-                markdown=str(row.get("markdown") or ""),
+                markdown=row_markdown,
                 char_count=int(row.get("char_count") or 0),
                 links=list(row.get("links") or []),
                 status_code=(
@@ -866,8 +880,29 @@ class IngestionPipeline:
                     if str(row.get("status_code") or "").isdigit()
                     else None
                 ),
-                html=row.get("html"),
+                html=row_html_raw,
             )
+
+            if is_index_mode_request and not from_browser and markdown_insufficient:
+                warning_msg = (
+                    "Anti-crawl suspected: index mode cannot reliably parse this detail URL "
+                    "(markdown too short). Skipping URL; use detail mode with browser HTML."
+                )
+                logger.warning(
+                    "%s url=%s md_len=%d html_len=%d",
+                    warning_msg,
+                    page.url,
+                    markdown_length,
+                    html_length,
+                )
+                extract_errors.append(
+                    {
+                        "url": page.url,
+                        "error": warning_msg,
+                    }
+                )
+                continue
+
             taxonomy_signals = self._build_taxonomy_signals(
                 page_url=page.url,
                 markdown=page.markdown,
@@ -898,8 +933,9 @@ class IngestionPipeline:
                 univ_slug=univ_slug,
                 year=int(request_payload.get("year") or 0),
                 current_depth=int(row.get("crawl_depth") or 0),
-                from_browser=bool(row.get("from_browser")),
+                from_browser=from_browser,
                 name_hints=name_hints,
+                selected_anchor_text=str(row.get("selected_anchor_text") or "").strip() or None,
             )
             if program_data:
                 self._attach_taxonomy_trace(

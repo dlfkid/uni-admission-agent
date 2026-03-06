@@ -30,6 +30,8 @@ from src.api.schemas import (
     CrawlRequest,
     CrawlResponse,
     ProgramResponse,
+    ProgramPatchRequest,
+    DeleteProgramResponse,
     StatusResponse,
     TaskStatusResponse,
     ConfigResponse,
@@ -54,6 +56,8 @@ from src.services.crawler import (
     get_ingestion_job,
     get_db_status,
     list_ingestion_jobs,
+    delete_program_snapshot,
+    patch_program_snapshot,
     query_programs,
     resume_crawl_job,
 )
@@ -637,6 +641,53 @@ async def api_programs(
     """Query programs for a university."""
     programs = query_programs(univ_slug=univ_slug, year=year)
     return [ProgramResponse(**p.model_dump()) for p in programs]
+
+
+@app.delete("/programs/{program_id}", response_model=DeleteProgramResponse)
+async def api_delete_program(program_id: int) -> DeleteProgramResponse:
+    """Delete one program snapshot by ID."""
+    deleted = delete_program_snapshot(program_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail=f"Program {program_id} not found.")
+    return DeleteProgramResponse(
+        program_id=program_id,
+        deleted=True,
+        message="Program snapshot deleted.",
+    )
+
+
+@app.patch("/programs/{program_id}", response_model=ProgramResponse)
+async def api_patch_program(
+    program_id: int,
+    body: ProgramPatchRequest = Body(...),
+) -> ProgramResponse:
+    """Partially update one program snapshot by ID."""
+    patch_payload = body.model_dump(exclude_unset=True)
+    if not patch_payload:
+        raise HTTPException(status_code=400, detail="Patch payload cannot be empty.")
+
+    blocked_fields = {
+        "id",
+        "university_id",
+        "program_catalog_id",
+        "academic_year",
+    }
+    blocked = sorted(blocked_fields.intersection(set(patch_payload.keys())))
+    if blocked:
+        joined = ", ".join(blocked)
+        raise HTTPException(
+            status_code=400,
+            detail=f"Forbidden fields in patch payload: {joined}",
+        )
+
+    try:
+        updated = patch_program_snapshot(program_id, patch_payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    if not updated:
+        raise HTTPException(status_code=404, detail=f"Program {program_id} not found.")
+    return ProgramResponse(**updated.model_dump())
 
 
 @app.get("/universities", response_model=List[UniversityResponse])

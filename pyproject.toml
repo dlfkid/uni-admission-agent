@@ -97,6 +97,7 @@ dev = [
 
 [tool.pylint.messages_control]
 disable = [
+    "C0302", # Too many lines in module
     "C0114", "C0115", "C0116", # Missing docstrings
     "C0301", "C0303", "C0305", "C0321", "C0325", "C0411", "C0413", "C0415", # Formatting/Imports
     "C0103", "C1803", # Naming/Conventions

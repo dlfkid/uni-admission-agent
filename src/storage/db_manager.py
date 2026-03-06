@@ -657,6 +657,173 @@ class DatabaseManager:
         with self.get_session() as session:
             return session.exec(select(University).where(University.slug == slug)).first()
 
+    def delete_program_snapshot(self, program_id: int) -> bool:
+        """Delete one year-specific program snapshot by ID."""
+        with self.get_session() as session:
+            program = session.get(Program, program_id)
+            if not program:
+                return False
+
+            if program.id is None:
+                return False
+
+            catalog_id = program.program_catalog_id
+
+            requirement_rows = session.exec(
+                select(ProgramRequirement).where(ProgramRequirement.program_id == program.id)
+            ).all()
+            for row in requirement_rows:
+                session.delete(row)
+
+            requirement_versions = session.exec(
+                select(RequirementVersion).where(RequirementVersion.program_id == program.id)
+            ).all()
+            for row in requirement_versions:
+                session.delete(row)
+
+            study_option_rows = session.exec(
+                select(ProgramStudyOption).where(ProgramStudyOption.program_id == program.id)
+            ).all()
+            for row in study_option_rows:
+                session.delete(row)
+
+            deadline_rows = session.exec(
+                select(ProgramDeadline).where(ProgramDeadline.program_id == program.id)
+            ).all()
+            for row in deadline_rows:
+                session.delete(row)
+
+            session.delete(program)
+            session.flush()
+
+            if catalog_id is not None:
+                has_sibling = session.exec(
+                    select(Program.id).where(
+                        Program.program_catalog_id == catalog_id,
+                        Program.id != program.id,
+                    )
+                ).first()
+                if has_sibling is None:
+                    catalog = session.get(ProgramCatalog, catalog_id)
+                    if catalog is not None:
+                        session.delete(catalog)
+
+            session.commit()
+            return True
+
+    def patch_program_snapshot(
+        self,
+        program_id: int,
+        patch_payload: dict[str, Any],
+    ) -> Optional[Program]:
+        """Patch one year-specific program snapshot by ID."""
+        with self.get_session() as session:
+            program = session.get(Program, program_id)
+            if not program:
+                return None
+
+            if program.id is None:
+                raise ValueError("Program ID is missing.")
+
+            now = datetime.now(timezone.utc)
+
+            for field_name in (
+                "name_en",
+                "name_zh",
+                "faculty",
+                "program_group_code",
+            ):
+                if field_name in patch_payload:
+                    setattr(program, field_name, patch_payload[field_name])
+
+            if "tuition_amount" in patch_payload:
+                program.tuition_amount = patch_payload["tuition_amount"]
+
+            if "currency" in patch_payload:
+                currency = patch_payload["currency"]
+                if not value_should_apply(currency):
+                    program.currency = None
+                else:
+                    normalized_currency = str(currency).strip().upper()
+                    try:
+                        program.currency = CurrencyCode(normalized_currency)
+                    except ValueError as exc:
+                        raise ValueError(
+                            f"Unsupported currency code: {currency}"
+                        ) from exc
+
+            if "source_url" in patch_payload:
+                source_url_raw = patch_payload["source_url"]
+                source_url = str(source_url_raw).strip() if source_url_raw else None
+                program.source_url = source_url
+                extra_metadata = dict(program.extra_metadata or {})
+                if source_url:
+                    extra_metadata["source_url"] = source_url
+                else:
+                    extra_metadata.pop("source_url", None)
+                program.extra_metadata = extra_metadata
+
+            if "study_options" in patch_payload:
+                study_options = patch_payload["study_options"] or []
+                if not isinstance(study_options, list):
+                    raise ValueError("study_options must be a list.")
+                normalized_study_options = [item for item in study_options if isinstance(item, dict)]
+                self._sync_study_option_records(
+                    session,
+                    program.id,
+                    normalized_study_options,
+                )
+                program.study_options = normalized_study_options
+
+            if "deadlines" in patch_payload:
+                deadlines = patch_payload["deadlines"] or []
+                if not isinstance(deadlines, list):
+                    raise ValueError("deadlines must be a list.")
+                normalized_deadlines = [item for item in deadlines if isinstance(item, dict)]
+                self._sync_deadline_records(
+                    session,
+                    program.id,
+                    normalized_deadlines,
+                )
+                program.deadlines = normalized_deadlines
+
+            if "requirements" in patch_payload:
+                requirements = patch_payload["requirements"] or []
+                if not isinstance(requirements, list):
+                    raise ValueError("requirements must be a list.")
+                normalized_requirements = [item for item in requirements if isinstance(item, dict)]
+                source_url = str(program.source_url or "").strip() or None
+                self._sync_requirement_records(
+                    session,
+                    program.id,
+                    normalized_requirements,
+                    source_url=source_url,
+                )
+
+            program.updated_at = now
+            session.add(program)
+
+            if program.program_catalog_id is not None:
+                catalog = session.get(ProgramCatalog, program.program_catalog_id)
+                if catalog is not None:
+                    if (
+                        "program_group_code" in patch_payload
+                        and value_should_apply(program.program_group_code)
+                    ):
+                        catalog.program_group_code = program.program_group_code
+                    if "faculty" in patch_payload and value_should_apply(program.faculty):
+                        catalog.faculty = program.faculty
+                    if "name_en" in patch_payload and value_should_apply(program.name_en):
+                        catalog.canonical_name_en = program.name_en
+                    if "name_zh" in patch_payload and value_should_apply(program.name_zh):
+                        catalog.canonical_name_zh = program.name_zh
+                    catalog.updated_at = now
+                    session.add(catalog)
+
+            session.commit()
+            session.refresh(program)
+            return program
+
     def upsert_program(self, program_data: dict, univ_slug: str) -> Tuple[Program, bool]:
         """Upsert a year-specific program snapshot and normalized child records."""
         with self.get_session() as session:

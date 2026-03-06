@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import Optional
 
 import typer
+from sqlalchemy_utils import create_database, database_exists, drop_database
 
 # Ensure project root on path for imports
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
@@ -98,6 +99,7 @@ SERVER OPERATIONS:
 SYSTEM MAINTENANCE:
     upgrade    Check for and install backend updates
     db-migrate Apply Alembic database migrations
+    db-reinit  Drop, recreate, and migrate database (destructive)
     db-version Show Alembic database revision status
     repair     Auto-repair DB migration failures with rollback safety
     version    Show current version information
@@ -111,6 +113,7 @@ USAGE EXAMPLES:
     ./adm-agent upgrade --check
     ./adm-agent db-version
     ./adm-agent db-migrate --yes
+    ./adm-agent db-reinit --yes
     ./adm-agent repair --auto
     ./adm-agent status
     
@@ -773,6 +776,48 @@ def db_migrate(
     except Exception as e:
         typer.echo(f"❌ Database migration failed: {e}", err=True)
         typer.echo("👉 Run 'adm-agent repair --auto' to rollback and recover automatically.", err=True)
+        raise typer.Exit(code=1)
+
+
+@app.command(name="db-reinit")
+def db_reinit(
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation prompt"),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Debug logging"),
+) -> None:
+    """Drop and recreate the configured database, then migrate to head."""
+    _setup_logging(verbose)
+
+    db_url = os.getenv("DATABASE_URL")
+    if not db_url:
+        typer.echo("❌ DATABASE_URL is not configured.", err=True)
+        raise typer.Exit(code=1)
+
+    if not yes:
+        confirm = typer.confirm(
+            "This will permanently delete all existing DB data. Continue?",
+            default=False,
+        )
+        if not confirm:
+            typer.echo("ℹ️  Database reinitialization cancelled.")
+            raise typer.Exit(code=0)
+
+    try:
+        if database_exists(db_url):
+            typer.echo("🗑️  Dropping existing database...")
+            drop_database(db_url)
+        typer.echo("🧱 Creating fresh database...")
+        create_database(db_url)
+        result = run_db_migrations(db_url=db_url, revision="head", verbose=verbose)
+        typer.echo(f"📦 Before revision: {result['before_revision'] or 'unversioned'}")
+        typer.echo(f"📦 After revision:  {result['after_revision'] or 'unversioned'}")
+        if result["pending"]:
+            typer.echo("⚠️  Database not fully up to head after reinit.")
+            raise typer.Exit(code=1)
+        typer.echo("✅ Database reinitialization completed.")
+    except typer.Exit:
+        raise
+    except Exception as e:
+        typer.echo(f"❌ Database reinitialization failed: {e}", err=True)
         raise typer.Exit(code=1)
 
 
