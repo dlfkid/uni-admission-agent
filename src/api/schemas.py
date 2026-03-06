@@ -15,6 +15,17 @@ from pydantic import BaseModel, Field, ConfigDict, model_validator
 # ---------------------------------------------------------------------------
 
 
+class DetailPagePayload(BaseModel):
+    """Browser-collected detail page payload."""
+
+    url: str = Field(description="Detail page URL")
+    html_content: str = Field(description="Full HTML content captured in browser context")
+    selected_anchor_text: Optional[str] = Field(
+        default=None,
+        description="Optional selected link text from the source index page",
+    )
+
+
 class CrawlRequest(BaseModel):
     """Body for ``POST /crawl``."""
 
@@ -48,6 +59,22 @@ class CrawlRequest(BaseModel):
     selected_link_texts: Optional[Dict[str, str]] = Field(
         default=None,
         description="Optional mapping of selected URL to anchor text",
+    )
+    browser_automation_enabled: bool = Field(
+        default=False,
+        description="Whether index detail pages are collected in browser before submit",
+    )
+    detail_pages_batch: Optional[List[DetailPagePayload]] = Field(
+        default=None,
+        description="Batch payload of detail page HTML collected from browser tabs",
+    )
+    batch_index: Optional[int] = Field(
+        default=None,
+        description="Current 1-based batch index in a multi-batch crawl session",
+    )
+    batch_total: Optional[int] = Field(
+        default=None,
+        description="Total batch count in a multi-batch crawl session",
     )
     taxonomy_enabled: Optional[bool] = Field(
         default=None,

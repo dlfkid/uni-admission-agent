@@ -459,6 +459,14 @@ async def api_crawl(body: CrawlRequest) -> CrawlResponse:
                     html_content=body.html_content,
                     selected_urls=body.selected_urls,
                     selected_link_texts=body.selected_link_texts,
+                    browser_automation_enabled=body.browser_automation_enabled,
+                    detail_pages_batch=(
+                        [item.model_dump() for item in body.detail_pages_batch]
+                        if body.detail_pages_batch
+                        else None
+                    ),
+                    batch_index=body.batch_index,
+                    batch_total=body.batch_total,
                     taxonomy_enabled=body.taxonomy_enabled,
                     taxonomy_low_threshold=body.taxonomy_low_threshold,
                     taxonomy_high_threshold=body.taxonomy_high_threshold,

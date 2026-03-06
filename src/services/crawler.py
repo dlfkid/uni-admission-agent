@@ -135,6 +135,10 @@ async def crawl_url(
     html_content: Optional[str] = None,
     selected_urls: Optional[list[str]] = None,
     selected_link_texts: Optional[dict[str, str]] = None,
+    browser_automation_enabled: bool = False,
+    detail_pages_batch: Optional[List[dict[str, Any]]] = None,
+    batch_index: Optional[int] = None,
+    batch_total: Optional[int] = None,
     taxonomy_enabled: Optional[bool] = None,
     taxonomy_low_threshold: Optional[float] = None,
     taxonomy_high_threshold: Optional[float] = None,
@@ -162,6 +166,10 @@ async def crawl_url(
         html_content: Pre-rendered HTML from browser (bypasses crawling).
         selected_urls: User-selected detail URLs (skips index analysis).
         selected_link_texts: Optional mapping of selected URL → anchor text.
+        browser_automation_enabled: Whether browser-tab automation is enabled for index flow.
+        detail_pages_batch: Browser-collected detail HTML batch payload.
+        batch_index: 1-based batch index for current submission.
+        batch_total: Total number of batches for current submission.
         taxonomy_enabled: Optional per-request taxonomy toggle.
         taxonomy_low_threshold: Optional hint injection score threshold.
         taxonomy_high_threshold: Optional override score threshold.
@@ -183,6 +191,10 @@ async def crawl_url(
         html_content=html_content,
         selected_urls=selected_urls,
         selected_link_texts=selected_link_texts,
+        browser_automation_enabled=browser_automation_enabled,
+        detail_pages_batch=detail_pages_batch,
+        batch_index=batch_index,
+        batch_total=batch_total,
         taxonomy_enabled=taxonomy_enabled,
         taxonomy_low_threshold=taxonomy_low_threshold,
         taxonomy_high_threshold=taxonomy_high_threshold,

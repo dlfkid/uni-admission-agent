@@ -1,15 +1,15 @@
 import type { LinkCandidate, ShowStatusFn } from "./types";
 
-interface SubmitCrawlOptions {
+interface IndexBatchRunOptions {
     url: string;
     slug: string;
     year: number;
-    pageType: string;
     exportMd: boolean;
     exportPath: string;
-    htmlContent?: string;
-    selectedUrls?: string[];
-    selectedLinkTexts?: Record<string, string>;
+    selectedUrls: string[];
+    selectedLinkTexts: Record<string, string>;
+    browserAutomationEnabled: boolean;
+    automationConcurrency: number;
 }
 
 interface LinkSelectionFlowDeps {
@@ -21,10 +21,14 @@ interface LinkSelectionFlowDeps {
     getYear: () => number;
     getExportMd: () => boolean;
     getExportPath: () => string;
-    submitCrawl: (opts: SubmitCrawlOptions) => Promise<void>;
+    getBrowserAutomationEnabled: () => boolean;
+    getAutomationConcurrency: () => number;
+    runIndexBatches: (opts: IndexBatchRunOptions) => Promise<void>;
     linkListEl: HTMLUListElement;
     selectAllLinksCheckbox: HTMLInputElement;
     linkCountBadge: HTMLSpanElement;
+    browserAutomationCheckbox: HTMLInputElement;
+    automationConcurrencyInput: HTMLInputElement;
     confirmLinksBtn: HTMLButtonElement;
     cancelLinksBtn: HTMLButtonElement;
 }
@@ -41,10 +45,14 @@ export function initLinkSelectionFlow(deps: LinkSelectionFlowDeps): {
         getYear,
         getExportMd,
         getExportPath,
-        submitCrawl,
+        getBrowserAutomationEnabled,
+        getAutomationConcurrency,
+        runIndexBatches,
         linkListEl,
         selectAllLinksCheckbox,
         linkCountBadge,
+        browserAutomationCheckbox,
+        automationConcurrencyInput,
         confirmLinksBtn,
         cancelLinksBtn,
     } = deps;
@@ -148,18 +156,19 @@ export function initLinkSelectionFlow(deps: LinkSelectionFlowDeps): {
         }
 
         confirmLinksBtn.disabled = true;
-        confirmLinksBtn.textContent = "Starting…";
+        confirmLinksBtn.textContent = "Batching…";
 
         try {
-            await submitCrawl({
+            await runIndexBatches({
                 url: getCurrentUrl(),
                 slug: getSlug(),
                 year: getYear(),
-                pageType: "detail",
                 exportMd: getExportMd(),
                 exportPath: getExportPath(),
                 selectedUrls,
                 selectedLinkTexts,
+                browserAutomationEnabled: getBrowserAutomationEnabled(),
+                automationConcurrency: getAutomationConcurrency(),
             });
         } catch (err) {
             showStatus(String(err), "error");
@@ -173,6 +182,12 @@ export function initLinkSelectionFlow(deps: LinkSelectionFlowDeps): {
         candidateLinks = [];
         switchView("input");
         setFormEnabled(true);
+    });
+
+    browserAutomationCheckbox.addEventListener("change", () => {
+        if (!browserAutomationCheckbox.checked) {
+            automationConcurrencyInput.value = "2";
+        }
     });
 
     return {

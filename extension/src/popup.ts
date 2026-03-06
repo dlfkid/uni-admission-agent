@@ -9,6 +9,9 @@
  */
 
 import {
+    automationConcurrencyInput,
+    batchSummaryText,
+    browserAutomationCheckbox,
     cancelLinksBtn,
     closeConfigBtn,
     closeExportBtn,
@@ -86,6 +89,11 @@ import { initExportFlow } from "./popup/exportFlow";
 import { initLinkSelectionFlow } from "./popup/linkSelectionFlow";
 import { initMonitorFlow } from "./popup/monitorFlow";
 import { initPreviewFlow } from "./popup/previewFlow";
+import {
+    captureDetailPagesBatch,
+    chunkUrls,
+    clampAutomationConcurrency,
+} from "./popup/automationQueue";
 import type { AnalyzeResult, CrawlPayload, TaskInfo, UniversityOption } from "./popup/types";
 
 const API_BASE = "http://localhost:8910";
@@ -108,6 +116,9 @@ const TAXONOMY_LOW_THRESHOLD_KEY = "crawl_taxonomy_low_threshold";
 const TAXONOMY_HIGH_THRESHOLD_KEY = "crawl_taxonomy_high_threshold";
 const TAXONOMY_HINT_TOP_K_KEY = "crawl_taxonomy_hint_top_k";
 const TAXONOMY_OVERRIDE_ENABLED_KEY = "crawl_taxonomy_override_enabled";
+const BROWSER_AUTOMATION_ENABLED_KEY = "crawl_browser_automation_enabled";
+const BROWSER_AUTOMATION_CONCURRENCY_KEY = "crawl_browser_automation_concurrency";
+const DETAIL_BATCH_SIZE = 10;
 
 // Slug autocomplete state
 let cachedUniversities: UniversityOption[] = [];
@@ -126,6 +137,8 @@ function setFormEnabled(enabled: boolean) {
     taxonomyHighThresholdInput.disabled = !enabled;
     taxonomyHintTopKInput.disabled = !enabled;
     taxonomyOverrideEnabledCheckbox.disabled = !enabled;
+    browserAutomationCheckbox.disabled = !enabled;
+    automationConcurrencyInput.disabled = !enabled;
     sendBtn.disabled = !enabled;
     // We don't disable config btn as user might want to check settings?
     // But changing settings while running is risky. Let's leave config enabled for now.
@@ -150,6 +163,10 @@ function initLogsToggle() {
         progressText.textContent = "Ready";
         progressFill.style.width = "0%";
         tokenDisplay.classList.add("hidden");
+        batchSummaryText.classList.add("hidden");
+        batchSummaryText.textContent = "";
+        monitorFlow?.clearBatchSummary();
+        monitorFlow?.clearBatchLogs();
         // logsConsole.textContent = ""; 
 
         // Ensure inputs are unlocked
@@ -307,6 +324,14 @@ function restoreCachedPreferences() {
     const cachedTaxonomyOverride = localStorage.getItem(TAXONOMY_OVERRIDE_ENABLED_KEY);
     taxonomyOverrideEnabledCheckbox.checked = cachedTaxonomyOverride !== "false";
 
+    const cachedBrowserAutomationEnabled = localStorage.getItem(BROWSER_AUTOMATION_ENABLED_KEY);
+    browserAutomationCheckbox.checked = cachedBrowserAutomationEnabled === "true";
+
+    const cachedConcurrencyRaw = localStorage.getItem(BROWSER_AUTOMATION_CONCURRENCY_KEY);
+    const cachedConcurrencyValue = cachedConcurrencyRaw ? parseInt(cachedConcurrencyRaw, 10) : 2;
+    const clampedConcurrency = clampAutomationConcurrency(cachedConcurrencyValue);
+    automationConcurrencyInput.value = String(clampedConcurrency);
+
     updateTaxonomySettingsVisibility();
 }
 
@@ -360,6 +385,19 @@ taxonomyOverrideEnabledCheckbox.addEventListener("change", () => {
         TAXONOMY_OVERRIDE_ENABLED_KEY,
         String(taxonomyOverrideEnabledCheckbox.checked),
     );
+});
+
+browserAutomationCheckbox.addEventListener("change", () => {
+    localStorage.setItem(
+        BROWSER_AUTOMATION_ENABLED_KEY,
+        String(browserAutomationCheckbox.checked),
+    );
+});
+
+automationConcurrencyInput.addEventListener("blur", () => {
+    const clamped = clampAutomationConcurrency(parseInt(automationConcurrencyInput.value.trim(), 10));
+    automationConcurrencyInput.value = String(clamped);
+    localStorage.setItem(BROWSER_AUTOMATION_CONCURRENCY_KEY, String(clamped));
 });
 
 /**
@@ -633,6 +671,235 @@ async function getCurrentPageHTML(): Promise<string | null> {
     });
 }
 
+function getAutomationConcurrency(): number {
+    const clamped = clampAutomationConcurrency(parseInt(automationConcurrencyInput.value.trim(), 10));
+    automationConcurrencyInput.value = String(clamped);
+    return clamped;
+}
+
+function shortenUrl(url: string, maxLength = 54): string {
+    const trimmed = String(url || "").trim();
+    if (trimmed.length <= maxLength) {
+        return trimmed;
+    }
+    return `${trimmed.slice(0, maxLength - 3)}...`;
+}
+
+function renderBatchSummary(args: {
+    processed: number;
+    total: number;
+    batchIndex: number;
+    batchTotal: number;
+    success: number;
+    failed: number;
+    currentUrl?: string;
+}): string {
+    const safeBatchIndex = Math.min(args.batchTotal, Math.max(1, args.batchIndex));
+    const base = `Processed ${args.processed}/${args.total} · Batch ${safeBatchIndex}/${args.batchTotal} · Success ${args.success} · Failed ${args.failed}`;
+    if (!args.currentUrl) {
+        return base;
+    }
+    return `${base} · URL ${shortenUrl(args.currentUrl)}`;
+}
+
+async function waitForTaskTerminal(taskId: string): Promise<TaskInfo> {
+    while (true) {
+        const res = await fetch(`${API_BASE}/tasks/${taskId}`);
+        if (!res.ok) {
+            throw new Error(`Task polling failed (${res.status})`);
+        }
+        const data: TaskInfo = await res.json();
+        if (data.state === "DONE" || data.state === "FAILED") {
+            return data;
+        }
+        await sleep(1500);
+    }
+}
+
+interface IndexBatchExecutionOptions {
+    url: string;
+    slug: string;
+    year: number;
+    exportMd: boolean;
+    exportPath: string;
+    selectedUrls: string[];
+    selectedLinkTexts: Record<string, string>;
+    browserAutomationEnabled: boolean;
+    automationConcurrency: number;
+}
+
+async function runIndexBatches(opts: IndexBatchExecutionOptions): Promise<void> {
+    const batches = chunkUrls(opts.selectedUrls, DETAIL_BATCH_SIZE);
+    if (batches.length === 0) {
+        throw new Error("No links selected");
+    }
+
+    switchView("monitor");
+    setFormEnabled(false);
+    progressText.textContent = "Preparing index batches…";
+    progressFill.style.width = "2%";
+    progressFill.style.backgroundColor = "var(--accent)";
+    tokenDisplay.classList.add("hidden");
+    stopBtn.classList.add("hidden");
+    continueBtn.classList.add("hidden");
+
+    const totalUrls = opts.selectedUrls.length;
+    const batchTotal = batches.length;
+    monitorFlow?.clearBatchLogs();
+    monitorFlow?.appendBatchLog(`Queue started: ${totalUrls} URLs in ${batchTotal} batches.`);
+    let processed = 0;
+    let success = 0;
+    let failed = 0;
+    let startedAnyTask = false;
+
+    const updateSummary = (batchIndex: number, currentUrl = ""): void => {
+        monitorFlow?.setBatchSummary(
+            renderBatchSummary({
+                processed,
+                total: totalUrls,
+                batchIndex,
+                batchTotal,
+                success,
+                failed,
+                currentUrl,
+            })
+        );
+    };
+
+    updateSummary(1);
+
+    for (let offset = 0; offset < batches.length; offset += 1) {
+        const batchIndex = offset + 1;
+        const batchUrls = batches[offset];
+        let currentUrl = "";
+        let batchSubmitCount = batchUrls.length;
+        let detailPagesBatch: CrawlPayload["detail_pages_batch"] = undefined;
+
+        const batchLinkTexts: Record<string, string> = {};
+        for (const detailUrl of batchUrls) {
+            const anchorText = opts.selectedLinkTexts[detailUrl];
+            if (anchorText) {
+                batchLinkTexts[detailUrl] = anchorText;
+            }
+        }
+
+        updateSummary(batchIndex);
+
+        if (opts.browserAutomationEnabled) {
+            const captureCandidates = batchUrls.map((detailUrl) => ({
+                url: detailUrl,
+                selectedAnchorText: opts.selectedLinkTexts[detailUrl],
+            }));
+
+            const captureResult = await captureDetailPagesBatch(captureCandidates, {
+                concurrency: opts.automationConcurrency,
+                onProgress: (event) => {
+                    currentUrl = event.url;
+                    updateSummary(batchIndex, currentUrl);
+                },
+            });
+
+            detailPagesBatch = captureResult.successes;
+            batchSubmitCount = captureResult.successes.length;
+            failed += captureResult.failures.length;
+            for (const failure of captureResult.failures) {
+                appendPreflightLog(`Automation capture failed: ${failure.url} (${failure.error})`);
+                monitorFlow?.appendBatchLog(`Capture failed: ${failure.url} (${failure.error})`);
+            }
+
+            if (batchSubmitCount === 0) {
+                processed += batchUrls.length;
+                showStatus(
+                    `Batch ${batchIndex}/${batchTotal}: no pages captured, skipped.`,
+                    "info",
+                );
+                monitorFlow?.appendBatchLog(
+                    `Batch ${batchIndex}/${batchTotal}: no pages captured, skipped.`,
+                );
+                updateSummary(Math.min(batchTotal, batchIndex + 1));
+                continue;
+            }
+        }
+
+        try {
+            monitorFlow?.appendBatchLog(
+                `Submitting batch ${batchIndex}/${batchTotal} (${batchSubmitCount} pages).`,
+            );
+            const taskId = await submitCrawl({
+                url: opts.url,
+                slug: opts.slug,
+                year: opts.year,
+                pageType: "index",
+                exportMd: opts.exportMd,
+                exportPath: opts.exportPath,
+                selectedUrls: opts.browserAutomationEnabled ? undefined : batchUrls,
+                selectedLinkTexts: opts.browserAutomationEnabled ? undefined : batchLinkTexts,
+                browserAutomationEnabled: opts.browserAutomationEnabled,
+                detailPagesBatch: opts.browserAutomationEnabled ? detailPagesBatch : undefined,
+                batchIndex,
+                batchTotal,
+            });
+            startedAnyTask = true;
+            monitorFlow?.startMonitoring(taskId);
+            const finalTask = await waitForTaskTerminal(taskId);
+            if (finalTask.state === "DONE") {
+                success += batchSubmitCount;
+                monitorFlow?.appendBatchLog(
+                    `Batch ${batchIndex}/${batchTotal} finished successfully.`,
+                );
+            } else {
+                failed += batchSubmitCount;
+                appendPreflightLog(
+                    `Batch ${batchIndex}/${batchTotal} failed: ${finalTask.error || "unknown error"}`,
+                );
+                monitorFlow?.appendBatchLog(
+                    `Batch ${batchIndex}/${batchTotal} failed: ${finalTask.error || "unknown error"}`,
+                );
+            }
+        } catch (err) {
+            failed += batchSubmitCount;
+            appendPreflightLog(
+                `Batch ${batchIndex}/${batchTotal} submission failed: ${String(err)}`,
+            );
+            monitorFlow?.appendBatchLog(
+                `Batch ${batchIndex}/${batchTotal} submit failed: ${String(err)}`,
+            );
+        } finally {
+            processed += batchUrls.length;
+            updateSummary(Math.min(batchTotal, batchIndex + 1));
+        }
+    }
+
+    monitorFlow?.setBatchSummary(
+        renderBatchSummary({
+            processed,
+            total: totalUrls,
+            batchIndex: batchTotal,
+            batchTotal,
+            success,
+            failed,
+        })
+    );
+
+    if (!startedAnyTask) {
+        progressText.textContent = "No batches submitted";
+        progressFill.style.width = "100%";
+        stopBtn.classList.add("hidden");
+        continueBtn.classList.remove("hidden");
+        setFormEnabled(true);
+    }
+
+    if (failed > 0) {
+        monitorFlow?.appendBatchLog(
+            `Queue completed with failures: success=${success}, failed=${failed}.`,
+        );
+        showStatus(`Batch crawl finished: success=${success}, failed=${failed}`, "info");
+    } else {
+        monitorFlow?.appendBatchLog(`Queue completed: ${success}/${totalUrls}.`);
+        showStatus(`Batch crawl completed: ${success}/${totalUrls}`, "success");
+    }
+}
+
 const linkSelectionFlow = initLinkSelectionFlow({
     showStatus,
     switchView,
@@ -642,10 +909,14 @@ const linkSelectionFlow = initLinkSelectionFlow({
     getYear: () => parseInt(yearInput.value.trim(), 10),
     getExportMd: () => exportMdCheckbox.checked,
     getExportPath: () => exportPathInput.value.trim(),
-    submitCrawl,
+    getBrowserAutomationEnabled: () => browserAutomationCheckbox.checked,
+    getAutomationConcurrency: getAutomationConcurrency,
+    runIndexBatches,
     linkListEl,
     selectAllLinksCheckbox,
     linkCountBadge,
+    browserAutomationCheckbox,
+    automationConcurrencyInput,
     confirmLinksBtn,
     cancelLinksBtn,
 });
@@ -724,7 +995,17 @@ sendBtn.addEventListener("click", async () => {
         if (analyzeData.page_type === "detail") {
             // Detail page: start crawl directly with browser HTML
             appendPreflightLog("Detected detail page; submitting crawl job.");
-            await submitCrawl({ url, slug, year, pageType, exportMd, exportPath, htmlContent: pageHTML });
+            const taskId = await submitCrawl({
+                url,
+                slug,
+                year,
+                pageType,
+                exportMd,
+                exportPath,
+                htmlContent: pageHTML,
+            });
+            monitorFlow?.clearBatchSummary();
+            monitorFlow?.startMonitoring(taskId);
         } else {
             // Index page: show link selection UI
             if (analyzeData.links.length === 0) {
@@ -758,7 +1039,11 @@ async function submitCrawl(opts: {
     htmlContent?: string;
     selectedUrls?: string[];
     selectedLinkTexts?: Record<string, string>;
-}) {
+    browserAutomationEnabled?: boolean;
+    detailPagesBatch?: CrawlPayload["detail_pages_batch"];
+    batchIndex?: number;
+    batchTotal?: number;
+}): Promise<string> {
     const taxonomyOptions = getTaxonomyOptions();
     const payload: CrawlPayload = {
         url: opts.url,
@@ -782,6 +1067,18 @@ async function submitCrawl(opts: {
     if (opts.selectedLinkTexts) {
         payload.selected_link_texts = opts.selectedLinkTexts;
     }
+    if (typeof opts.browserAutomationEnabled === "boolean") {
+        payload.browser_automation_enabled = opts.browserAutomationEnabled;
+    }
+    if (opts.detailPagesBatch && opts.detailPagesBatch.length > 0) {
+        payload.detail_pages_batch = opts.detailPagesBatch;
+    }
+    if (typeof opts.batchIndex === "number") {
+        payload.batch_index = opts.batchIndex;
+    }
+    if (typeof opts.batchTotal === "number") {
+        payload.batch_total = opts.batchTotal;
+    }
     if (opts.exportMd && opts.exportPath) {
         payload.export_md = true;
         payload.export_path = opts.exportPath;
@@ -797,8 +1094,8 @@ async function submitCrawl(opts: {
 
     if (res.status === 409) {
         showStatus("A task is already running!", "error");
-        init();
-        return;
+        await init();
+        throw new Error("Task conflict: another crawl is still running");
     }
 
     if (!res.ok) {
@@ -806,7 +1103,10 @@ async function submitCrawl(opts: {
     }
 
     const data = await res.json();
-    monitorFlow?.startMonitoring(data.task_id);
+    if (!data.task_id) {
+        throw new Error("Missing task_id from /crawl response");
+    }
+    return data.task_id as string;
 }
 
 monitorFlow = initMonitorFlow({
@@ -816,6 +1116,7 @@ monitorFlow = initMonitorFlow({
     setFormEnabled,
     taskIdDisplay,
     progressText,
+    batchSummaryText,
     progressFill,
     tokenDisplay,
     logsConsole,
