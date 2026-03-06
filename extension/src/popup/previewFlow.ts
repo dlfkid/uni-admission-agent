@@ -1,4 +1,4 @@
-import type { ProgramRecord, ShowStatusFn, UniversityOption } from "./types";
+import type { ProgramPatchPayload, ProgramRecord, ShowStatusFn, UniversityOption } from "./types";
 
 interface PreviewFlowDeps {
     apiBase: string;
@@ -16,6 +16,49 @@ interface PreviewFlowDeps {
     previewSummary: HTMLDivElement;
     previewCountBadge: HTMLSpanElement;
     previewList: HTMLDivElement;
+}
+
+function stableStringify(value: unknown): string {
+    if (Array.isArray(value)) {
+        return `[${value.map((item) => stableStringify(item)).join(",")}]`;
+    }
+    if (value && typeof value === "object") {
+        const obj = value as Record<string, unknown>;
+        const keys = Object.keys(obj).sort();
+        const mapped = keys.map((key) => `${JSON.stringify(key)}:${stableStringify(obj[key])}`);
+        return `{${mapped.join(",")}}`;
+    }
+    return JSON.stringify(value);
+}
+
+function valuesEqual(left: unknown, right: unknown): boolean {
+    return stableStringify(left) === stableStringify(right);
+}
+
+export function buildProgramPatch(
+    original: ProgramRecord,
+    edited: ProgramRecord,
+): ProgramPatchPayload {
+    const patch: ProgramPatchPayload = {};
+    const editableFields: (keyof ProgramPatchPayload)[] = [
+        "name_en",
+        "name_zh",
+        "faculty",
+        "program_group_code",
+        "tuition_amount",
+        "currency",
+        "study_options",
+        "deadlines",
+        "requirements",
+        "source_url",
+    ];
+
+    for (const field of editableFields) {
+        if (!valuesEqual(original[field], edited[field])) {
+            patch[field] = edited[field];
+        }
+    }
+    return patch;
 }
 
 export function initPreviewFlow(deps: PreviewFlowDeps): void {
@@ -166,6 +209,29 @@ export function initPreviewFlow(deps: PreviewFlowDeps): void {
                 header.appendChild(idEl);
             }
             card.appendChild(header);
+
+            const actions = document.createElement("div");
+            actions.className = "program-card-actions";
+
+            const editBtn = document.createElement("button");
+            editBtn.className = "program-card-action-btn";
+            editBtn.type = "button";
+            editBtn.textContent = "Edit";
+            editBtn.addEventListener("click", () => {
+                openEditModal(p);
+            });
+            actions.appendChild(editBtn);
+
+            const deleteBtn = document.createElement("button");
+            deleteBtn.className = "program-card-action-btn danger";
+            deleteBtn.type = "button";
+            deleteBtn.textContent = "Delete";
+            deleteBtn.addEventListener("click", () => {
+                requestDeleteProgram(p);
+            });
+            actions.appendChild(deleteBtn);
+
+            card.appendChild(actions);
 
             const meta = document.createElement("div");
             meta.className = "program-card-meta";

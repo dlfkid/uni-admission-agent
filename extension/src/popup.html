@@ -246,6 +246,30 @@
         </div>
     </div>
 
+    <!-- PREVIEW EDIT MODAL -->
+    <div id="preview-edit-modal" class="modal hidden">
+        <div class="modal-content modal-compact">
+            <div class="modal-header">
+                <h2>Edit Program (Preview)</h2>
+                <button id="close-preview-edit-btn" class="close-btn">&times;</button>
+            </div>
+            <div class="config-body">
+                <div class="field">
+                    <label for="preview-edit-name-en">Program Name (EN)</label>
+                    <input id="preview-edit-name-en" type="text" />
+                </div>
+                <div class="field">
+                    <label for="preview-edit-faculty">Faculty</label>
+                    <input id="preview-edit-faculty" type="text" />
+                </div>
+            </div>
+            <div class="modal-actions">
+                <button id="preview-edit-cancel-btn" class="secondary-btn">Cancel</button>
+                <button id="preview-edit-save-btn" class="primary-btn">Save</button>
+            </div>
+        </div>
+    </div>
+
     <script type="module" src="./popup.ts"></script>
 </body>
 
