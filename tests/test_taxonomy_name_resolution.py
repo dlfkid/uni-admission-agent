@@ -1,5 +1,7 @@
 from unittest.mock import MagicMock
 
+import pytest
+
 from src.services.ingestion_pipeline import IngestionPipeline
 
 
@@ -20,6 +22,17 @@ def _raw_page(
         "from_browser": False,
         "selected_anchor_text": selected_anchor_text,
     }
+
+
+@pytest.fixture(autouse=True)
+def _stub_llm_cleaner_agent(monkeypatch) -> None:
+    class _StubCleaner:
+        pass
+
+    monkeypatch.setattr(
+        "src.services.ingestion_pipeline.LLMCleanerAgent",
+        _StubCleaner,
+    )
 
 
 def test_signal_priority_anchor_then_url_then_heading(monkeypatch) -> None:
