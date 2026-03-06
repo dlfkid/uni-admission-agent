@@ -159,6 +159,88 @@ _NOISE_PROGRAM_NAME_RE = re.compile(
     re.IGNORECASE,
 )
 
+_STRONG_DEGREE_KEYWORDS_RE = re.compile(
+    r"\b(?:MSc|MA|MBA|MPhil|MEng|MRes|MFA|MLitt|MChem|MComp|MMath"
+    r"|BSc|BA|BEng|BBA|LLB|LLM|PhD|DPhil|EdD|DBA|PGDip|PGCert"
+    r"|Master|Bachelor|Doctor|Diploma|Certificate|Masters)\b",
+    re.IGNORECASE,
+)
+
+_MARKDOWN_LINK_RE = re.compile(r"\[([^\]]+)\]\(([^)]+)\)")
+_NUMBERED_LIST_ITEM_RE = re.compile(r"^\s*\d+\.\s+")
+_BULLET_LIST_ITEM_RE = re.compile(r"^\s*[-*+]\s+")
+
+
+def _normalize_inline_markdown_text(text: str) -> str:
+    normalized = str(text or "").strip()
+    if not normalized:
+        return ""
+
+    normalized = _MARKDOWN_LINK_RE.sub(r"\1", normalized)
+    normalized = re.sub(r"`+", "", normalized)
+    normalized = re.sub(r"[*_~]+", "", normalized)
+    normalized = re.sub(r"^\[(.*?)\]$", r"\1", normalized)
+    normalized = re.sub(r"\s+", " ", normalized).strip()
+    return normalized
+
+
+def _find_prominent_plain_title(markdown: str) -> str:
+    lines = markdown.split("\n")
+    breadcrumb_index = -1
+    for idx, line in enumerate(lines):
+        level, text = _parse_heading(line)
+        if level > 0 and "breadcrumb" in text.lower():
+            breadcrumb_index = idx
+            break
+
+    if breadcrumb_index >= 0:
+        start_idx = breadcrumb_index + 1
+        end_idx = min(len(lines), start_idx + 120)
+    else:
+        start_idx = 0
+        end_idx = min(len(lines), 120)
+
+    for line in lines[start_idx:end_idx]:
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if stripped.startswith("#"):
+            continue
+        if _NUMBERED_LIST_ITEM_RE.match(stripped):
+            continue
+        if _BULLET_LIST_ITEM_RE.match(stripped):
+            continue
+        if stripped.startswith("[") or "](" in stripped:
+            continue
+        if "http://" in stripped.lower() or "https://" in stripped.lower():
+            continue
+        if "|" in stripped:
+            continue
+
+        candidate = _normalize_inline_markdown_text(stripped)
+        if not candidate:
+            continue
+        if len(candidate) < 4 or len(candidate) > 120:
+            continue
+        if len(candidate.split()) > 18:
+            continue
+        if is_noise_program_name(candidate):
+            continue
+        if _STRONG_DEGREE_KEYWORDS_RE.search(candidate):
+            return candidate
+
+    return ""
+
+
+def _find_heading_match(
+    headings: list[tuple[int, str]],
+    predicate,
+) -> str:
+    for level, text in headings:
+        if predicate(level, text):
+            return text
+    return ""
+
 
 def _parse_heading(line: str) -> tuple[int, str]:
     """Return (level, text) for a Markdown heading line, or (0, '')."""
@@ -174,7 +256,7 @@ def _parse_heading(line: str) -> tuple[int, str]:
             break
     # Must have a space after the '#' characters (standard Markdown)
     if 0 < level < len(stripped) and stripped[level] == " ":
-        text = stripped[level:].strip()
+        text = _normalize_inline_markdown_text(stripped[level:].strip())
         return level, text
     return 0, ""
 
@@ -197,31 +279,37 @@ def extract_program_name(markdown: str) -> str:
         if level > 0 and text:
             headings.append((level, text))
 
+    plain_title = _find_prominent_plain_title(markdown)
+    if plain_title:
+        return plain_title
+
     if not headings:
         return ""
 
-    # Pass 1: heading with a degree keyword (strongest signal)
-    for level, text in headings:
-        if level <= 3 and _DEGREE_KEYWORDS_RE.search(text):
-            if not is_noise_program_name(text):
-                return text
+    candidates = [
+        _find_heading_match(
+            headings,
+            lambda level, text: level <= 3
+            and _DEGREE_KEYWORDS_RE.search(text) is not None
+            and not is_noise_program_name(text),
+        ),
+        _find_heading_match(
+            headings,
+            lambda level, text: level == 1 and not is_noise_program_name(text),
+        ),
+        _find_heading_match(
+            headings,
+            lambda level, text: level == 2 and not is_noise_program_name(text),
+        ),
+        _find_heading_match(
+            headings,
+            lambda _level, text: not is_noise_program_name(text),
+        ),
+    ]
+    for candidate in candidates:
+        if candidate:
+            return candidate
 
-    # Pass 2: first non-noise H1
-    for level, text in headings:
-        if level == 1 and not is_noise_program_name(text):
-            return text
-
-    # Pass 3: first non-noise H2
-    for level, text in headings:
-        if level == 2 and not is_noise_program_name(text):
-            return text
-
-    # Pass 4: absolute fallback — first heading that isn't noise
-    for _level, text in headings:
-        if not is_noise_program_name(text):
-            return text
-
-    # Everything was noise — return first heading anyway
     return headings[0][1]
 
 
