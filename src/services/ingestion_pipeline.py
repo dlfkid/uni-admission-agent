@@ -900,6 +900,7 @@ class IngestionPipeline:
                 current_depth=int(row.get("crawl_depth") or 0),
                 from_browser=bool(row.get("from_browser")),
                 name_hints=name_hints,
+                selected_anchor_text=str(row.get("selected_anchor_text") or "").strip() or None,
             )
             if program_data:
                 self._attach_taxonomy_trace(

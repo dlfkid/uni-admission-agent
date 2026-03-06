@@ -6,17 +6,79 @@ structured data via LLM, and upserting to database.
 """
 
 import logging
+import html as html_lib
+import re
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple, Any
 
 from src.agents.cleaner_agent import LLMCleanerAgent, ParsedProgramData
 from src.agents.factory import RouterAgent
 from src.models.scraper_models import CrawlPageResult
-from src.scrapers.helpers import extract_program_name
+from src.scrapers.helpers import extract_program_name, is_noise_program_name
 from src.storage.db_manager import DatabaseManager
 from src.utils.text import generate_program_group_code
 
 logger = logging.getLogger(__name__)
+
+_HTML_TITLE_RE = re.compile(r"<title[^>]*>(.*?)</title>", re.IGNORECASE | re.DOTALL)
+_PROGRAM_CODE_SEGMENT_RE = re.compile(r"^[A-Za-z0-9]{2,}(?:[-/][A-Za-z0-9]{2,})+$")
+_GENERIC_TITLE_SEGMENT_RE = re.compile(
+    r"^(?:programmes?|courses?|course list|programme list|program list|details?)$",
+    re.IGNORECASE,
+)
+
+
+def _extract_program_name_from_html_title(html_text: Optional[str]) -> str:
+    candidate = ""
+    if not html_text:
+        return candidate
+
+    match = _HTML_TITLE_RE.search(html_text)
+    if not match:
+        return candidate
+
+    raw_title = html_lib.unescape(match.group(1))
+    normalized_title = re.sub(r"\s+", " ", raw_title).strip()
+    left_part = normalized_title.split("|", 1)[0].strip() if normalized_title else ""
+    if not left_part:
+        return candidate
+
+    segments = [seg.strip() for seg in re.split(r"\s+-\s+", left_part) if seg.strip()]
+    if not segments:
+        segments = [left_part]
+
+    for segment in segments:
+        compact = re.sub(r"\s+", "", segment)
+        if _PROGRAM_CODE_SEGMENT_RE.fullmatch(compact):
+            continue
+        if _GENERIC_TITLE_SEGMENT_RE.fullmatch(segment):
+            continue
+        if is_noise_program_name(segment):
+            continue
+        candidate = segment
+        break
+
+    if not candidate:
+        fallback = segments[-1]
+        if (
+            not _GENERIC_TITLE_SEGMENT_RE.fullmatch(fallback)
+            and not is_noise_program_name(fallback)
+        ):
+            candidate = fallback
+
+    return candidate
+
+
+def _extract_program_name_from_hints(name_hints: Optional[List[str]]) -> str:
+    for hint in list(name_hints or []):
+        candidate = str(hint or "").strip()
+        if not candidate:
+            continue
+        if "|" in candidate:
+            candidate = candidate.split("|", 1)[0].strip()
+        if candidate and not is_noise_program_name(candidate):
+            return candidate
+    return ""
 
 
 def process_page_for_program(
@@ -78,6 +140,7 @@ def extract_program_data_from_page(
     current_depth: int,
     from_browser: bool = False,
     name_hints: Optional[List[str]] = None,
+    selected_anchor_text: Optional[str] = None,
 ) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
     """Extract structured program payload from one page without DB persistence."""
     if not page.markdown:
@@ -114,9 +177,19 @@ def extract_program_data_from_page(
             return None, "No structured data extracted"
 
         # Build program data for DB
+        extracted_name = extract_program_name(page.markdown)
+        if not extracted_name:
+            anchor_name = str(selected_anchor_text or "").strip()
+            if anchor_name and not is_noise_program_name(anchor_name):
+                extracted_name = anchor_name
+        if not extracted_name:
+            extracted_name = _extract_program_name_from_html_title(page.html)
+        if not extracted_name:
+            extracted_name = _extract_program_name_from_hints(name_hints)
+
         program_data: Dict[str, Any] = {
             "academic_year": year,
-            "name_en": extract_program_name(page.markdown),
+            "name_en": extracted_name,
             "name_zh": "",
         }
 
