@@ -1,5 +1,12 @@
 # Change Log (Consolidated)
 
+## 2026-03-06
+
+### CLI / Upgrade Compatibility
+- Added destructive `db-reinit` maintenance command (drop DB, recreate DB, migrate to head).
+- Kept backend upgrade delivery path unchanged: `adm-agent upgrade` continues to trigger
+  post-upgrade `db-migrate` by default.
+
 ## 2026-03-03
 
 ### Overall Progress

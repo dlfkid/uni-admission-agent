@@ -183,6 +183,9 @@ The agent needs a database connection.
 # Apply database migrations
 ./adm-agent db-migrate --yes
 
+# Destructive reset: drop + recreate + migrate
+./adm-agent db-reinit --yes
+
 # Show database migration revision status
 ./adm-agent db-version
 
@@ -245,6 +248,9 @@ The agent needs a database connection.
 
 # Apply database migrations
 .\adm-agent.exe db-migrate --yes
+
+# Destructive reset: drop + recreate + migrate
+.\adm-agent.exe db-reinit --yes
 
 # Show database migration revision status
 .\adm-agent.exe db-version
@@ -351,11 +357,16 @@ Use Alembic migration commands to keep schema in sync after upgrades:
 
 # Migrate to latest schema
 ./adm-agent db-migrate --yes
+
+# Destructive reset (drops all rows)
+./adm-agent db-reinit --yes
 ```
 
 `upgrade` runs `db-migrate --yes` by default after a successful backend update.
 If migration fails during upgrade, the agent automatically runs `repair --auto`
 to rollback to a safe data state.
+`db-reinit` is a manual maintenance command and does not change the default
+upgrade delivery path (`upgrade` → `db-migrate`).
 
 ### Server
 

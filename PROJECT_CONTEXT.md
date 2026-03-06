@@ -192,6 +192,9 @@ uv run src/cmd/cli.py export --output data.xlsx ...
 # Check Status/Env
 uv run src/cmd/cli.py status
 uv run src/cmd/cli.py check
+uv run src/cmd/cli.py db-version
+uv run src/cmd/cli.py db-migrate --yes
+uv run src/cmd/cli.py db-reinit --yes  # destructive reset
 
 # Phase 2 operations
 uv run src/cmd/cli.py ingestion-jobs --limit 20
@@ -202,6 +205,10 @@ uv run src/cmd/cli.py golden-collect --overwrite
 uv run src/cmd/cli.py quality-score --threshold 0.60
 uv run src/cmd/cli.py taxonomy-export --output golden_samples/program_names/cleaned_programs_names.json --include-learned --min-confidence 0.90
 ```
+
+Default backend upgrade delivery remains `upgrade` followed by `db-migrate`.
+`db-reinit` is a manual maintenance operation and is not part of the automatic
+upgrade path.
 
 ---
 
