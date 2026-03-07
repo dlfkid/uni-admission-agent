@@ -504,6 +504,12 @@ uv run src/cmd/client_cli.py bootstrap --target claude --emit-prompt
 uv run src/cmd/client_cli.py bootstrap --target openclaw --emit-prompt
 ```
 
+Minimal OpenClaw message (copy-paste):
+
+```text
+请在当前环境完成 adm-agent-client 配置并上线：1) 运行 adm-agent-client init（host=<SERVE_HOST>, port=<SERVE_PORT>, client_name=当前机器名）；2) 运行 adm-agent-client status 并确认配置可读取；3) 运行 adm-agent-client start --continuous；4) 若连接失败先检查 host/port 与本机防火墙。请逐步执行并回显每一步结果。
+```
+
 ### Chrome Extension
 
 The extension provides a UI to interact with the agent.
