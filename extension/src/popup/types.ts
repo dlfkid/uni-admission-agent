@@ -52,11 +52,21 @@ export interface CrawlPayload {
     html_content?: string;
     selected_urls?: string[];
     selected_link_texts?: Record<string, string>;
+    browser_automation_enabled?: boolean;
+    detail_pages_batch?: DetailPageBatchItem[];
+    batch_index?: number;
+    batch_total?: number;
     taxonomy_enabled: boolean;
     taxonomy_low_threshold: number;
     taxonomy_high_threshold: number;
     taxonomy_hint_top_k: number;
     taxonomy_override_enabled: boolean;
+}
+
+export interface DetailPageBatchItem {
+    url: string;
+    html_content: string;
+    selected_anchor_text?: string;
 }
 
 export interface ProgramRecord {

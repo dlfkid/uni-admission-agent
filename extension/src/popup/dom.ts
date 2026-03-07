@@ -26,6 +26,7 @@ export const preflightLogConsole = document.getElementById("preflight-log-consol
 // Monitor
 export const taskIdDisplay = document.getElementById("task-id-display") as HTMLSpanElement;
 export const progressText = document.getElementById("progress-text") as HTMLParagraphElement;
+export const batchSummaryText = document.getElementById("batch-summary-text") as HTMLParagraphElement;
 export const progressFill = document.getElementById("progress-fill") as HTMLDivElement;
 export const tokenDisplay = document.getElementById("token-display") as HTMLSpanElement;
 export const logsConsole = document.getElementById("logs-console") as HTMLPreElement;
@@ -82,5 +83,7 @@ export const statusDiv = document.getElementById("status") as HTMLDivElement;
 export const selectAllLinksCheckbox = document.getElementById("select-all-links") as HTMLInputElement;
 export const linkCountBadge = document.getElementById("link-count") as HTMLSpanElement;
 export const linkListEl = document.getElementById("link-list") as HTMLUListElement;
+export const browserAutomationCheckbox = document.getElementById("browser-automation-enabled") as HTMLInputElement;
+export const automationConcurrencyInput = document.getElementById("automation-concurrency") as HTMLInputElement;
 export const confirmLinksBtn = document.getElementById("confirm-links-btn") as HTMLButtonElement;
 export const cancelLinksBtn = document.getElementById("cancel-links-btn") as HTMLButtonElement;

@@ -32,6 +32,7 @@ from src.models.requirement import (
 )
 from src.models.ingestion import IngestionStage
 from src.scrapers.engine import AdmissionScraper
+from src.services import browser_provider as browser_provider_service
 from src.services.ingestion_pipeline import IngestionPipeline
 from src.storage.db_manager import DatabaseManager
 from src.storage.exporter import ExcelExporter
@@ -135,6 +136,13 @@ async def crawl_url(
     html_content: Optional[str] = None,
     selected_urls: Optional[list[str]] = None,
     selected_link_texts: Optional[dict[str, str]] = None,
+    browser_automation_enabled: bool = False,
+    detail_pages_batch: Optional[List[dict[str, Any]]] = None,
+    batch_index: Optional[int] = None,
+    batch_total: Optional[int] = None,
+    browser_provider: str = "auto",
+    client_id: Optional[str] = None,
+    strict_client: bool = False,
     taxonomy_enabled: Optional[bool] = None,
     taxonomy_low_threshold: Optional[float] = None,
     taxonomy_high_threshold: Optional[float] = None,
@@ -162,6 +170,13 @@ async def crawl_url(
         html_content: Pre-rendered HTML from browser (bypasses crawling).
         selected_urls: User-selected detail URLs (skips index analysis).
         selected_link_texts: Optional mapping of selected URL → anchor text.
+        browser_automation_enabled: Whether browser-tab automation is enabled for index flow.
+        detail_pages_batch: Browser-collected detail HTML batch payload.
+        batch_index: 1-based batch index for current submission.
+        batch_total: Total number of batches for current submission.
+        browser_provider: Browser HTML provider strategy: auto/server/client.
+        client_id: Optional target connected client id.
+        strict_client: Whether to fail instead of fallback when client flow is unavailable.
         taxonomy_enabled: Optional per-request taxonomy toggle.
         taxonomy_low_threshold: Optional hint injection score threshold.
         taxonomy_high_threshold: Optional override score threshold.
@@ -171,6 +186,24 @@ async def crawl_url(
     Returns:
         CrawlResult with the number of programs imported.
     """
+    resolved_browser_inputs = await browser_provider_service.resolve_browser_inputs(
+        url=url,
+        page_type_hint=page_type_hint,
+        html_content=html_content,
+        detail_pages_batch=detail_pages_batch,
+        browser_provider=browser_provider,
+        client_id=client_id,
+        strict_client=strict_client,
+    )
+    if "html_content" in resolved_browser_inputs:
+        html_content = resolved_browser_inputs.get("html_content")
+    if "detail_pages_batch" in resolved_browser_inputs:
+        detail_pages_batch = resolved_browser_inputs.get("detail_pages_batch")
+    if "selected_urls" in resolved_browser_inputs:
+        selected_urls = resolved_browser_inputs.get("selected_urls")
+    if "selected_link_texts" in resolved_browser_inputs:
+        selected_link_texts = resolved_browser_inputs.get("selected_link_texts")
+
     pipeline = IngestionPipeline()
     result = await pipeline.run_new_job(
         url=url,
@@ -183,6 +216,10 @@ async def crawl_url(
         html_content=html_content,
         selected_urls=selected_urls,
         selected_link_texts=selected_link_texts,
+        browser_automation_enabled=browser_automation_enabled,
+        detail_pages_batch=detail_pages_batch,
+        batch_index=batch_index,
+        batch_total=batch_total,
         taxonomy_enabled=taxonomy_enabled,
         taxonomy_low_threshold=taxonomy_low_threshold,
         taxonomy_high_threshold=taxonomy_high_threshold,

@@ -18,11 +18,11 @@ import logging
 import shutil
 import threading
 from pathlib import Path
-from typing import List, Optional, Dict
+from typing import List, Optional, Dict, Any
 from io import StringIO
 
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, HTTPException, Query, Body
+from fastapi import FastAPI, HTTPException, Query, Body, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import find_dotenv, dotenv_values
 
@@ -47,8 +47,11 @@ from src.api.schemas import (
     TestConnectionResponse,
     IngestionJobResponse,
     IngestionResumeRequest,
+    ClientInfoResponse,
 )
 from src.api.task_manager import TaskManager, TaskState
+from src.services import browser_provider as browser_provider_service
+from src.services.client_bridge import ClientRegistry, ClientSession, ClientRpcBroker
 from src.services.crawler import (
     CrawlResult,
     analyze_page,
@@ -267,6 +270,49 @@ app.add_middleware(
 )
 
 task_manager = TaskManager()
+client_registry = ClientRegistry()
+client_sockets: Dict[str, WebSocket] = {}
+client_rpc_broker = ClientRpcBroker(timeout_seconds=45.0)
+
+
+def _has_available_client(preferred_client_id: Optional[str]) -> bool:
+    return client_registry.select_client_id(preferred_client_id) is not None
+
+
+async def _fetch_browser_payload_from_client(
+    *,
+    url: str,
+    page_type_hint: str,
+    client_id: Optional[str],
+) -> Dict[str, Any]:
+    target_client_id = client_registry.select_client_id(client_id)
+    if not target_client_id:
+        raise RuntimeError("No available client for browser automation")
+
+    websocket = client_sockets.get(target_client_id)
+    if websocket is None:
+        raise RuntimeError(f"Client websocket unavailable: {target_client_id}")
+
+    request_id, _future = client_rpc_broker.create_pending(target_client_id)
+    await websocket.send_json(
+        {
+            "type": "rpc_request",
+            "request_id": request_id,
+            "action": "fetch_browser_payload",
+            "payload": {
+                "url": url,
+                "page_type_hint": page_type_hint,
+            },
+        }
+    )
+    payload = await client_rpc_broker.wait_for_response(request_id)
+    return dict(payload or {})
+
+
+browser_provider_service.configure_client_dispatchers(
+    availability_fn=_has_available_client,
+    fetch_fn=_fetch_browser_payload_from_client,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -459,6 +505,17 @@ async def api_crawl(body: CrawlRequest) -> CrawlResponse:
                     html_content=body.html_content,
                     selected_urls=body.selected_urls,
                     selected_link_texts=body.selected_link_texts,
+                    browser_automation_enabled=body.browser_automation_enabled,
+                    detail_pages_batch=(
+                        [item.model_dump() for item in body.detail_pages_batch]
+                        if body.detail_pages_batch
+                        else None
+                    ),
+                    batch_index=body.batch_index,
+                    batch_total=body.batch_total,
+                    browser_provider=body.browser_provider,
+                    client_id=body.client_id,
+                    strict_client=body.strict_client,
                     taxonomy_enabled=body.taxonomy_enabled,
                     taxonomy_low_threshold=body.taxonomy_low_threshold,
                     taxonomy_high_threshold=body.taxonomy_high_threshold,
@@ -521,6 +578,119 @@ async def api_task_status(task_id: str) -> TaskStatusResponse:
     if info is None:
         raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
     return TaskStatusResponse(**info.to_dict())
+
+
+@app.get("/clients", response_model=List[ClientInfoResponse])
+async def api_clients() -> List[ClientInfoResponse]:
+    """List connected browser-automation clients."""
+    rows = client_registry.list_clients()
+    return [ClientInfoResponse(**row) for row in rows]
+
+
+@app.websocket("/clients/ws")
+async def ws_clients(websocket: WebSocket) -> None:
+    """Client bridge websocket for register/heartbeat/rpc payload relay."""
+    await websocket.accept()
+    registered_client_id: Optional[str] = None
+    try:
+        while True:
+            message = await websocket.receive_json()
+            if not isinstance(message, dict):
+                await websocket.send_json({"type": "error", "message": "invalid payload"})
+                continue
+
+            msg_type = str(message.get("type") or "").strip().lower()
+            if msg_type == "register":
+                client_id = str(message.get("client_id") or "").strip()
+                if not client_id:
+                    await websocket.send_json(
+                        {"type": "error", "message": "client_id is required"}
+                    )
+                    continue
+
+                session = ClientSession(
+                    client_id=client_id,
+                    client_name=str(message.get("client_name") or client_id).strip(),
+                    platform=str(message.get("platform") or "").strip(),
+                    arch=str(message.get("arch") or "").strip(),
+                    workdir=str(message.get("workdir") or "").strip(),
+                    capabilities=dict(message.get("capabilities") or {}),
+                )
+                client_registry.register(session)
+                client_sockets[client_id] = websocket
+                registered_client_id = client_id
+                await websocket.send_json({"type": "registered", "client_id": client_id})
+                continue
+
+            if msg_type == "heartbeat":
+                target_client_id = str(
+                    message.get("client_id") or registered_client_id or ""
+                ).strip()
+                if not target_client_id:
+                    await websocket.send_json(
+                        {"type": "error", "message": "unknown client for heartbeat"}
+                    )
+                    continue
+                ok = client_registry.heartbeat(target_client_id)
+                if not ok:
+                    await websocket.send_json(
+                        {"type": "error", "message": "client not registered"}
+                    )
+                    continue
+                await websocket.send_json(
+                    {"type": "heartbeat_ack", "client_id": target_client_id}
+                )
+                continue
+
+            if msg_type == "rpc_result":
+                request_id = str(message.get("request_id") or "").strip()
+                payload = message.get("payload")
+                payload_dict = payload if isinstance(payload, dict) else {}
+                accepted = False
+                if request_id:
+                    accepted = client_rpc_broker.resolve(request_id, payload_dict)
+                await websocket.send_json(
+                    {
+                        "type": "rpc_ack",
+                        "request_id": request_id or None,
+                        "accepted": accepted,
+                    }
+                )
+                continue
+
+            if msg_type == "rpc_error":
+                request_id = str(message.get("request_id") or "").strip()
+                error_msg = str(message.get("message") or "client rpc error")
+                accepted = False
+                if request_id:
+                    accepted = client_rpc_broker.fail(request_id, error_msg)
+                await websocket.send_json(
+                    {
+                        "type": "rpc_ack",
+                        "request_id": request_id or None,
+                        "accepted": accepted,
+                    }
+                )
+                continue
+
+            await websocket.send_json(
+                {
+                    "type": "error",
+                    "message": f"unsupported message type: {msg_type or '<empty>'}",
+                }
+            )
+    except WebSocketDisconnect:
+        logger.info("Client websocket disconnected: %s", registered_client_id or "unknown")
+    finally:
+        if registered_client_id:
+            current = client_sockets.get(registered_client_id)
+            if current is websocket:
+                client_sockets.pop(registered_client_id, None)
+            client_rpc_broker.fail_all_for_client(
+                registered_client_id,
+                "Client disconnected",
+            )
+            client_registry.remove(registered_client_id)
 
 
 @app.get("/ingestion/jobs", response_model=List[IngestionJobResponse])
@@ -848,6 +1018,9 @@ try:
         univ_slug: str,
         year: int,
         continue_depth: int = 0,
+        browser_provider: str = "auto",
+        client_id: Optional[str] = None,
+        strict_client: bool = False,
     ) -> dict:
         """Crawl a university admission page and import structured data.
 
@@ -873,6 +1046,9 @@ try:
             univ_slug=univ_slug,
             year=year,
             continue_depth=continue_depth,
+            browser_provider=browser_provider,
+            client_id=client_id,
+            strict_client=strict_client,
         )
         return result.model_dump()
 

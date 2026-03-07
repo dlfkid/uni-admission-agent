@@ -1,0 +1,24 @@
+from src.client.bootstrap_prompt import build_bootstrap_prompt
+
+
+def test_bootstrap_prompt_supports_openclaw_target() -> None:
+    prompt = build_bootstrap_prompt(
+        target="openclaw",
+        host="127.0.0.1",
+        port=8910,
+    )
+    assert "OpenClaw" in prompt
+    assert "adm-agent-client init" in prompt
+    assert "adm-agent-client start" in prompt
+
+
+def test_bootstrap_prompt_falls_back_to_generic_template() -> None:
+    prompt = build_bootstrap_prompt(
+        target="unknown",
+        host="10.0.0.12",
+        port=9100,
+    )
+    assert "10.0.0.12" in prompt
+    assert "9100" in prompt
+    assert "adm-agent-client status" in prompt
+

@@ -52,6 +52,7 @@ SCRIPTS_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = SCRIPTS_DIR.parent
 EXTENSION_DIR = PROJECT_ROOT / "extension"
 SPEC_FILE = PROJECT_ROOT / "adm-agent.spec"
+CLIENT_SPEC_FILE = PROJECT_ROOT / "adm-agent-client.spec"
 PYPROJECT_FILE = PROJECT_ROOT / "pyproject.toml"
 
 # Intermediate build dirs
@@ -62,6 +63,7 @@ PI_BUILD = PROJECT_ROOT / "build"
 RELEASE_ROOT = PROJECT_ROOT / "dist" / "release"
 
 ENGINE_NAME = "adm-agent"
+CLIENT_NAME = "adm-agent-client"
 
 
 # ---------------------------------------------------------------------------
@@ -381,6 +383,37 @@ def build_engine(version: str) -> Path:
     return engine_dir
 
 
+def build_client(version: str) -> Path:
+    """Run PyInstaller for adm-agent-client."""
+    logger.info("⚙️  Building Client Engine via PyInstaller …")
+
+    original_init = _inject_version(version)
+    try:
+        cmd = [
+            sys.executable,
+            "-m",
+            "PyInstaller",
+            str(CLIENT_SPEC_FILE),
+            "--noconfirm",
+            "--clean",
+            "--distpath",
+            str(PI_DIST),
+            "--workpath",
+            str(PI_BUILD),
+        ]
+        _run(cmd, cwd=PROJECT_ROOT, label="pyinstaller-client")
+    finally:
+        _restore_version(original_init)
+
+    client_dir = PI_DIST / CLIENT_NAME
+    if not client_dir.exists():
+        raise FileNotFoundError(f"PyInstaller output not found: {client_dir}")
+
+    codesign_macos(client_dir)
+    logger.info("  ✅ Client built: %s", client_dir)
+    return client_dir
+
+
 def _write_readme(dest: Path, exe_name: str) -> None:
     """Generate a minimal plain-text quick-start guide."""
     content = textwrap.dedent(f"""\
@@ -561,6 +594,47 @@ def package_backend_release(
     return final_file
 
 
+def package_client_release(
+    client_dir: Path, version: str, os_name: str, arch_name: str
+) -> Path:
+    """Create a client-only release artifact."""
+    logger.info("📦 Packaging client release …")
+
+    base_name = f"{CLIENT_NAME}-{version}-{os_name}-{arch_name}"
+    staging_dir = PI_DIST / base_name
+    if staging_dir.exists():
+        shutil.rmtree(staging_dir)
+    staging_dir.mkdir()
+
+    shutil.copytree(client_dir, staging_dir, dirs_exist_ok=True)
+    exe_name = f"{CLIENT_NAME}.exe" if os_name == "windows" else f"./{CLIENT_NAME}"
+    _write_client_readme(staging_dir, exe_name)
+
+    if os_name == "windows":
+        final_file = RELEASE_ROOT / f"{base_name}.zip"
+        shutil.make_archive(
+            str(RELEASE_ROOT / base_name),
+            "zip",
+            root_dir=PI_DIST,
+            base_dir=base_name,
+        )
+    else:
+        final_file = RELEASE_ROOT / f"{base_name}.tar.gz"
+        with tarfile.open(final_file, "w:gz", format=tarfile.GNU_FORMAT) as tar:
+            for entry_path in sorted(staging_dir.rglob("*")):
+                arcname = str(Path(base_name) / entry_path.relative_to(staging_dir))
+                info = tar.gettarinfo(str(entry_path), arcname=arcname)
+                info.pax_headers = {}
+                if entry_path.is_file():
+                    with open(entry_path, "rb") as fh:
+                        tar.addfile(info, fh)
+                else:
+                    tar.addfile(info)
+
+    logger.info("  ✅ Created client artifact: %s", final_file)
+    return final_file
+
+
 def _write_backend_readme(dest: Path, exe_name: str) -> None:
     """Generate a backend-only README with extension download instructions."""
     content = textwrap.dedent(f"""\
@@ -602,19 +676,64 @@ def _write_backend_readme(dest: Path, exe_name: str) -> None:
     (dest / "README.txt").write_text(content, encoding="utf-8")
 
 
+def _write_client_readme(dest: Path, exe_name: str) -> None:
+    """Generate a client-only README."""
+    content = textwrap.dedent(f"""\
+    ╔══════════════════════════════════════════════════════════════╗
+    ║               UniAdmission Agent Client  —  Quick Start     ║
+    ╚══════════════════════════════════════════════════════════════╝
+
+    1. PURPOSE
+    ──────────
+    • Connect this machine to an adm-agent serve instance.
+    • Provide browser automation capability to remote/local crawl requests.
+
+    2. macOS USERS — REMOVE QUARANTINE
+    ──────────────────────────────────
+    macOS may block the app because it was downloaded from the internet.
+    Run this ONCE after extracting:
+
+        xattr -cr .                       (inside this folder)
+
+    3. FIRST TIME SETUP
+    ───────────────────
+    • Initialize:
+        {exe_name} init
+    • Verify:
+        {exe_name} status
+
+    4. START
+    ────────
+    • Start client runtime:
+        {exe_name} start
+    """)
+    (dest / "README.txt").write_text(content, encoding="utf-8")
+
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
 
-def main() -> None:
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    """Parse build script arguments."""
     parser = argparse.ArgumentParser(description="UniAdmission Agent Build Script")
     parser.add_argument("--skip-extension", action="store_true", help="Skip extension build")
+    parser.add_argument("--skip-client-build", action="store_true", help="Skip client build")
     parser.add_argument("--skip-frontend-build", action="store_true", help="Use existing extension zip")
     parser.add_argument("--extension-only", action="store_true", help="Build only Chrome extension")
     parser.add_argument("--backend-only", action="store_true", help="Build only backend executable")
-    parser.add_argument("--separate-artifacts", action="store_true", help="Create separate extension and backend artifacts")
-    args = parser.parse_args()
+    parser.add_argument("--client-only", action="store_true", help="Build only client executable")
+    parser.add_argument(
+        "--separate-artifacts",
+        action="store_true",
+        help="Create separate extension/backend/client artifacts",
+    )
+    return parser.parse_args(argv)
+
+
+def main() -> None:
+    args = parse_args()
 
     try:
         # 1. Detect Environment
@@ -642,7 +761,15 @@ def main() -> None:
             logger.info("✅ Backend build completed")
             return
 
-        # 4. Separate artifacts mode
+        # 4. Client-only build
+        if args.client_only:
+            logger.info("🧩 Building Client only")
+            client_dir = build_client(version)
+            package_client_release(client_dir, version, os_name, arch)
+            logger.info("✅ Client build completed")
+            return
+
+        # 5. Separate artifacts mode
         if args.separate_artifacts:
             logger.info("📦 Building separate artifacts")
             
@@ -666,10 +793,15 @@ def main() -> None:
             # Build backend
             engine_dir = build_engine(version)
             package_backend_release(engine_dir, version, os_name, arch)
+
+            # Build client
+            if not args.skip_client_build:
+                client_dir = build_client(version)
+                package_client_release(client_dir, version, os_name, arch)
             logger.info("✅ Separate artifacts build completed")
             return
 
-        # 5. Legacy combined build (default)
+        # 6. Legacy combined build (default)
         logger.info("📦 Building combined artifacts (legacy mode)")
         # Extension
         extension_zip: Path | None = None

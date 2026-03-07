@@ -198,6 +198,10 @@ class IngestionPipeline:
         html_content: Optional[str] = None,
         selected_urls: Optional[List[str]] = None,
         selected_link_texts: Optional[Dict[str, str]] = None,
+        browser_automation_enabled: bool = False,
+        detail_pages_batch: Optional[List[Dict[str, Any]]] = None,
+        batch_index: Optional[int] = None,
+        batch_total: Optional[int] = None,
         taxonomy_enabled: Optional[bool] = None,
         taxonomy_low_threshold: Optional[float] = None,
         taxonomy_high_threshold: Optional[float] = None,
@@ -216,6 +220,10 @@ class IngestionPipeline:
             "html_content": html_content,
             "selected_urls": selected_urls or [],
             "selected_link_texts": dict(selected_link_texts or {}),
+            "browser_automation_enabled": bool(browser_automation_enabled),
+            "detail_pages_batch": list(detail_pages_batch or []),
+            "batch_index": batch_index,
+            "batch_total": batch_total,
             "taxonomy_enabled": taxonomy_enabled,
             "taxonomy_low_threshold": taxonomy_low_threshold,
             "taxonomy_high_threshold": taxonomy_high_threshold,
@@ -580,6 +588,11 @@ class IngestionPipeline:
 
         continue_depth = max(0, int(request_payload.get("continue_depth") or 0))
         selected_urls = [u for u in (request_payload.get("selected_urls") or []) if u]
+        detail_pages_batch = [
+            item
+            for item in (request_payload.get("detail_pages_batch") or [])
+            if isinstance(item, dict)
+        ]
         selected_link_texts = {
             str(url).strip(): str(text).strip()
             for url, text in dict(request_payload.get("selected_link_texts") or {}).items()
@@ -587,6 +600,17 @@ class IngestionPipeline:
         }
         html_content = request_payload.get("html_content")
         page_type_hint = str(request_payload.get("page_type_hint") or "auto")
+        raw_batch_index = request_payload.get("batch_index")
+        raw_batch_total = request_payload.get("batch_total")
+
+        try:
+            batch_index = int(raw_batch_index) if raw_batch_index is not None else None
+        except (TypeError, ValueError):
+            batch_index = None
+        try:
+            batch_total = int(raw_batch_total) if raw_batch_total is not None else None
+        except (TypeError, ValueError):
+            batch_total = None
 
         fetched_pages: List[Dict[str, Any]] = []
         failed_urls: List[str] = []
@@ -597,13 +621,68 @@ class IngestionPipeline:
         scout_candidates: List[CrawlPageResult] = []
         scout_candidate_depth = 0
 
-        self._emit_event(
-            event_callback,
+        def _with_batch_meta(
+            payload: Dict[str, Any],
+            *,
+            source: Optional[str] = None,
+        ) -> Dict[str, Any]:
+            event_payload = dict(payload)
+            if source and not event_payload.get("source"):
+                event_payload["source"] = source
+            if batch_index is not None:
+                event_payload["batch_index"] = batch_index
+            if batch_total is not None:
+                event_payload["batch_total"] = batch_total
+            return event_payload
+
+        def _emit_fetch_event(
+            event_type: str,
+            payload: Dict[str, Any],
+            *,
+            source: Optional[str] = None,
+        ) -> None:
+            self._emit_event(
+                event_callback,
+                event_type,
+                _with_batch_meta(payload, source=source),
+            )
+
+        def _build_fetch_result() -> Dict[str, Any]:
+            source_content_hash = _hash_payload(
+                [
+                    {
+                        "url": row.get("url"),
+                        "markdown_hash": _hash_payload(row.get("markdown") or ""),
+                        "html_hash": _hash_payload(row.get("html") or ""),
+                    }
+                    for row in fetched_pages
+                ]
+            )
+            serialized_scout_links = [
+                {
+                    "url": str(getattr(link, "url", "") or ""),
+                    "reason": str(getattr(link, "reason", "") or ""),
+                    "confidence": str(getattr(link, "confidence", "") or ""),
+                }
+                for link in all_scouted_links
+            ]
+
+            return {
+                "raw_pages": fetched_pages,
+                "raw_page_count": len(fetched_pages),
+                "failed_urls": sorted(set(failed_urls)),
+                "scouted_links": serialized_scout_links,
+                "scout_call_count": scout_call_count,
+                "source_content_hash": source_content_hash,
+            }
+
+        _emit_fetch_event(
             "fetch_phase",
             {
                 "stage": IngestionStage.FETCH_RAW.value,
                 "message": "fetch_raw: preparing crawl inputs",
             },
+            source="browser_automation" if detail_pages_batch else None,
         )
 
         def _append_pages(
@@ -624,35 +703,125 @@ class IngestionPipeline:
             for page in pages:
                 visited_urls.add(page.url)
 
-        if selected_urls:
-            crawl_urls = self._dedupe_urls(selected_urls, visited_urls)
-            self._emit_event(
-                event_callback,
+        if detail_pages_batch:
+            _emit_fetch_event(
                 "fetch_candidates_identified",
                 {
                     "stage": IngestionStage.FETCH_RAW.value,
-                    "source": "selected_urls",
+                    "total_candidates": len(detail_pages_batch),
+                },
+                source="browser_automation",
+            )
+            browser_pages: List[CrawlPageResult] = []
+            total = len(detail_pages_batch)
+            for idx, item in enumerate(detail_pages_batch, start=1):
+                detail_url = str(item.get("url") or "").strip()
+                html_value = item.get("html_content")
+                html_text = str(html_value or "")
+                anchor_text = str(item.get("selected_anchor_text") or "").strip()
+                if detail_url and anchor_text:
+                    selected_link_texts[detail_url] = anchor_text
+
+                _emit_fetch_event(
+                    "fetch_url_progress",
+                    {
+                        "stage": IngestionStage.FETCH_RAW.value,
+                        "phase": "browser_automation_batch",
+                        "status": "started",
+                        "current": idx,
+                        "total": total,
+                        "url": detail_url,
+                    },
+                    source="browser_automation",
+                )
+
+                if not detail_url or not html_text:
+                    if detail_url:
+                        failed_urls.append(detail_url)
+                    _emit_fetch_event(
+                        "fetch_url_progress",
+                        {
+                            "stage": IngestionStage.FETCH_RAW.value,
+                            "phase": "browser_automation_batch",
+                            "status": "failed",
+                            "current": idx,
+                            "total": total,
+                            "url": detail_url,
+                        },
+                        source="browser_automation",
+                    )
+                    continue
+
+                try:
+                    browser_page = scraper._create_result_from_browser_html(detail_url, html_text)
+                except Exception:
+                    logger.exception(
+                        "Failed creating browser HTML result for %s",
+                        detail_url,
+                    )
+                    failed_urls.append(detail_url)
+                    _emit_fetch_event(
+                        "fetch_url_progress",
+                        {
+                            "stage": IngestionStage.FETCH_RAW.value,
+                            "phase": "browser_automation_batch",
+                            "status": "failed",
+                            "current": idx,
+                            "total": total,
+                            "url": detail_url,
+                        },
+                        source="browser_automation",
+                    )
+                    continue
+
+                browser_pages.append(browser_page)
+                _emit_fetch_event(
+                    "fetch_url_progress",
+                    {
+                        "stage": IngestionStage.FETCH_RAW.value,
+                        "phase": "browser_automation_batch",
+                        "status": "succeeded",
+                        "current": idx,
+                        "total": total,
+                        "url": detail_url,
+                    },
+                    source="browser_automation",
+                )
+
+            _append_pages(browser_pages, depth=0, from_browser=True)
+            return _build_fetch_result()
+
+        if selected_urls:
+            crawl_urls = self._dedupe_urls(selected_urls, visited_urls)
+            _emit_fetch_event(
+                "fetch_candidates_identified",
+                {
+                    "stage": IngestionStage.FETCH_RAW.value,
                     "total_candidates": len(crawl_urls),
                 },
+                source="selected_urls",
             )
             pages, batch_failed = await self._crawl_urls_with_failures(
                 scraper,
                 crawl_urls,
                 event_callback=event_callback,
                 phase="selected_urls",
+                source="selected_urls",
+                batch_index=batch_index,
+                batch_total=batch_total,
             )
             _append_pages(pages, depth=0, from_browser=False)
             failed_urls.extend(batch_failed)
             scout_candidates = pages
             scout_candidate_depth = 0
         elif html_content:
-            self._emit_event(
-                event_callback,
+            _emit_fetch_event(
                 "fetch_phase",
                 {
                     "stage": IngestionStage.FETCH_RAW.value,
                     "message": "fetch_raw: analyzing browser-provided HTML",
                 },
+                source="browser_html",
             )
             probe = scraper._create_result_from_browser_html(url, html_content)
             visited_urls.add(probe.url)
@@ -662,25 +831,24 @@ class IngestionPipeline:
                 scout_candidates = [probe]
                 scout_candidate_depth = 0
             else:
-                self._emit_event(
-                    event_callback,
+                _emit_fetch_event(
                     "fetch_phase",
                     {
                         "stage": IngestionStage.FETCH_RAW.value,
                         "message": "fetch_raw: selecting detail links from index page",
                     },
+                    source="index_probe",
                 )
                 detail_urls, detail_link_texts = await self._select_detail_urls(scraper, probe)
                 selected_link_texts.update(detail_link_texts)
                 crawl_urls = self._dedupe_urls(detail_urls, visited_urls)
-                self._emit_event(
-                    event_callback,
+                _emit_fetch_event(
                     "fetch_candidates_identified",
                     {
                         "stage": IngestionStage.FETCH_RAW.value,
-                        "source": "index_probe",
                         "total_candidates": len(crawl_urls),
                     },
+                    source="index_probe",
                 )
                 if not crawl_urls:
                     _append_pages([probe], depth=0, from_browser=True)
@@ -692,19 +860,22 @@ class IngestionPipeline:
                         crawl_urls,
                         event_callback=event_callback,
                         phase="index_detail_links",
+                        source="index_probe",
+                        batch_index=batch_index,
+                        batch_total=batch_total,
                     )
                     _append_pages(pages, depth=1, from_browser=False)
                     failed_urls.extend(batch_failed)
                     scout_candidates = pages
                     scout_candidate_depth = 1
         else:
-            self._emit_event(
-                event_callback,
+            _emit_fetch_event(
                 "fetch_phase",
                 {
                     "stage": IngestionStage.FETCH_RAW.value,
                     "message": "fetch_raw: crawling entry page",
                 },
+                source="entry_page",
             )
             seed_page = await scraper.crawl_page(url)
             visited_urls.add(seed_page.url)
@@ -713,25 +884,24 @@ class IngestionPipeline:
                 is_index = scraper._determine_page_type(seed_page, "auto")
 
             if is_index:
-                self._emit_event(
-                    event_callback,
+                _emit_fetch_event(
                     "fetch_phase",
                     {
                         "stage": IngestionStage.FETCH_RAW.value,
                         "message": "fetch_raw: selecting detail links from entry index",
                     },
+                    source="entry_index",
                 )
                 detail_urls, detail_link_texts = await self._select_detail_urls(scraper, seed_page)
                 selected_link_texts.update(detail_link_texts)
                 crawl_urls = self._dedupe_urls(detail_urls, visited_urls)
-                self._emit_event(
-                    event_callback,
+                _emit_fetch_event(
                     "fetch_candidates_identified",
                     {
                         "stage": IngestionStage.FETCH_RAW.value,
-                        "source": "entry_index",
                         "total_candidates": len(crawl_urls),
                     },
+                    source="entry_index",
                 )
                 if crawl_urls:
                     pages, batch_failed = await self._crawl_urls_with_failures(
@@ -739,6 +909,9 @@ class IngestionPipeline:
                         crawl_urls,
                         event_callback=event_callback,
                         phase="index_detail_links",
+                        source="entry_index",
+                        batch_index=batch_index,
+                        batch_total=batch_total,
                     )
                     _append_pages(pages, depth=1, from_browser=False)
                     failed_urls.extend(batch_failed)
@@ -771,53 +944,29 @@ class IngestionPipeline:
                 break
 
             next_depth = scout_candidate_depth + 1
-            self._emit_event(
-                event_callback,
+            _emit_fetch_event(
                 "fetch_candidates_identified",
                 {
                     "stage": IngestionStage.FETCH_RAW.value,
-                    "source": f"continue_depth_{next_depth}",
                     "total_candidates": len(crawl_urls),
                 },
+                source=f"continue_depth_{next_depth}",
             )
             pages, batch_failed = await self._crawl_urls_with_failures(
                 scraper,
                 crawl_urls,
                 event_callback=event_callback,
                 phase=f"continue_depth_{next_depth}",
+                source=f"continue_depth_{next_depth}",
+                batch_index=batch_index,
+                batch_total=batch_total,
             )
             _append_pages(pages, depth=next_depth, from_browser=False)
             failed_urls.extend(batch_failed)
             scout_candidates = pages
             scout_candidate_depth = next_depth
 
-        source_content_hash = _hash_payload(
-            [
-                {
-                    "url": row.get("url"),
-                    "markdown_hash": _hash_payload(row.get("markdown") or ""),
-                    "html_hash": _hash_payload(row.get("html") or ""),
-                }
-                for row in fetched_pages
-            ]
-        )
-        serialized_scout_links = [
-            {
-                "url": str(getattr(link, "url", "") or ""),
-                "reason": str(getattr(link, "reason", "") or ""),
-                "confidence": str(getattr(link, "confidence", "") or ""),
-            }
-            for link in all_scouted_links
-        ]
-
-        return {
-            "raw_pages": fetched_pages,
-            "raw_page_count": len(fetched_pages),
-            "failed_urls": sorted(set(failed_urls)),
-            "scouted_links": serialized_scout_links,
-            "scout_call_count": scout_call_count,
-            "source_content_hash": source_content_hash,
-        }
+        return _build_fetch_result()
 
     def _stage_extract_structured(
         self,
@@ -1237,6 +1386,9 @@ class IngestionPipeline:
         *,
         event_callback: Optional[IngestionEventCallback] = None,
         phase: str = "detail_links",
+        source: Optional[str] = None,
+        batch_index: Optional[int] = None,
+        batch_total: Optional[int] = None,
     ) -> tuple[List[CrawlPageResult], List[str]]:
         """Crawl URLs and infer failures from missing success rows."""
         if not urls:
@@ -1245,50 +1397,38 @@ class IngestionPipeline:
         pages: List[CrawlPageResult] = []
         failed_urls: List[str] = []
 
-        for idx, url in enumerate(urls, start=1):
+        def _emit_progress(status: str, current: int, url: str) -> None:
+            payload: Dict[str, Any] = {
+                "stage": IngestionStage.FETCH_RAW.value,
+                "phase": phase,
+                "status": status,
+                "current": current,
+                "total": total,
+                "url": url,
+            }
+            if source:
+                payload["source"] = source
+            if batch_index is not None:
+                payload["batch_index"] = batch_index
+            if batch_total is not None:
+                payload["batch_total"] = batch_total
             self._emit_event(
                 event_callback,
                 "fetch_url_progress",
-                {
-                    "stage": IngestionStage.FETCH_RAW.value,
-                    "phase": phase,
-                    "status": "started",
-                    "current": idx,
-                    "total": total,
-                    "url": url,
-                },
+                payload,
             )
+
+        for idx, url in enumerate(urls, start=1):
+            _emit_progress("started", idx, url)
             logger.info("[FetchRaw:%s] Crawling %d/%d: %s", phase, idx, total, url)
 
             crawled = await scraper._crawl_urls([url])
             if crawled:
                 pages.extend(crawled)
-                self._emit_event(
-                    event_callback,
-                    "fetch_url_progress",
-                    {
-                        "stage": IngestionStage.FETCH_RAW.value,
-                        "phase": phase,
-                        "status": "succeeded",
-                        "current": idx,
-                        "total": total,
-                        "url": url,
-                    },
-                )
+                _emit_progress("succeeded", idx, url)
             else:
                 failed_urls.append(url)
-                self._emit_event(
-                    event_callback,
-                    "fetch_url_progress",
-                    {
-                        "stage": IngestionStage.FETCH_RAW.value,
-                        "phase": phase,
-                        "status": "failed",
-                        "current": idx,
-                        "total": total,
-                        "url": url,
-                    },
-                )
+                _emit_progress("failed", idx, url)
 
         return pages, failed_urls
 

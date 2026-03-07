@@ -191,6 +191,94 @@ async def test_fetch_raw_uses_scout_when_continue_depth_enabled(monkeypatch) -> 
     assert depths == [0, 1]
 
 
+@pytest.mark.asyncio
+async def test_fetch_raw_uses_detail_pages_batch_without_network_fetch(monkeypatch) -> None:
+    created = {}
+    events = []
+
+    class FakeScraper:
+        def __init__(self) -> None:
+            self.router = MagicMock()
+            self._export_md = False
+            self._export_path = None
+            self.crawl_page_called = False
+            self.crawl_urls_called = False
+            created["instance"] = self
+
+        def _reset_session_state(self) -> None:
+            return
+
+        def _create_result_from_browser_html(self, url: str, html_content: str) -> CrawlPageResult:
+            return CrawlPageResult(
+                url=url,
+                markdown=html_content,
+                char_count=len(html_content),
+                links=[],
+                status_code=200,
+                html=html_content,
+            )
+
+        async def _crawl_urls(self, _urls):
+            self.crawl_urls_called = True
+            return []
+
+        async def crawl_page(self, url: str):
+            self.crawl_page_called = True
+            return CrawlPageResult(
+                url=url,
+                markdown="# seed",
+                char_count=6,
+                links=[],
+                status_code=200,
+                html="<html>seed</html>",
+            )
+
+    monkeypatch.setattr("src.services.ingestion_pipeline.AdmissionScraper", FakeScraper)
+
+    pipeline = IngestionPipeline(db_manager=MagicMock())
+    def capture_event(event_type, payload):
+        events.append((event_type, payload))
+
+    result = await pipeline._stage_fetch_raw(
+        {
+            "url": "https://index.example",
+            "page_type_hint": "index",
+            "selected_urls": [],
+            "batch_index": 1,
+            "batch_total": 2,
+            "detail_pages_batch": [
+                {
+                    "url": "https://detail.example/1",
+                    "html_content": "<html>one</html>",
+                    "selected_anchor_text": "Program One",
+                },
+                {
+                    "url": "https://detail.example/2",
+                    "html_content": "<html>two</html>",
+                },
+            ],
+        },
+        event_callback=capture_event,
+    )
+
+    scraper = created["instance"]
+    assert scraper.crawl_page_called is False
+    assert scraper.crawl_urls_called is False
+    assert result["raw_page_count"] == 2
+    assert [row["url"] for row in result["raw_pages"]] == [
+        "https://detail.example/1",
+        "https://detail.example/2",
+    ]
+    assert all(bool(row["from_browser"]) for row in result["raw_pages"])
+    assert result["raw_pages"][0]["selected_anchor_text"] == "Program One"
+    assert events
+    fetch_events = [payload for event, payload in events if event.startswith("fetch_")]
+    assert fetch_events
+    assert all(payload.get("batch_index") == 1 for payload in fetch_events)
+    assert all(payload.get("batch_total") == 2 for payload in fetch_events)
+    assert any(payload.get("source") == "browser_automation" for payload in fetch_events)
+
+
 def test_extract_structured_skips_antibot_pages_in_index_mode(monkeypatch) -> None:
     monkeypatch.setattr(
         "src.services.ingestion_pipeline.LLMCleanerAgent",
