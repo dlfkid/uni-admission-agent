@@ -1012,12 +1012,42 @@ async def api_test_connection(body: TestConnectionRequest) -> TestConnectionResp
 #  MCP tools (via FastMCP)
 # ---------------------------------------------------------------------------
 
+
+def _internal_llm_available() -> bool:
+    """Best-effort probe for server-side internal LLM availability."""
+    try:
+        from src.agents.factory import create_router
+
+        create_router()
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.info("Internal LLM unavailable: %s", exc)
+        return False
+    return True
+
+
+def _runtime_status_payload() -> dict[str, Any]:
+    client_rows = client_registry.list_clients()
+    client_ids = [
+        str(row.get("client_id") or "").strip()
+        for row in client_rows
+        if str(row.get("client_id") or "").strip()
+    ]
+    client_available = bool(client_ids)
+    return {
+        "client_available": client_available,
+        "client_count": len(client_ids),
+        "client_ids": client_ids,
+        "internal_llm_available": _internal_llm_available(),
+        "default_browser_provider_resolved": "client" if client_available else "server",
+    }
+
+
 try:
     from mcp.server.fastmcp import FastMCP
 
     mcp = FastMCP("UniAdmission Agent")
 
-    @mcp.tool()
+    @mcp.tool(name="analyze")
     async def mcp_analyze(
         url: str,
         page_type_hint: str = "auto",
@@ -1043,7 +1073,7 @@ try:
         )
         return dict(result)
 
-    @mcp.tool()
+    @mcp.tool(name="crawl_detail_batch")
     async def mcp_crawl_detail_batch(
         index_url: str,
         selected_urls: List[str],
@@ -1073,7 +1103,7 @@ try:
         )
         return dict(result)
 
-    @mcp.tool()
+    @mcp.tool(name="crawl")
     async def mcp_crawl(
         url: str,
         univ_slug: str,
@@ -1119,7 +1149,7 @@ try:
         )
         return result.model_dump()
 
-    @mcp.tool()
+    @mcp.tool(name="db_query")
     def mcp_db_query(
         univ_slug: str,
         year: Optional[int] = None,
@@ -1139,7 +1169,34 @@ try:
         programs = query_programs(univ_slug=univ_slug, year=year)
         return [p.model_dump() for p in programs]
 
-    @mcp.tool()
+    @mcp.tool(name="runtime_status")
+    def mcp_runtime_status() -> dict:
+        """Report runtime availability for clients and internal LLM."""
+        return _runtime_status_payload()
+
+    @mcp.tool(name="program_patch")
+    def mcp_program_patch(program_id: int, patch: Dict[str, Any]) -> dict:
+        """Patch a single program by ID (placeholder until full review workflow is enabled)."""
+        _ = program_id, patch
+        return {
+            "updated": False,
+            "error_code": "not_implemented",
+            "next_action_hint": "Use REST PATCH /programs/{program_id} for now.",
+        }
+
+    @mcp.tool(name="program_patch_batch")
+    def mcp_program_patch_batch(items: List[Dict[str, Any]]) -> dict:
+        """Patch multiple programs by ID (placeholder until full review workflow is enabled)."""
+        _ = items
+        return {
+            "updated_count": 0,
+            "failed_items": [],
+            "summary": "not_implemented",
+            "error_code": "not_implemented",
+            "next_action_hint": "Use REST PATCH /programs/{program_id} for now.",
+        }
+
+    @mcp.tool(name="help")
     def mcp_help(
         verbose: bool = False,
     ) -> dict:
@@ -1210,9 +1267,84 @@ repair:
             "description": "Automated university admission data scraper"
         }
 
+    if _internal_llm_available():
+        @mcp.tool(name="analyze_internal_llm")
+        async def mcp_analyze_internal_llm(
+            url: str,
+            page_type_hint: str = "auto",
+            browser_provider: str = "auto",
+            client_id: Optional[str] = None,
+            strict_client: bool = False,
+            html_content: Optional[str] = None,
+        ) -> dict:
+            """Analyze page using the explicit internal-LLM toolset path."""
+            return await mcp_analyze(
+                url=url,
+                page_type_hint=page_type_hint,
+                browser_provider=browser_provider,
+                client_id=client_id,
+                strict_client=strict_client,
+                html_content=html_content,
+            )
+
+        @mcp.tool(name="crawl_detail_batch_internal_llm")
+        async def mcp_crawl_detail_batch_internal_llm(
+            index_url: str,
+            selected_urls: List[str],
+            univ_slug: str,
+            year: int,
+            batch_size: int = 4,
+            client_id: Optional[str] = None,
+            strict_client: bool = True,
+            selected_link_texts: Optional[Dict[str, str]] = None,
+        ) -> dict:
+            """Batch detail crawl using explicit internal-LLM toolset path."""
+            return await mcp_crawl_detail_batch(
+                index_url=index_url,
+                selected_urls=selected_urls,
+                univ_slug=univ_slug,
+                year=year,
+                batch_size=batch_size,
+                client_id=client_id,
+                strict_client=strict_client,
+                selected_link_texts=selected_link_texts,
+            )
+
+        @mcp.tool(name="crawl_internal_llm")
+        async def mcp_crawl_internal_llm(
+            url: str,
+            univ_slug: str,
+            year: int,
+            continue_depth: int = 0,
+            browser_provider: str = "auto",
+            client_id: Optional[str] = None,
+            strict_client: bool = False,
+            candidate_taxonomy_filter_enabled: bool = False,
+            candidate_taxonomy_filter_threshold: float = 0.75,
+            candidate_taxonomy_filter_top_k: int = 30,
+        ) -> dict:
+            """Crawl using explicit internal-LLM toolset path."""
+            return await mcp_crawl(
+                url=url,
+                univ_slug=univ_slug,
+                year=year,
+                continue_depth=continue_depth,
+                browser_provider=browser_provider,
+                client_id=client_id,
+                strict_client=strict_client,
+                candidate_taxonomy_filter_enabled=candidate_taxonomy_filter_enabled,
+                candidate_taxonomy_filter_threshold=candidate_taxonomy_filter_threshold,
+                candidate_taxonomy_filter_top_k=candidate_taxonomy_filter_top_k,
+            )
+    else:
+        logger.info("MCP internal_llm tools not registered (internal LLM unavailable).")
+
     # Mount MCP as a sub-application at /mcp
     app.mount("/mcp", mcp.sse_app())
-    logger.info("MCP tools registered: analyze, crawl_detail_batch, crawl, db_query, help")
+    logger.info(
+        "MCP tools registered: analyze, crawl_detail_batch, crawl, db_query, "
+        "runtime_status, program_patch, program_patch_batch, help"
+    )
 
 except ImportError:
     logger.info("MCP SDK not installed — MCP tools disabled. Install with: uv add 'mcp[cli]'")
