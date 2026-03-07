@@ -2,6 +2,24 @@
 
 ## 2026-03-07
 
+### MCP Dual Toolset + Review Loop
+- Added dual MCP registration model:
+  - base toolset always registered (`analyze`, `crawl`, `crawl_detail_batch`, `db_query`, `runtime_status`, `program_patch`, `program_patch_batch`, `help`)
+  - `_internal_llm` toolset registered only when internal router is available.
+- Added `runtime_status` runtime introspection payload:
+  - `client_available`, `client_count`, `client_ids`, `internal_llm_available`, `default_browser_provider_resolved`.
+- Standardized provider metadata on MCP crawl/analyze responses:
+  - `resolved_browser_provider`
+  - `client_id_used`
+- Added index decision policy for MCP crawl:
+  - year gating (`requires_user_input`, `missing_fields=["year"]`)
+  - taxonomy keep threshold `0.75`
+  - taxonomy auto-run threshold `0.92`
+  - auto-run only when retained candidates `<= 10`, otherwise user review.
+- Added post-persist review payload and correction path:
+  - crawl result now includes `review_token` + ordered `review_items` with stable `program_id`
+  - added `program_patch` and `program_patch_batch` with partial-failure reporting (`updated_count`, `failed_items`, `summary`).
+
 ### Serve ↔ Client Browser Automation
 - Added `crawl` browser provider controls: `browser_provider`, `client_id`, `strict_client`.
 - Added serve-side client bridge:

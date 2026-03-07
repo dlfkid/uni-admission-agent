@@ -17,6 +17,9 @@ Build a trusted, self-updating database of university admission requirements.
 - **Resilient Pydantic validation** with field validators for LLM response edge cases
 - **Chrome Extension** with interactive control, real-time monitoring, and database preview
 - **Serve ↔ Client browser automation bridge** (`/clients/ws`) for MCP/REST-triggered user-side automation
+- **Dual MCP toolsets**: base tools (external-LLM friendly) + conditional `_internal_llm` tools
+- **Runtime-aware MCP metadata**: provider resolution + client selection visibility
+- **Post-persist review-and-patch loop** with stable `program_id` correction path
 - **Stand-alone Executable** build for easy distribution
 
 ---
@@ -143,6 +146,27 @@ Client dispatch flow:
 2. `browser_provider=auto|client` resolves through connected client when available
 3. Client executes external browser command (e.g. client), returns HTML/`detail_pages_batch`
 4. Existing ingestion pipeline consumes returned payload (no extension dependency required)
+
+### 3.8 MCP Dual Toolset + Decision Policy
+
+MCP now exposes two toolsets:
+- Base tools (always registered): `analyze`, `crawl`, `crawl_detail_batch`, `db_query`, `runtime_status`, `program_patch`, `program_patch_batch`, `help`
+- Internal LLM tools (conditional): `analyze_internal_llm`, `crawl_internal_llm`, `crawl_detail_batch_internal_llm`
+
+Runtime introspection:
+- `runtime_status` exposes `client_available`, `client_count`, `client_ids`, `internal_llm_available`, `default_browser_provider_resolved`
+- Crawl/analyze payloads include `resolved_browser_provider` and `client_id_used`
+
+Interactive decision policy for index pages:
+- Year is mandatory before crawl execution (`requires_user_input`, `missing_fields=["year"]`)
+- Taxonomy candidate keep threshold: `0.75`
+- Taxonomy auto-run threshold: `0.92`
+- Auto-run only when retained candidate count `<= 10`; otherwise require user review
+
+Review-and-correction loop:
+- Crawl responses include `review_token` and ordered `review_items` with stable `program_id`
+- User corrections are applied via `program_patch` / `program_patch_batch`
+- Batch patch returns partial failures without aborting successful updates
 
 ---
 
