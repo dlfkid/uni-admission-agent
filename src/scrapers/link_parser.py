@@ -9,7 +9,7 @@ Includes LLM-powered link filtering for index pages.
 import logging
 import re
 from typing import List, Tuple
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 
 from src.agents.factory import RouterAgent
 from src.models.scraper_models import FilteredLinks, PageType
@@ -19,6 +19,74 @@ logger = logging.getLogger(__name__)
 
 # Maximum number of link items to send to the LLM in one call
 _MAX_LINKS_FOR_LLM = 80
+
+_DEGREE_TEXT_PATTERN = re.compile(
+    r"\b("
+    r"msc|ma|mba|llm|mres|mphil|pgdip|pgcert|master|masters|programme|program"
+    r")\b",
+    re.IGNORECASE,
+)
+_COURSE_PATH_PATTERN = re.compile(
+    r"/(course|courses|programme|programmes?)/",
+    re.IGNORECASE,
+)
+_COURSE_DETAIL_PATTERN = re.compile(
+    r"/study/masters/courses/list/\d+/",
+    re.IGNORECASE,
+)
+_NAV_TEXT_PATTERN = re.compile(
+    r"\b("
+    r"home|about|contact|research|news|privacy|cookies|terms|support|menu|search|"
+    r"international|undergraduate|postgraduate"
+    r")\b",
+    re.IGNORECASE,
+)
+
+
+def _course_link_score(url: str, text: str, base_url: str) -> int:
+    """Score how likely a link points to a course detail page."""
+    score = 0
+    normalized_url = str(url or "").strip()
+    normalized_text = str(text or "").strip()
+    lower_url = normalized_url.lower()
+
+    if _COURSE_DETAIL_PATTERN.search(lower_url):
+        score += 8
+    elif _COURSE_PATH_PATTERN.search(lower_url):
+        score += 3
+
+    if _DEGREE_TEXT_PATTERN.search(normalized_text):
+        score += 4
+    if _NAV_TEXT_PATTERN.search(normalized_text):
+        score -= 4
+
+    try:
+        link_host = urlparse(normalized_url).netloc.lower()
+        base_host = urlparse(base_url).netloc.lower()
+        if link_host and base_host and link_host == base_host:
+            score += 1
+    except Exception:  # pragma: no cover - defensive
+        pass
+
+    return score
+
+
+def _prioritize_links_for_llm(
+    link_pairs: List[Tuple[str, str]],
+    base_url: str,
+) -> List[Tuple[str, str]]:
+    """Move likely course links earlier so truncation keeps useful candidates."""
+    scored = [
+        (_course_link_score(url, text, base_url), idx, (url, text))
+        for idx, (url, text) in enumerate(link_pairs)
+    ]
+    if not scored:
+        return []
+    if max(score for score, _, _ in scored) <= 0:
+        return link_pairs
+
+    scored.sort(key=lambda item: (-item[0], item[1]))
+    return [pair for _, _, pair in scored]
 
 
 def extract_links(markdown: str, base_url: str) -> List[str]:
@@ -157,7 +225,8 @@ def filter_links_by_llm(
         return []
 
     # Truncate if too many links
-    truncated = link_pairs[:_MAX_LINKS_FOR_LLM]
+    prioritized = _prioritize_links_for_llm(link_pairs, base_url)
+    truncated = prioritized[:_MAX_LINKS_FOR_LLM]
     if len(link_pairs) > _MAX_LINKS_FOR_LLM:
         logger.warning(
             "Truncated link list from %d to %d for LLM filtering",
@@ -195,6 +264,20 @@ def filter_links_by_llm(
         # Build url set from original pairs for validation
         valid_urls = {u for u, _ in truncated}
         filtered = [u for u in result.urls if u in valid_urls]
+
+        if not filtered:
+            heuristic_fallback = [
+                url
+                for url, text in truncated
+                if _course_link_score(url, text, base_url) > 0
+            ]
+            if heuristic_fallback:
+                logger.warning(
+                    "[LLM Filter] LLM returned empty list; "
+                    "using %d heuristic course-like links",
+                    len(heuristic_fallback),
+                )
+                return heuristic_fallback
 
         logger.info(
             "[LLM Filter] Selected %d/%d links as course detail pages",
