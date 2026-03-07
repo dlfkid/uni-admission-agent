@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass, field
 import threading
 import time
 from typing import Any, Optional
+import uuid
 
 
 @dataclass
@@ -98,3 +100,84 @@ def _supports_browser_automation(session: ClientSession) -> bool:
     capabilities = session.capabilities or {}
     return bool(capabilities.get("browser_automation"))
 
+
+class ClientUnavailableError(RuntimeError):
+    """Raised when client RPC cannot complete."""
+
+
+class ClientRpcBroker:
+    """Tracks pending client RPC requests and correlates async responses."""
+
+    def __init__(self, timeout_seconds: float = 30.0) -> None:
+        self.timeout_seconds = max(0.1, float(timeout_seconds))
+        self._lock = threading.RLock()
+        self._pending: dict[str, asyncio.Future] = {}
+        self._pending_client: dict[str, str] = {}
+
+    def create_pending(self, client_id: str) -> tuple[str, asyncio.Future]:
+        """Create a pending request future for one target client."""
+        loop = asyncio.get_running_loop()
+        future: asyncio.Future = loop.create_future()
+        request_id = uuid.uuid4().hex
+        with self._lock:
+            self._pending[request_id] = future
+            self._pending_client[request_id] = str(client_id or "").strip()
+        return request_id, future
+
+    async def wait_for_response(self, request_id: str) -> dict[str, Any]:
+        """Wait for one request response with timeout."""
+        with self._lock:
+            future = self._pending.get(request_id)
+        if not future:
+            raise ClientUnavailableError(f"request not pending: {request_id}")
+
+        try:
+            payload = await asyncio.wait_for(future, timeout=self.timeout_seconds)
+            return dict(payload or {})
+        except asyncio.TimeoutError as exc:
+            with self._lock:
+                self._pending.pop(request_id, None)
+                self._pending_client.pop(request_id, None)
+            if not future.done():
+                future.cancel()
+            raise ClientUnavailableError(f"request timed out: {request_id}") from exc
+        finally:
+            if future.done():
+                with self._lock:
+                    self._pending.pop(request_id, None)
+                    self._pending_client.pop(request_id, None)
+
+    def resolve(self, request_id: str, payload: dict[str, Any]) -> bool:
+        """Resolve one pending request."""
+        with self._lock:
+            future = self._pending.get(request_id)
+        if not future or future.done():
+            return False
+        future.set_result(dict(payload or {}))
+        return True
+
+    def fail(self, request_id: str, message: str) -> bool:
+        """Fail one pending request."""
+        with self._lock:
+            future = self._pending.get(request_id)
+        if not future or future.done():
+            return False
+        future.set_exception(ClientUnavailableError(str(message or "client rpc failed")))
+        return True
+
+    def fail_all_for_client(self, client_id: str, message: str) -> int:
+        """Fail all pending requests for a disconnected client."""
+        target = str(client_id or "").strip()
+        if not target:
+            return 0
+        with self._lock:
+            request_ids = [
+                req_id
+                for req_id, owner in self._pending_client.items()
+                if owner == target
+            ]
+        failed = 0
+        for req_id in request_ids:
+            if self.fail(req_id, message):
+                failed += 1
+        return failed
