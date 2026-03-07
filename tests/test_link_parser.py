@@ -52,3 +52,37 @@ def test_filter_links_by_llm_uses_course_like_fallback_when_llm_returns_empty() 
 
     assert filtered
     assert all("/study/masters/courses/list/" in item for item in filtered)
+
+
+def test_filter_links_by_llm_processes_all_links_in_batches() -> None:
+    all_links = [(f"https://example.com/p/{idx}", f"Link {idx}") for idx in range(170)]
+
+    class DummyRouter:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def generate(self, prompt, _schema):
+            self.calls += 1
+            urls = []
+            for line in prompt.splitlines():
+                if "](" not in line:
+                    continue
+                candidate = line.rsplit("](", 1)[-1].rstrip(")")
+                if candidate.startswith("http"):
+                    urls.append(candidate)
+            selected = urls[-1] if urls else ""
+            return SimpleNamespace(text=f'{{"urls": ["{selected}"]}}')
+
+    router = DummyRouter()
+    filtered = filter_links_by_llm(
+        router=router,
+        link_pairs=all_links,
+        base_url="https://example.com/list",
+    )
+
+    assert router.calls == 3
+    assert filtered == [
+        "https://example.com/p/79",
+        "https://example.com/p/159",
+        "https://example.com/p/169",
+    ]

@@ -467,6 +467,7 @@ The MCP server is mounted at `/mcp` and exposes two tools:
 - `candidate_taxonomy_filter_enabled`: apply taxonomy scoring to index/auto candidates
 - `candidate_taxonomy_filter_threshold`: minimum candidate taxonomy score (0~1)
 - `candidate_taxonomy_filter_top_k`: max candidates kept after taxonomy filtering
+- Index candidate filtering is batch-evaluated by LLM (80 links per call) without a global 80-link cap.
 
 ### `adm-agent-client` (Extension Optional)
 
