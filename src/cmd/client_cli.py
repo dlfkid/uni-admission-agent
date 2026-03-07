@@ -10,6 +10,7 @@ from pathlib import Path
 
 import typer
 
+from src.client.bootstrap_prompt import build_bootstrap_prompt
 from src.client.config import (
     ClientConfig,
     ensure_client_id,
@@ -100,6 +101,44 @@ def start(
         typer.echo("Stopped.")
 
 
+@app.command("bootstrap")
+def bootstrap(
+    target: str = typer.Option(
+        "generic",
+        "--target",
+        help="Prompt target: codex, claude, openclaw, generic",
+    ),
+    emit_prompt: bool = typer.Option(
+        False,
+        "--emit-prompt",
+        help="Emit prompt text for copy/paste into your LLM tool",
+    ),
+    host: str = typer.Option(
+        "",
+        "--host",
+        help="Override serve host in generated prompt",
+    ),
+    port: int = typer.Option(
+        0,
+        "--port",
+        help="Override serve port in generated prompt",
+    ),
+) -> None:
+    """Generate a setup prompt for external LLM tools."""
+    config = load_client_config()
+    resolved_host = str(host or (config.server_host if config else "127.0.0.1")).strip()
+    resolved_port = int(port or (config.server_port if config else 8910))
+    prompt = build_bootstrap_prompt(
+        target=target,
+        host=resolved_host,
+        port=resolved_port,
+    )
+    if emit_prompt:
+        typer.echo(prompt)
+        return
+    typer.echo("Use --emit-prompt to print full bootstrap prompt text.")
+    typer.echo(prompt)
+
+
 if __name__ == "__main__":
     app()
-
