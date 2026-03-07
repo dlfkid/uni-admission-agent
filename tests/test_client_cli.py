@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+import signal
 
 from typer.testing import CliRunner
 
@@ -68,3 +69,46 @@ def test_client_fetch_outputs_json(monkeypatch) -> None:
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
     assert payload["html_content"] == "<html></html>"
+
+
+def test_client_stop_reports_when_not_running(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    result = runner.invoke(app, ["stop"])
+    assert result.exit_code == 0
+    assert "No running client found" in result.stdout
+
+
+def test_client_stop_sends_sigterm_and_removes_pid_file(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    pid_file = tmp_path / ".adm-agent" / "client.pid"
+    pid_file.parent.mkdir(parents=True, exist_ok=True)
+    pid_file.write_text("43210", encoding="utf-8")
+
+    calls: list[tuple[int, int]] = []
+
+    def _fake_kill(pid: int, sig: int) -> None:
+        calls.append((pid, sig))
+
+    monkeypatch.setattr("src.cmd.client_cli.os.kill", _fake_kill)
+    result = runner.invoke(app, ["stop"])
+    assert result.exit_code == 0
+    assert calls == [(43210, 0), (43210, signal.SIGTERM)]
+    assert not pid_file.exists()
+
+
+def test_client_stop_force_sends_sigkill(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    pid_file = tmp_path / ".adm-agent" / "client.pid"
+    pid_file.parent.mkdir(parents=True, exist_ok=True)
+    pid_file.write_text("54321", encoding="utf-8")
+
+    calls: list[tuple[int, int]] = []
+
+    def _fake_kill(pid: int, sig: int) -> None:
+        calls.append((pid, sig))
+
+    monkeypatch.setattr("src.cmd.client_cli.os.kill", _fake_kill)
+    result = runner.invoke(app, ["stop", "--force"])
+    assert result.exit_code == 0
+    assert calls == [(54321, 0), (54321, signal.SIGKILL)]
+    assert not pid_file.exists()

@@ -5,8 +5,10 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import platform
 from pathlib import Path
+import signal
 
 import typer
 
@@ -14,6 +16,7 @@ from src.client.bootstrap_prompt import build_bootstrap_prompt
 from src.client.config import (
     ClientConfig,
     ensure_client_id,
+    get_client_home,
     load_client_config,
     save_client_config,
 )
@@ -31,6 +34,34 @@ app = typer.Typer(
 def _default_client_name() -> str:
     name = platform.node().strip()
     return name or "adm-agent-client"
+
+
+def _client_pid_path() -> Path:
+    return get_client_home() / "client.pid"
+
+
+def _write_client_pid_file() -> None:
+    pid_file = _client_pid_path()
+    pid_file.parent.mkdir(parents=True, exist_ok=True)
+    pid_file.write_text(str(os.getpid()), encoding="utf-8")
+
+
+def _read_client_pid_file() -> int | None:
+    pid_file = _client_pid_path()
+    if not pid_file.exists():
+        return None
+    try:
+        return int(pid_file.read_text(encoding="utf-8").strip())
+    except (ValueError, OSError):
+        return None
+
+
+def _remove_client_pid_file() -> None:
+    pid_file = _client_pid_path()
+    try:
+        pid_file.unlink(missing_ok=True)
+    except OSError:
+        pass
 
 
 @app.command()
@@ -91,10 +122,48 @@ def start(
         return
 
     typer.echo("Starting websocket runtime. Press Ctrl+C to stop.")
+    _write_client_pid_file()
     try:
         asyncio.run(runtime.run_forever())
     except KeyboardInterrupt:
         typer.echo("Stopped.")
+    finally:
+        _remove_client_pid_file()
+
+
+@app.command()
+def stop(
+    force: bool = typer.Option(
+        False,
+        "--force",
+        "-f",
+        help="Force kill (SIGKILL) when graceful stop fails",
+    ),
+) -> None:
+    """Stop a running client started by `adm-agent-client start --continuous`."""
+    pid = _read_client_pid_file()
+    pid_file = _client_pid_path()
+    if pid is None:
+        typer.echo("ℹ️  No running client found.")
+        typer.echo(f"   Checked: {pid_file} (not present)")
+        raise typer.Exit(code=0)
+
+    try:
+        os.kill(pid, 0)
+    except (ProcessLookupError, OSError):
+        typer.echo(f"ℹ️  Client process (PID {pid}) is not running. Removing stale PID file.")
+        _remove_client_pid_file()
+        raise typer.Exit(code=0)
+
+    sig = signal.SIGKILL if force else signal.SIGTERM
+    sig_name = "SIGKILL" if force else "SIGTERM"
+    try:
+        os.kill(pid, sig)
+        typer.echo(f"✅ {sig_name} sent to client (PID {pid}, found via PID file)")
+        _remove_client_pid_file()
+    except (ProcessLookupError, PermissionError, OSError) as exc:
+        typer.echo(f"❌ Failed to stop client (PID {pid}): {exc}", err=True)
+        raise typer.Exit(code=1)
 
 
 @app.command("bootstrap")

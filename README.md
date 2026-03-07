@@ -472,7 +472,13 @@ Use `adm-agent-client` to connect the user's machine to `serve` and execute brow
 uv run src/cmd/client_cli.py init
 uv run src/cmd/client_cli.py status
 uv run src/cmd/client_cli.py start --continuous
+uv run src/cmd/client_cli.py stop
 ```
+
+For non-developer users, command-line launch is recommended (double-clicking executables may close immediately with no visible logs).
+
+`start --continuous` writes PID file: `~/.adm-agent/client.pid`  
+`stop` reads that PID file and sends SIGTERM (or SIGKILL with `--force`).
 
 **Client bridge endpoint:**
 - WebSocket: `ws://<serve-host>:<serve-port>/clients/ws`
