@@ -12,6 +12,7 @@ Functions:
     get_db_status  — Return database statistics.
 """
 
+import asyncio
 import logging
 from typing import Any, Callable, Optional, List
 
@@ -123,6 +124,175 @@ def analyze_page(
     """
     scraper = AdmissionScraper()
     return scraper.analyze_page_links(url, html_content, page_type_hint)
+
+
+async def analyze_url_candidates(
+    *,
+    url: str,
+    page_type_hint: str = "auto",
+    html_content: Optional[str] = None,
+    browser_provider: str = "auto",
+    client_id: Optional[str] = None,
+    strict_client: bool = False,
+) -> dict[str, Any]:
+    """Analyze one URL and return detail-link candidates for interactive selection.
+
+    If ``html_content`` is missing, this function resolves browser inputs via the
+    configured browser provider (server/client/auto), then runs the normal
+    ``analyze_page`` logic.
+    """
+    source = "provided" if html_content else "unknown"
+    if not html_content:
+        resolved_browser_inputs = await browser_provider_service.resolve_browser_inputs(
+            url=url,
+            page_type_hint=page_type_hint,
+            html_content=None,
+            detail_pages_batch=None,
+            browser_provider=browser_provider,
+            client_id=client_id,
+            strict_client=strict_client,
+        )
+        resolved_html = resolved_browser_inputs.get("html_content")
+        html_content = str(resolved_html or "").strip() or None
+        if html_content:
+            source = "client"
+
+    if not html_content:
+        raise RuntimeError(
+            "No HTML content available for analyze. "
+            "Provide html_content or use browser_provider=client with an online client."
+        )
+
+    result = await asyncio.to_thread(analyze_page, url, html_content, page_type_hint)
+    payload = dict(result or {})
+    payload["html_source"] = source
+    return payload
+
+
+async def crawl_selected_detail_urls_via_client(
+    *,
+    index_url: str,
+    selected_urls: list[str],
+    univ_slug: str,
+    year: int,
+    batch_size: int = 4,
+    client_id: Optional[str] = None,
+    strict_client: bool = True,
+    selected_link_texts: Optional[dict[str, str]] = None,
+) -> dict[str, Any]:
+    """Fetch selected detail URLs via client browser automation, then crawl in batches."""
+    deduped_urls: list[str] = []
+    seen: set[str] = set()
+    for raw_url in selected_urls:
+        detail_url = str(raw_url or "").strip()
+        if not detail_url or detail_url in seen:
+            continue
+        seen.add(detail_url)
+        deduped_urls.append(detail_url)
+
+    if not deduped_urls:
+        return {
+            "imported_count": 0,
+            "total_selected": 0,
+            "batch_total": 0,
+            "failed_urls": [],
+            "job_ids": [],
+        }
+
+    bounded_batch_size = max(1, int(batch_size))
+    total_selected = len(deduped_urls)
+    batch_total = (total_selected + bounded_batch_size - 1) // bounded_batch_size
+    link_text_map = {
+        str(key).strip(): str(value).strip()
+        for key, value in dict(selected_link_texts or {}).items()
+        if str(key).strip() and str(value).strip()
+    }
+
+    total_imported = 0
+    failed_urls: list[str] = []
+    job_ids: list[str] = []
+    batch_results: list[dict[str, Any]] = []
+
+    for batch_index in range(batch_total):
+        start = batch_index * bounded_batch_size
+        end = min(start + bounded_batch_size, total_selected)
+        batch_urls = deduped_urls[start:end]
+
+        detail_pages_batch: list[dict[str, Any]] = []
+        for detail_url in batch_urls:
+            try:
+                browser_payload = await browser_provider_service.fetch_index_and_details_via_client(
+                    url=detail_url,
+                    page_type_hint="detail",
+                    client_id=client_id,
+                )
+            except Exception:
+                if strict_client:
+                    raise
+                failed_urls.append(detail_url)
+                continue
+
+            html_content = str(browser_payload.get("html_content") or "").strip()
+            if not html_content:
+                if strict_client:
+                    raise RuntimeError(f"Client returned empty html_content for detail url: {detail_url}")
+                failed_urls.append(detail_url)
+                continue
+
+            row: dict[str, Any] = {
+                "url": detail_url,
+                "html_content": html_content,
+            }
+            anchor_text = link_text_map.get(detail_url)
+            if anchor_text:
+                row["selected_anchor_text"] = anchor_text
+            detail_pages_batch.append(row)
+
+        if not detail_pages_batch:
+            batch_results.append(
+                {
+                    "batch_index": batch_index + 1,
+                    "imported_count": 0,
+                    "submitted": 0,
+                }
+            )
+            continue
+
+        batch_text_map = {
+            item["url"]: link_text_map[item["url"]]
+            for item in detail_pages_batch
+            if item["url"] in link_text_map
+        }
+        crawl_result = await crawl_url(
+            url=index_url,
+            univ_slug=univ_slug,
+            year=year,
+            page_type_hint="detail",
+            browser_provider="server",
+            detail_pages_batch=detail_pages_batch,
+            batch_index=batch_index + 1,
+            batch_total=batch_total,
+            selected_link_texts=batch_text_map,
+        )
+        total_imported += int(crawl_result.imported_count or 0)
+        if crawl_result.ingestion_job_id:
+            job_ids.append(str(crawl_result.ingestion_job_id))
+        batch_results.append(
+            {
+                "batch_index": batch_index + 1,
+                "imported_count": int(crawl_result.imported_count or 0),
+                "submitted": len(detail_pages_batch),
+            }
+        )
+
+    return {
+        "imported_count": total_imported,
+        "total_selected": total_selected,
+        "batch_total": batch_total,
+        "failed_urls": failed_urls,
+        "job_ids": job_ids,
+        "batches": batch_results,
+    }
 
 
 async def crawl_url(

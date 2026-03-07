@@ -456,7 +456,9 @@ curl -X POST http://localhost:8910/export \
 
 ### MCP Server
 
-The MCP server is mounted at `/mcp` and exposes two tools:
+The MCP server is mounted at `/mcp` and exposes:
+- **`analyze`** — Analyze entry page and return candidate detail links
+- **`crawl_detail_batch`** — Crawl user-selected detail links in batches via client browser automation
 - **`crawl`** — Crawl a URL and import admission data
 - **`db_query`** — Query programs from the database
 
@@ -468,6 +470,11 @@ The MCP server is mounted at `/mcp` and exposes two tools:
 - `candidate_taxonomy_filter_threshold`: minimum candidate taxonomy score (0~1)
 - `candidate_taxonomy_filter_top_k`: max candidates kept after taxonomy filtering
 - Index candidate filtering is batch-evaluated by LLM (80 links per call) without a global 80-link cap.
+
+Recommended MCP interactive flow for any MCP-capable app:
+1. Call `analyze` (`browser_provider=client`) on the index URL.
+2. Show returned candidate links to user for selection.
+3. Call `crawl_detail_batch` with selected URLs to execute batched detail crawling/import.
 
 ### `adm-agent-client` (Extension Optional)
 
