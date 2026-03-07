@@ -14,6 +14,7 @@ Functions:
 
 import asyncio
 import logging
+import uuid
 from typing import Any, Callable, Optional, List
 
 from pydantic import BaseModel, Field
@@ -64,6 +65,14 @@ class CrawlResult(BaseModel):
     client_id_used: Optional[str] = Field(
         default=None,
         description="Selected client id when browser provider resolves to client",
+    )
+    review_token: Optional[str] = Field(
+        default=None,
+        description="Token for follow-up review and correction operations",
+    )
+    review_items: List[dict[str, Any]] = Field(
+        default_factory=list,
+        description="Ordered persisted program records with stable program_id",
     )
 
 
@@ -433,6 +442,17 @@ async def crawl_url(
         event_callback=progress_callback,
     )
     imported = int(result.get("imported_count") or 0)
+    persisted_program_ids = [
+        int(item)
+        for item in (result.get("persisted_program_ids") or [])
+        if str(item).strip()
+    ]
+    review_items = _build_review_items(
+        univ_slug=univ_slug,
+        year=year,
+        persisted_program_ids=persisted_program_ids,
+    )
+    review_token = str(result.get("job_uid") or "").strip() or uuid.uuid4().hex
     logger.info(
         "Crawl complete (phase2 pipeline): %d programs imported, job=%s",
         imported,
@@ -445,6 +465,8 @@ async def crawl_url(
         ingestion_job_id=result.get("job_uid"),
         resolved_browser_provider=resolved_browser_provider,
         client_id_used=client_id_used,
+        review_token=review_token,
+        review_items=review_items,
     )
 
 
@@ -739,6 +761,53 @@ def query_programs(
             )
 
         return out
+
+
+def _build_review_items(
+    *,
+    univ_slug: str,
+    year: int,
+    persisted_program_ids: Optional[List[int]] = None,
+) -> List[dict[str, Any]]:
+    summaries = query_programs(univ_slug=univ_slug, year=year)
+    if not summaries:
+        return []
+
+    summary_by_id = {
+        int(item.id): item
+        for item in summaries
+        if item.id is not None
+    }
+    ordered_ids = [int(item) for item in (persisted_program_ids or []) if item is not None]
+
+    ordered_summaries: List[ProgramSummary] = []
+    seen: set[int] = set()
+    for program_id in ordered_ids:
+        summary = summary_by_id.get(program_id)
+        if summary is None or program_id in seen:
+            continue
+        ordered_summaries.append(summary)
+        seen.add(program_id)
+
+    if not ordered_summaries:
+        ordered_summaries = summaries
+
+    review_items: List[dict[str, Any]] = []
+    for index, summary in enumerate(ordered_summaries, start=1):
+        if summary.id is None:
+            continue
+        review_items.append(
+            {
+                "index": index,
+                "program_id": int(summary.id),
+                "name_en": summary.name_en,
+                "source_url": summary.source_url,
+                "faculty": summary.faculty,
+                "tuition_amount": summary.tuition_amount,
+                "currency": summary.currency,
+            }
+        )
+    return review_items
 
 
 def _program_to_summary(program: Program) -> ProgramSummary:

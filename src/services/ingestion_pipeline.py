@@ -357,6 +357,7 @@ class IngestionPipeline:
                 "imported_count": int(context.get("persisted_count") or 0),
                 "univ_slug": request_payload.get("univ_slug") or "",
                 "year": int(request_payload.get("year") or 0),
+                "persisted_program_ids": context.get("persisted_program_ids") or [],
                 "stage_trace": context.get("stage_trace") or [],
             }
 
@@ -414,6 +415,7 @@ class IngestionPipeline:
                 "imported_count": int(context.get("persisted_count") or 0),
                 "univ_slug": request_payload.get("univ_slug") or "",
                 "year": int(request_payload.get("year") or 0),
+                "persisted_program_ids": context.get("persisted_program_ids") or [],
                 "stage_trace": context.get("stage_trace") or [],
             }
         except StagePoisonedError as exc:
@@ -1268,12 +1270,15 @@ class IngestionPipeline:
         persisted_count = 0
         created_count = 0
         updated_count = 0
+        persisted_program_ids: List[int] = []
         failed_records: List[Dict[str, str]] = []
 
         for item in validated_programs:
             try:
-                _, created = self.db_manager.upsert_program(dict(item), univ_slug)
+                program, created = self.db_manager.upsert_program(dict(item), univ_slug)
                 persisted_count += 1
+                if program.id is not None:
+                    persisted_program_ids.append(int(program.id))
                 if created:
                     created_count += 1
                 else:
@@ -1297,11 +1302,13 @@ class IngestionPipeline:
             "persisted_count": persisted_count,
             "created_count": created_count,
             "updated_count": updated_count,
+            "persisted_program_ids": persisted_program_ids,
             "persisted_hash": _hash_payload(
                 {
                     "count": persisted_count,
                     "created": created_count,
                     "updated": updated_count,
+                    "program_ids": persisted_program_ids,
                     "validated_hash": context.get("validated_hash"),
                 }
             ),

@@ -1102,8 +1102,23 @@ def _index_review_response(
     *,
     candidates: List[Dict[str, Any]],
     decision_reason: str,
+    browser_provider: str,
+    client_id: Optional[str],
+    strict_client: bool,
 ) -> dict:
-    return {
+    try:
+        metadata = _resolve_provider_metadata_for_response(
+            browser_provider=browser_provider,
+            client_id=client_id,
+            strict_client=strict_client,
+        )
+    except RuntimeError:
+        metadata = {
+            "resolved_browser_provider": "server",
+            "client_id_used": None,
+        }
+
+    payload = {
         "page_type": "index",
         "auto_ready": False,
         "requires_user_review": True,
@@ -1113,6 +1128,8 @@ def _index_review_response(
         "requires_user_input": False,
         "next_action_hint": "Review candidates and confirm which program links to crawl.",
     }
+    payload.update(metadata)
+    return payload
 
 
 try:
@@ -1252,12 +1269,18 @@ try:
                 return _index_review_response(
                     candidates=[],
                     decision_reason="no_candidates_above_keep_threshold",
+                    browser_provider=browser_provider,
+                    client_id=client_id,
+                    strict_client=strict_client,
                 )
 
             if len(ranked_candidates) > 10:
                 return _index_review_response(
                     candidates=ranked_candidates,
                     decision_reason="candidate_count_exceeds_auto_limit",
+                    browser_provider=browser_provider,
+                    client_id=client_id,
+                    strict_client=strict_client,
                 )
 
             def _auto_run_eligible(row: Dict[str, Any]) -> bool:
@@ -1272,6 +1295,9 @@ try:
                 return _index_review_response(
                     candidates=ranked_candidates,
                     decision_reason="confidence_below_auto_threshold",
+                    browser_provider=browser_provider,
+                    client_id=client_id,
+                    strict_client=strict_client,
                 )
 
             selected_urls = [str(row.get("url") or "").strip() for row in ranked_candidates]
@@ -1366,24 +1392,155 @@ try:
 
     @mcp.tool(name="program_patch")
     def mcp_program_patch(program_id: int, patch: Dict[str, Any]) -> dict:
-        """Patch a single program by ID (placeholder until full review workflow is enabled)."""
-        _ = program_id, patch
+        """Patch a single program by ID."""
+        normalized_program_id = int(program_id)
+        patch_payload = dict(patch or {})
+        if not patch_payload:
+            return {
+                "updated": False,
+                "program_id": normalized_program_id,
+                "error_code": "empty_patch",
+                "next_action_hint": "Provide at least one field to update.",
+            }
+
+        blocked_fields = {"id", "university_id", "program_catalog_id", "academic_year"}
+        blocked = sorted(blocked_fields.intersection(set(patch_payload.keys())))
+        if blocked:
+            return {
+                "updated": False,
+                "program_id": normalized_program_id,
+                "error_code": "forbidden_fields",
+                "failed_fields": blocked,
+                "next_action_hint": "Remove immutable fields from patch payload.",
+            }
+
+        try:
+            updated = patch_program_snapshot(normalized_program_id, patch_payload)
+        except ValueError as exc:
+            return {
+                "updated": False,
+                "program_id": normalized_program_id,
+                "error_code": "validation_error",
+                "message": str(exc),
+                "next_action_hint": "Fix patch payload and retry.",
+            }
+
+        if not updated:
+            return {
+                "updated": False,
+                "program_id": normalized_program_id,
+                "error_code": "not_found",
+                "next_action_hint": "Check program_id from review_items and retry.",
+            }
+
         return {
-            "updated": False,
-            "error_code": "not_implemented",
-            "next_action_hint": "Use REST PATCH /programs/{program_id} for now.",
+            "updated": True,
+            "program_id": normalized_program_id,
+            "program": updated.model_dump(),
+            "summary": "updated 1 record",
         }
 
     @mcp.tool(name="program_patch_batch")
     def mcp_program_patch_batch(items: List[Dict[str, Any]]) -> dict:
-        """Patch multiple programs by ID (placeholder until full review workflow is enabled)."""
-        _ = items
+        """Patch multiple programs by ID; per-item failures do not abort the batch."""
+        normalized_items = [item for item in (items or []) if isinstance(item, dict)]
+        if not normalized_items:
+            return {
+                "updated_count": 0,
+                "failed_items": [],
+                "summary": "No patch items supplied.",
+                "error_code": "empty_batch",
+            }
+
+        updated_count = 0
+        failed_items: List[Dict[str, Any]] = []
+        updated_program_ids: List[int] = []
+        for idx, item in enumerate(normalized_items):
+            raw_program_id = item.get("program_id")
+            patch_payload = dict(item.get("patch") or {})
+
+            try:
+                program_id = int(raw_program_id)
+            except (TypeError, ValueError):
+                failed_items.append(
+                    {
+                        "index": idx,
+                        "program_id": raw_program_id,
+                        "error_code": "invalid_program_id",
+                        "message": "program_id must be an integer",
+                    }
+                )
+                continue
+
+            if not patch_payload:
+                failed_items.append(
+                    {
+                        "index": idx,
+                        "program_id": program_id,
+                        "error_code": "empty_patch",
+                        "message": "patch payload is empty",
+                    }
+                )
+                continue
+
+            blocked_fields = {"id", "university_id", "program_catalog_id", "academic_year"}
+            blocked = sorted(blocked_fields.intersection(set(patch_payload.keys())))
+            if blocked:
+                failed_items.append(
+                    {
+                        "index": idx,
+                        "program_id": program_id,
+                        "error_code": "forbidden_fields",
+                        "failed_fields": blocked,
+                    }
+                )
+                continue
+
+            try:
+                updated = patch_program_snapshot(program_id, patch_payload)
+            except ValueError as exc:
+                failed_items.append(
+                    {
+                        "index": idx,
+                        "program_id": program_id,
+                        "error_code": "validation_error",
+                        "message": str(exc),
+                    }
+                )
+                continue
+            except Exception as exc:  # pylint: disable=broad-except
+                failed_items.append(
+                    {
+                        "index": idx,
+                        "program_id": program_id,
+                        "error_code": "unexpected_error",
+                        "message": str(exc),
+                    }
+                )
+                continue
+
+            if not updated:
+                failed_items.append(
+                    {
+                        "index": idx,
+                        "program_id": program_id,
+                        "error_code": "not_found",
+                    }
+                )
+                continue
+
+            updated_count += 1
+            updated_program_ids.append(program_id)
+
+        summary = (
+            f"Updated {updated_count}/{len(normalized_items)} items; "
+            f"failed {len(failed_items)}."
+        )
         return {
-            "updated_count": 0,
-            "failed_items": [],
-            "summary": "not_implemented",
-            "error_code": "not_implemented",
-            "next_action_hint": "Use REST PATCH /programs/{program_id} for now.",
+            "updated_count": updated_count,
+            "updated_program_ids": updated_program_ids,
+            "failed_items": failed_items,
+            "summary": summary,
         }
 
     @mcp.tool(name="help")
