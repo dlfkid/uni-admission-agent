@@ -6,9 +6,11 @@ Pure functions (_normalize_text_payload, _sanitize_db_url) are tested directly.
 
 from unittest.mock import MagicMock, patch, PropertyMock
 from typing import Any
+from datetime import datetime, timezone
 
 import pytest
 
+from src.models.admission import StudyMode
 from src.storage.db_manager import _normalize_text_payload, DatabaseManager
 
 
@@ -378,3 +380,76 @@ class TestGetProgramContexts:
             result = dm.get_program_contexts(1)
 
         assert len(result) == 2
+
+
+class TestSyncStudyOptionRecords:
+    def setup_method(self) -> None:
+        DatabaseManager._instance = None
+
+    def teardown_method(self) -> None:
+        DatabaseManager._instance = None
+
+    def test_updates_existing_keys_instead_of_delete_reinsert(self) -> None:
+        dm = DatabaseManager()
+        session = MagicMock()
+        existing_row = MagicMock()
+        existing_row.mode = StudyMode.FULL_TIME
+        existing_row.duration_months = 24
+        session.exec.return_value.all.return_value = [existing_row]
+
+        payload = [
+            {"mode": "FullTime", "duration_months": 24},
+            {"mode": "FullTime", "duration_months": 24},  # duplicate
+            {"mode": "PartTime", "duration_months": 36},
+        ]
+
+        dm._sync_study_option_records(session, program_id=18, payload=payload)
+
+        session.delete.assert_not_called()
+        assert session.add.call_count == 2
+
+
+class TestSyncDeadlineRecords:
+    def setup_method(self) -> None:
+        DatabaseManager._instance = None
+
+    def teardown_method(self) -> None:
+        DatabaseManager._instance = None
+
+    def test_updates_existing_keys_instead_of_delete_reinsert(self) -> None:
+        dm = DatabaseManager()
+        session = MagicMock()
+        existing_row = MagicMock()
+        existing_row.round = 1
+        existing_row.description = "Early Round"
+        existing_row.cutoff_date = datetime(2025, 10, 15, tzinfo=timezone.utc)
+        session.exec.return_value.all.return_value = [existing_row]
+
+        payload = [
+            {"round": 1, "description": "Early Round", "cutoff_date": "2025-10-15T00:00:00Z"},
+            {"round": 1, "description": "Early Round", "cutoff_date": "2025-10-15T00:00:00Z"},  # duplicate
+            {"round": 2, "description": "Main Round", "cutoff_date": "2026-01-15T00:00:00Z"},
+        ]
+
+        dm._sync_deadline_records(session, program_id=18, payload=payload)
+
+        session.delete.assert_not_called()
+        assert session.add.call_count == 2
+
+    def test_matches_existing_deadline_when_timezone_representation_differs(self) -> None:
+        dm = DatabaseManager()
+        session = MagicMock()
+        existing_row = MagicMock()
+        existing_row.round = 1
+        existing_row.description = "Early Round"
+        existing_row.cutoff_date = datetime(2025, 10, 15, 8, 0, 0)
+        session.exec.return_value.all.return_value = [existing_row]
+
+        payload = [
+            {"round": 1, "description": "Early Round", "cutoff_date": "2025-10-15T00:00:00Z"},
+        ]
+
+        dm._sync_deadline_records(session, program_id=18, payload=payload)
+
+        session.delete.assert_not_called()
+        assert session.add.call_count == 1

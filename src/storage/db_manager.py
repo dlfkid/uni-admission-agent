@@ -28,6 +28,7 @@ from src.models.requirement import (
     ProgramDeadline,
     ProgramRequirement,
     RequirementCategory,
+    StudyMode,
 )
 from src.models.ingestion import IngestionJob, IngestionTask  # noqa: F401
 from src.models.taxonomy import SubjectTaxonomy  # noqa: F401
@@ -325,22 +326,47 @@ class DatabaseManager:
         existing = session.exec(
             select(ProgramStudyOption).where(ProgramStudyOption.program_id == program_id)
         ).all()
+        existing_by_key: dict[tuple[StudyMode, Optional[int]], ProgramStudyOption] = {}
         for row in existing:
-            session.delete(row)
+            key = (row.mode, row.duration_months)
+            if key in existing_by_key:
+                session.delete(row)
+                continue
+            existing_by_key[key] = row
 
+        payload_by_key: dict[tuple[StudyMode, Optional[int]], dict[str, Any]] = {}
         for item in payload:
             if not isinstance(item, dict):
                 continue
+            mode = parse_study_mode(item.get("mode"))
             duration_raw = item.get("duration_months")
             duration = int(duration_raw) if str(duration_raw or "").isdigit() else None
+            dedupe_key = (mode, duration)
+            if dedupe_key in payload_by_key:
+                continue
+            payload_by_key[dedupe_key] = item
+
+        for key, item in payload_by_key.items():
+            mode, duration = key
+            notes = str(item.get("notes") or item.get("description") or "").strip() or None
+            existing_row = existing_by_key.get(key)
+            if existing_row is not None:
+                existing_row.notes = notes
+                existing_row.updated_at = datetime.now(timezone.utc)
+                session.add(existing_row)
+                continue
             session.add(
                 ProgramStudyOption(
                     program_id=program_id,
-                    mode=parse_study_mode(item.get("mode")),
+                    mode=mode,
                     duration_months=duration,
-                    notes=str(item.get("notes") or item.get("description") or "").strip() or None,
+                    notes=notes,
                 )
             )
+
+        for key, row in existing_by_key.items():
+            if key not in payload_by_key:
+                session.delete(row)
 
     def _sync_deadline_records(
         self,
@@ -348,25 +374,71 @@ class DatabaseManager:
         program_id: int,
         payload: list[dict[str, Any]],
     ) -> None:
+        def _normalize_deadline_cutoff(raw_value: Any) -> Optional[datetime]:
+            parsed = parse_datetime(raw_value)
+            if parsed is None:
+                return None
+            if parsed.tzinfo is not None:
+                parsed = parsed.astimezone(timezone.utc)
+            day = parsed.date()
+            return datetime(day.year, day.month, day.day)
+
         existing = session.exec(
             select(ProgramDeadline).where(ProgramDeadline.program_id == program_id)
         ).all()
+        existing_by_key: dict[
+            tuple[Optional[int], Optional[str], Optional[datetime]],
+            ProgramDeadline,
+        ] = {}
         for row in existing:
-            session.delete(row)
+            round_raw = row.round
+            round_value = int(round_raw) if str(round_raw or "").isdigit() else None
+            description = str(row.description or "").strip() or None
+            cutoff_date = _normalize_deadline_cutoff(row.cutoff_date)
+            key = (round_value, description, cutoff_date)
+            if key in existing_by_key:
+                session.delete(row)
+                continue
+            existing_by_key[key] = row
 
+        payload_by_key: dict[
+            tuple[Optional[int], Optional[str], Optional[datetime]],
+            dict[str, Any],
+        ] = {}
         for item in payload:
             if not isinstance(item, dict):
                 continue
             round_raw = item.get("round")
             round_value = int(round_raw) if str(round_raw or "").isdigit() else None
+            description = str(item.get("description") or "").strip() or None
+            cutoff_date = _normalize_deadline_cutoff(item.get("cutoff_date"))
+            dedupe_key = (round_value, description, cutoff_date)
+            if dedupe_key in payload_by_key:
+                continue
+            payload_by_key[dedupe_key] = item
+
+        for key in payload_by_key:
+            round_value, description, cutoff_date = key
+            existing_row = existing_by_key.get(key)
+            if existing_row is not None:
+                existing_row.round = round_value
+                existing_row.description = description
+                existing_row.cutoff_date = cutoff_date
+                existing_row.updated_at = datetime.now(timezone.utc)
+                session.add(existing_row)
+                continue
             session.add(
                 ProgramDeadline(
                     program_id=program_id,
                     round=round_value,
-                    description=str(item.get("description") or "").strip() or None,
-                    cutoff_date=parse_datetime(item.get("cutoff_date")),
+                    description=description,
+                    cutoff_date=cutoff_date,
                 )
             )
+
+        for key, row in existing_by_key.items():
+            if key not in payload_by_key:
+                session.delete(row)
 
     def _upsert_subject_dim(self, session: Session, subject_name: Optional[str]) -> Optional[SubjectDim]:
         normalized_name = self._normalize_dim_key(subject_name, "subject")
