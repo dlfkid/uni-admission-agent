@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-import src.api.server as server
+from src.api import server
 
 
 @dataclass

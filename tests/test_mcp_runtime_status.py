@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-import src.api.server as server
+from src.api import server
 from src.services.crawler import CrawlResult
 
 

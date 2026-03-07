@@ -12,9 +12,12 @@ def _reload_server_with_router_probe(
     router_available: bool,
 ):
     if router_available:
+        def _create_router_probe() -> Any:
+            return object()
+
         monkeypatch.setattr(
             "src.agents.factory.create_router",
-            lambda: object(),
+            _create_router_probe,
         )
     else:
         def _raise_unavailable() -> Any:
