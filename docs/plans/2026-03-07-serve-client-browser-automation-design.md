@@ -61,7 +61,7 @@
 - `capabilities`：
   - `browser_automation=true`
   - `extension_installed=true|false`
-  - `providers=["cliten"]`（首发）
+  - `providers=["client"]`（首发）
 
 ### 3) 心跳与状态
 - 心跳周期（如 15s）
@@ -98,7 +98,7 @@
 - 提取 HTML/候选链接并回传
 
 ### 2) 浏览器执行后端
-- 首发主执行器：`cliten`（按命令契约调用）
+- 首发主执行器：`client`（按命令契约调用）
 - extension 执行器：可选，不作为默认必需
 
 ### 3) CLI 体验（面向非技术用户）
@@ -189,14 +189,14 @@
 ## 八、兼容性结论（回答核心问题）
 - **是否要求用户安装 extension？**
   - 在本设计下：**不要求**。
-  - extension 仅作为可选增强路径；MCP/REST 自动化抓取可完全由 `adm-agent-client` + `cliten` 完成。
+  - extension 仅作为可选增强路径；MCP/REST 自动化抓取可完全由 `adm-agent-client` + `client` 完成。
 
 ---
 
 ## 九、实施顺序建议（高层）
 1. 先落地 client 注册与派单骨架（可先返回 mock html）。
 2. 接入 `crawl` 的 `browser_provider/client_id/strict_client` 决策层。
-3. 接入 cliten 执行器并串通 `detail_pages_batch` 既有 ingestion 分支。
+3. 接入 client 执行器并串通 `detail_pages_batch` 既有 ingestion 分支。
 4. 补齐 `/clients` 观测、README 权限章节、bootstrap prompt 模板（含 openclaw）。
 5. 最后做跨平台打包与端到端验收。
 

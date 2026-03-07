@@ -485,7 +485,7 @@ uv run src/cmd/client_cli.py start --continuous
 
 Example:
 ```bash
-export ADM_AGENT_CLIENT_FETCH_CMD='cliten fetch --url "{url}" --page-type "{page_type_hint}" --json'
+export ADM_AGENT_CLIENT_FETCH_CMD='client fetch --url "{url}" --page-type "{page_type_hint}" --json'
 ```
 
 ### Platform Permissions
