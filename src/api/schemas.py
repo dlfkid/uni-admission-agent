@@ -287,6 +287,23 @@ class TaskStatusResponse(BaseModel):
     )
 
 
+class ClientInfoResponse(BaseModel):
+    """Connected client status for browser automation dispatch."""
+
+    client_id: str = Field(description="Stable client identifier")
+    client_name: str = Field(description="Human-readable client label")
+    platform: str = Field(description="Client OS platform")
+    arch: str = Field(description="Client CPU architecture")
+    workdir: str = Field(description="Client working directory")
+    capabilities: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Client capability map",
+    )
+    last_seen_epoch: float = Field(
+        description="UNIX epoch timestamp of last heartbeat",
+    )
+
+
 class StatusResponse(BaseModel):
     """Response for ``GET /status``."""
 

@@ -18,11 +18,11 @@ import logging
 import shutil
 import threading
 from pathlib import Path
-from typing import List, Optional, Dict
+from typing import List, Optional, Dict, Any
 from io import StringIO
 
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, HTTPException, Query, Body
+from fastapi import FastAPI, HTTPException, Query, Body, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import find_dotenv, dotenv_values
 
@@ -47,8 +47,10 @@ from src.api.schemas import (
     TestConnectionResponse,
     IngestionJobResponse,
     IngestionResumeRequest,
+    ClientInfoResponse,
 )
 from src.api.task_manager import TaskManager, TaskState
+from src.services.client_bridge import ClientRegistry, ClientSession
 from src.services.crawler import (
     CrawlResult,
     analyze_page,
@@ -267,6 +269,8 @@ app.add_middleware(
 )
 
 task_manager = TaskManager()
+client_registry = ClientRegistry()
+client_sockets: Dict[str, WebSocket] = {}
 
 
 # ---------------------------------------------------------------------------
@@ -529,6 +533,93 @@ async def api_task_status(task_id: str) -> TaskStatusResponse:
     if info is None:
         raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
     return TaskStatusResponse(**info.to_dict())
+
+
+@app.get("/clients", response_model=List[ClientInfoResponse])
+async def api_clients() -> List[ClientInfoResponse]:
+    """List connected browser-automation clients."""
+    rows = client_registry.list_clients()
+    return [ClientInfoResponse(**row) for row in rows]
+
+
+@app.websocket("/clients/ws")
+async def ws_clients(websocket: WebSocket) -> None:
+    """Client bridge websocket for register/heartbeat/rpc payload relay."""
+    await websocket.accept()
+    registered_client_id: Optional[str] = None
+    try:
+        while True:
+            message = await websocket.receive_json()
+            if not isinstance(message, dict):
+                await websocket.send_json({"type": "error", "message": "invalid payload"})
+                continue
+
+            msg_type = str(message.get("type") or "").strip().lower()
+            if msg_type == "register":
+                client_id = str(message.get("client_id") or "").strip()
+                if not client_id:
+                    await websocket.send_json(
+                        {"type": "error", "message": "client_id is required"}
+                    )
+                    continue
+
+                session = ClientSession(
+                    client_id=client_id,
+                    client_name=str(message.get("client_name") or client_id).strip(),
+                    platform=str(message.get("platform") or "").strip(),
+                    arch=str(message.get("arch") or "").strip(),
+                    workdir=str(message.get("workdir") or "").strip(),
+                    capabilities=dict(message.get("capabilities") or {}),
+                )
+                client_registry.register(session)
+                client_sockets[client_id] = websocket
+                registered_client_id = client_id
+                await websocket.send_json({"type": "registered", "client_id": client_id})
+                continue
+
+            if msg_type == "heartbeat":
+                target_client_id = str(
+                    message.get("client_id") or registered_client_id or ""
+                ).strip()
+                if not target_client_id:
+                    await websocket.send_json(
+                        {"type": "error", "message": "unknown client for heartbeat"}
+                    )
+                    continue
+                ok = client_registry.heartbeat(target_client_id)
+                if not ok:
+                    await websocket.send_json(
+                        {"type": "error", "message": "client not registered"}
+                    )
+                    continue
+                await websocket.send_json(
+                    {"type": "heartbeat_ack", "client_id": target_client_id}
+                )
+                continue
+
+            if msg_type == "rpc_result":
+                await websocket.send_json(
+                    {
+                        "type": "rpc_ack",
+                        "request_id": message.get("request_id"),
+                    }
+                )
+                continue
+
+            await websocket.send_json(
+                {
+                    "type": "error",
+                    "message": f"unsupported message type: {msg_type or '<empty>'}",
+                }
+            )
+    except WebSocketDisconnect:
+        logger.info("Client websocket disconnected: %s", registered_client_id or "unknown")
+    finally:
+        if registered_client_id:
+            current = client_sockets.get(registered_client_id)
+            if current is websocket:
+                client_sockets.pop(registered_client_id, None)
+            client_registry.remove(registered_client_id)
 
 
 @app.get("/ingestion/jobs", response_model=List[IngestionJobResponse])
