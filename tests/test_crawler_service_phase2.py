@@ -57,6 +57,37 @@ async def test_crawl_url_uses_pipeline_when_continue_depth_enabled(monkeypatch) 
 
 
 @pytest.mark.asyncio
+async def test_crawl_url_tolerates_review_item_query_failure(monkeypatch) -> None:
+    class DummyPipeline:
+        async def run_new_job(self, **_kwargs):
+            return {
+                "job_uid": "job_review_fail_safe",
+                "imported_count": 2,
+                "univ_slug": "hku",
+                "year": 2026,
+                "persisted_program_ids": [1001, 1002],
+            }
+
+    def _broken_query_programs(*, univ_slug: str, year: int):
+        _ = univ_slug, year
+        raise RuntimeError("db unavailable")
+
+    monkeypatch.setattr("src.services.crawler.IngestionPipeline", DummyPipeline)
+    monkeypatch.setattr("src.services.crawler.query_programs", _broken_query_programs)
+
+    result = await crawl_url(
+        url="https://example.com",
+        univ_slug="hku",
+        year=2026,
+    )
+
+    assert result.imported_count == 2
+    assert result.ingestion_job_id == "job_review_fail_safe"
+    assert result.review_token == "job_review_fail_safe"
+    assert result.review_items == []
+
+
+@pytest.mark.asyncio
 async def test_resume_crawl_job_parses_stage_enum(monkeypatch) -> None:
     class DummyPipeline:
         async def resume_job(self, **kwargs):

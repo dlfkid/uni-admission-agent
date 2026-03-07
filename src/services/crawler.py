@@ -447,11 +447,20 @@ async def crawl_url(
         for item in (result.get("persisted_program_ids") or [])
         if str(item).strip()
     ]
-    review_items = _build_review_items(
-        univ_slug=univ_slug,
-        year=year,
-        persisted_program_ids=persisted_program_ids,
-    )
+    try:
+        review_items = _build_review_items(
+            univ_slug=univ_slug,
+            year=year,
+            persisted_program_ids=persisted_program_ids,
+        )
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.warning(
+            "Failed building review items for crawl result (univ=%s year=%s): %s",
+            univ_slug,
+            year,
+            exc,
+        )
+        review_items = []
     review_token = str(result.get("job_uid") or "").strip() or uuid.uuid4().hex
     logger.info(
         "Crawl complete (phase2 pipeline): %d programs imported, job=%s",
