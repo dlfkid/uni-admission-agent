@@ -565,6 +565,8 @@ To package the agent for distribution (standalone executable + extension zip):
     -   `extension.zip`: The packaged Chrome extension.
     -   `README.txt`: Quick start guide for end-users.
 
+Release note template (three separate artifacts): `docs/release_notes_template.md`
+
 ## 🤖 Agentic Principles
 - **Stealth First:** Never trigger bot detection; emulate human behavior.
 - **Markdown-Centric:** Convert HTML to Markdown before LLM processing to save tokens.
