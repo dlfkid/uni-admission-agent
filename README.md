@@ -478,14 +478,20 @@ uv run src/cmd/client_cli.py start --continuous
 - WebSocket: `ws://<serve-host>:<serve-port>/clients/ws`
 - Status API: `GET /clients`
 
-**Browser fetch command contract:**
-- Set env var `ADM_AGENT_CLIENT_FETCH_CMD`
+**Browser fetch behavior:**
+- Default: built-in `adm-agent-client fetch` drives local Chrome/Edge via CDP (no Playwright required on client side).
+- Optional override: set env var `ADM_AGENT_CLIENT_FETCH_CMD` to a custom command template.
 - Template placeholders: `{url}`, `{page_type_hint}`
 - Command must output JSON to stdout (e.g. `{"html_content":"..."}` or `{"detail_pages_batch":[...]}`)
 
-Example:
+Default fetch command:
 ```bash
-export ADM_AGENT_CLIENT_FETCH_CMD='client fetch --url "{url}" --page-type "{page_type_hint}" --json'
+uv run src/cmd/client_cli.py fetch --url "https://example.edu/list" --page-type index --json
+```
+
+Optional override example:
+```bash
+export ADM_AGENT_CLIENT_FETCH_CMD='adm-agent-client fetch --url "{url}" --page-type "{page_type_hint}" --json'
 ```
 
 ### Platform Permissions

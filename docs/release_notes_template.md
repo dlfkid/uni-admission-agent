@@ -47,8 +47,8 @@
 ### Client (`adm-agent-client`)
 1. Extract package.
 2. Run `adm-agent-client init` and provide `serve host/port`.
-3. Configure one fetch command template:
-   - `ADM_AGENT_CLIENT_FETCH_CMD='client fetch --url "{url}" --page-type "{page_type_hint}" --json'`
+3. Configure one optional fetch command template:
+   - `ADM_AGENT_CLIENT_FETCH_CMD='adm-agent-client fetch --url "{url}" --page-type "{page_type_hint}" --json'`
 4. Run `adm-agent-client start --continuous`.
 
 ### Extension

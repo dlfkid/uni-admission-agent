@@ -14,6 +14,7 @@ from typing import Any
 import websockets
 
 from src.client.config import ClientConfig
+from src.client.native_browser import fetch_browser_payload
 
 logger = logging.getLogger(__name__)
 
@@ -78,6 +79,7 @@ class ClientRuntime:
     def __init__(self, config: ClientConfig) -> None:
         self.config = config
         self.fetch_command_template = os.environ.get("ADM_AGENT_CLIENT_FETCH_CMD", "").strip()
+        self.native_detail_limit = int(os.environ.get("ADM_AGENT_CLIENT_DETAIL_LIMIT", "8") or "8")
         self.heartbeat_interval_seconds = 15
 
     async def start_once(self) -> ClientConnectivity:
@@ -90,6 +92,9 @@ class ClientRuntime:
         while True:
             try:
                 async with websockets.connect(ws_url, max_size=25_000_000) as websocket:
+                    providers = ["native_browser"]
+                    if self.fetch_command_template:
+                        providers.append("external_command")
                     await self._send_json(
                         websocket,
                         {
@@ -101,7 +106,7 @@ class ClientRuntime:
                             "workdir": self.config.workdir,
                             "capabilities": {
                                 "browser_automation": True,
-                                "providers": ["external_command"],
+                                "providers": providers,
                             },
                         },
                     )
@@ -198,9 +203,11 @@ class ClientRuntime:
         page_type_hint: str,
     ) -> dict[str, Any]:
         if not self.fetch_command_template:
-            raise RuntimeError(
-                "ADM_AGENT_CLIENT_FETCH_CMD is not configured. "
-                "Set it to an external browser automation command template."
+            return await asyncio.to_thread(
+                fetch_browser_payload,
+                url=url,
+                page_type_hint=page_type_hint,
+                detail_limit=max(1, int(self.native_detail_limit)),
             )
 
         command = render_fetch_command(

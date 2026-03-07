@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import platform
 from pathlib import Path
 
@@ -16,6 +17,7 @@ from src.client.config import (
     load_client_config,
     save_client_config,
 )
+from src.client.native_browser import fetch_browser_payload
 from src.client.runtime import ClientRuntime
 
 
@@ -132,6 +134,33 @@ def bootstrap(
         return
     typer.echo("Use --emit-prompt to print full bootstrap prompt text.")
     typer.echo(prompt)
+
+
+@app.command("fetch")
+def fetch(
+    url: str = typer.Option(..., "--url", help="Target page URL"),
+    page_type: str = typer.Option("auto", "--page-type", help="auto | index | detail"),
+    json_output: bool = typer.Option(False, "--json", help="Print JSON payload to stdout"),
+    max_detail_links: int = typer.Option(8, "--max-detail-links", help="Max detail links to fetch for index page"),
+    debug_port: int = typer.Option(9222, "--debug-port", help="Chrome/Edge remote debugging port"),
+    browser_path: str = typer.Option("", "--browser-path", help="Optional browser executable path"),
+) -> None:
+    """Fetch page payload via local browser CDP automation."""
+    normalized = str(page_type or "auto").strip().lower()
+    if normalized not in {"auto", "index", "detail"}:
+        typer.echo("Error: --page-type must be one of: auto, index, detail", err=True)
+        raise typer.Exit(code=1)
+    payload = fetch_browser_payload(
+        url=str(url or "").strip(),
+        page_type_hint=normalized,
+        detail_limit=max(1, int(max_detail_links)),
+        browser_path=str(browser_path or "").strip() or None,
+        debug_port=int(debug_port),
+    )
+    if json_output:
+        typer.echo(json.dumps(payload, ensure_ascii=False))
+        return
+    typer.echo(f"Fetched payload keys: {', '.join(sorted(payload.keys()))}")
 
 
 if __name__ == "__main__":

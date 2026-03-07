@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 from typer.testing import CliRunner
@@ -43,3 +44,27 @@ def test_client_status_reads_config(tmp_path: Path, monkeypatch) -> None:
     assert result.exit_code == 0
     assert "client-001" in result.stdout
 
+
+def test_client_fetch_outputs_json(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "src.cmd.client_cli.fetch_browser_payload",
+        lambda **kwargs: {
+            "html_content": "<html></html>",
+            "detail_pages_batch": [],
+            "selected_urls": [],
+        },
+    )
+    result = runner.invoke(
+        app,
+        [
+            "fetch",
+            "--url",
+            "https://example.edu/list",
+            "--page-type",
+            "index",
+            "--json",
+        ],
+    )
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["html_content"] == "<html></html>"
