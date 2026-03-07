@@ -66,6 +66,7 @@ from src.services.crawler import (
     query_programs,
     resume_crawl_job,
 )
+from src.services.ingestion_pipeline import IngestionPipeline
 from src.services.subject_taxonomy import bootstrap_subject_taxonomy
 from src.storage.db_manager import DatabaseManager
 
@@ -1071,6 +1072,49 @@ def _resolve_provider_metadata_for_response(
         }
 
 
+def _rank_index_candidates_by_taxonomy(
+    *,
+    links: List[Dict[str, Any]],
+    keep_threshold: float = 0.75,
+    auto_run_threshold: float = 0.92,
+    top_k: int = 30,
+) -> List[Dict[str, Any]]:
+    pipeline = IngestionPipeline()
+    return pipeline.rank_index_candidates(
+        links,
+        keep_threshold=keep_threshold,
+        auto_run_threshold=auto_run_threshold,
+        top_k=top_k,
+    )
+
+
+def _to_valid_year(value: Optional[int]) -> Optional[int]:
+    if value is None:
+        return None
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed > 0 else None
+
+
+def _index_review_response(
+    *,
+    candidates: List[Dict[str, Any]],
+    decision_reason: str,
+) -> dict:
+    return {
+        "page_type": "index",
+        "auto_ready": False,
+        "requires_user_review": True,
+        "decision_reason": decision_reason,
+        "candidates": candidates,
+        "selected_count": 0,
+        "requires_user_input": False,
+        "next_action_hint": "Review candidates and confirm which program links to crawl.",
+    }
+
+
 try:
     from mcp.server.fastmcp import FastMCP
 
@@ -1146,7 +1190,7 @@ try:
     async def mcp_crawl(
         url: str,
         univ_slug: str,
-        year: int,
+        year: Optional[int] = None,
         continue_depth: int = 0,
         browser_provider: str = "auto",
         client_id: Optional[str] = None,
@@ -1169,15 +1213,108 @@ try:
         Returns:
             Dict with imported_count, univ_slug, and year.
         """
-        # MCP calls bypass task_manager for now to keep it simple, 
-        # as MCP tools are usually synchronous-ish from the caller's perspective
-        # or managed by the caller. 
-        # To support logging/cancellation in MCP, we'd need to wrap this too.
-        # For now, direct call is fine.
+        valid_year = _to_valid_year(year)
+        if valid_year is None:
+            return {
+                "requires_user_input": True,
+                "missing_fields": ["year"],
+                "prompt": "请确认落库年份（如 2026）",
+                "next_action_hint": "Provide year before running crawl.",
+            }
+
+        analysis_result: dict[str, Any] = {}
+        page_type = "unknown"
+        try:
+            analysis_result = await analyze_url_candidates(
+                url=url,
+                page_type_hint="auto",
+                browser_provider=browser_provider,
+                client_id=client_id,
+                strict_client=strict_client,
+            )
+            page_type = str(analysis_result.get("page_type") or "unknown").strip().lower()
+        except Exception as exc:  # pylint: disable=broad-except
+            logger.info("Pre-crawl analyze unavailable for %s: %s", url, exc)
+
+        if page_type == "index":
+            raw_links = [
+                item
+                for item in (analysis_result.get("links") or [])
+                if isinstance(item, dict)
+            ]
+            ranked_candidates = _rank_index_candidates_by_taxonomy(
+                links=raw_links,
+                keep_threshold=max(0.0, min(1.0, float(candidate_taxonomy_filter_threshold))),
+                auto_run_threshold=0.92,
+                top_k=max(1, int(candidate_taxonomy_filter_top_k)),
+            )
+            if not ranked_candidates:
+                return _index_review_response(
+                    candidates=[],
+                    decision_reason="no_candidates_above_keep_threshold",
+                )
+
+            if len(ranked_candidates) > 10:
+                return _index_review_response(
+                    candidates=ranked_candidates,
+                    decision_reason="candidate_count_exceeds_auto_limit",
+                )
+
+            def _auto_run_eligible(row: Dict[str, Any]) -> bool:
+                if "auto_run_eligible" in row:
+                    return bool(row.get("auto_run_eligible"))
+                try:
+                    return float(row.get("taxonomy_score") or 0.0) >= 0.92
+                except (TypeError, ValueError):
+                    return False
+
+            if not all(_auto_run_eligible(row) for row in ranked_candidates):
+                return _index_review_response(
+                    candidates=ranked_candidates,
+                    decision_reason="confidence_below_auto_threshold",
+                )
+
+            selected_urls = [str(row.get("url") or "").strip() for row in ranked_candidates]
+            selected_urls = [item for item in selected_urls if item]
+            selected_link_texts = {
+                str(row.get("url") or "").strip(): str(row.get("text") or "").strip()
+                for row in ranked_candidates
+                if str(row.get("url") or "").strip() and str(row.get("text") or "").strip()
+            }
+            result = await crawl_url(
+                url=url,
+                univ_slug=univ_slug,
+                year=valid_year,
+                continue_depth=continue_depth,
+                page_type_hint="index",
+                selected_urls=selected_urls,
+                selected_link_texts=selected_link_texts,
+                browser_provider=browser_provider,
+                client_id=client_id,
+                strict_client=strict_client,
+                candidate_taxonomy_filter_enabled=candidate_taxonomy_filter_enabled,
+                candidate_taxonomy_filter_threshold=candidate_taxonomy_filter_threshold,
+                candidate_taxonomy_filter_top_k=candidate_taxonomy_filter_top_k,
+            )
+            response = result.model_dump()
+            response.update(
+                {
+                    "page_type": "index",
+                    "auto_ready": True,
+                    "requires_user_review": False,
+                    "decision_reason": "auto_crawl_threshold_met",
+                    "candidates": ranked_candidates,
+                    "selected_count": len(selected_urls),
+                }
+            )
+            if "client_id_used" not in response:
+                response["client_id_used"] = None
+            return response
+
         result = await crawl_url(
             url=url,
             univ_slug=univ_slug,
-            year=year,
+            year=valid_year,
             continue_depth=continue_depth,
             browser_provider=browser_provider,
             client_id=client_id,
@@ -1196,6 +1333,10 @@ try:
             response.update(metadata)
         if "client_id_used" not in response:
             response["client_id_used"] = None
+        response.setdefault("page_type", page_type if page_type in {"detail", "index"} else "detail")
+        response.setdefault("auto_ready", True)
+        response.setdefault("requires_user_review", False)
+        response.setdefault("decision_reason", "direct_crawl")
         return response
 
     @mcp.tool(name="db_query")
@@ -1363,7 +1504,7 @@ repair:
         async def mcp_crawl_internal_llm(
             url: str,
             univ_slug: str,
-            year: int,
+            year: Optional[int] = None,
             continue_depth: int = 0,
             browser_provider: str = "auto",
             client_id: Optional[str] = None,

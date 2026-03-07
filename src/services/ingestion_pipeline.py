@@ -1379,6 +1379,65 @@ class IngestionPipeline:
 
         return signals
 
+    def rank_index_candidates(
+        self,
+        links: List[Dict[str, Any]],
+        *,
+        keep_threshold: float = 0.75,
+        auto_run_threshold: float = 0.92,
+        top_k: int = 30,
+    ) -> List[Dict[str, Any]]:
+        """Rank index-page link candidates with taxonomy scores.
+
+        Returns only links scoring above ``keep_threshold`` sorted by score desc.
+        """
+        bounded_keep = max(0.0, min(1.0, float(keep_threshold)))
+        bounded_auto = max(bounded_keep, min(1.0, float(auto_run_threshold)))
+        bounded_top_k = max(1, int(top_k))
+
+        ranked: List[Dict[str, Any]] = []
+        for item in links or []:
+            if not isinstance(item, dict):
+                continue
+            detail_url = str(item.get("url") or "").strip()
+            anchor_text = str(item.get("text") or "").strip()
+            if not detail_url:
+                continue
+
+            signals: list[str] = []
+            if anchor_text:
+                signals.append(anchor_text)
+            url_signal = build_url_name_signal(detail_url)
+            if url_signal and url_signal not in signals:
+                signals.append(url_signal)
+
+            score = 0.0
+            inferred_name: Optional[str] = None
+            if signals:
+                matches = self.taxonomy_service.match_signals(signals, top_k=1)
+                if matches:
+                    best_match = dict(matches[0] or {})
+                    score = float(best_match.get("score") or 0.0)
+                    inferred_name_text = str(best_match.get("name_en") or "").strip()
+                    if inferred_name_text:
+                        inferred_name = inferred_name_text
+
+            if score < bounded_keep:
+                continue
+
+            ranked.append(
+                {
+                    "url": detail_url,
+                    "text": anchor_text,
+                    "taxonomy_score": round(score, 4),
+                    "program_name_inferred": inferred_name,
+                    "auto_run_eligible": score >= bounded_auto,
+                }
+            )
+
+        ranked.sort(key=lambda row: float(row.get("taxonomy_score") or 0.0), reverse=True)
+        return ranked[:bounded_top_k]
+
     async def _select_detail_urls(
         self,
         scraper: AdmissionScraper,
