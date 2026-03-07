@@ -471,6 +471,9 @@ async def api_crawl(body: CrawlRequest) -> CrawlResponse:
                     ),
                     batch_index=body.batch_index,
                     batch_total=body.batch_total,
+                    browser_provider=body.browser_provider,
+                    client_id=body.client_id,
+                    strict_client=body.strict_client,
                     taxonomy_enabled=body.taxonomy_enabled,
                     taxonomy_low_threshold=body.taxonomy_low_threshold,
                     taxonomy_high_threshold=body.taxonomy_high_threshold,
@@ -947,6 +950,9 @@ try:
         univ_slug: str,
         year: int,
         continue_depth: int = 0,
+        browser_provider: str = "auto",
+        client_id: Optional[str] = None,
+        strict_client: bool = False,
     ) -> dict:
         """Crawl a university admission page and import structured data.
 
@@ -972,6 +978,9 @@ try:
             univ_slug=univ_slug,
             year=year,
             continue_depth=continue_depth,
+            browser_provider=browser_provider,
+            client_id=client_id,
+            strict_client=strict_client,
         )
         return result.model_dump()
 

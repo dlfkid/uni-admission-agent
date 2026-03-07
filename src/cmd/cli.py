@@ -390,6 +390,21 @@ def crawl(
     export_path: str = typer.Option(
         None, "--export-path", help="Path to export markdown files"
     ),
+    browser_provider: str = typer.Option(
+        "auto",
+        "--browser-provider",
+        help="Browser provider: auto, server, or client",
+    ),
+    client_id: Optional[str] = typer.Option(
+        None,
+        "--client-id",
+        help="Optional target client id when using browser-provider=client",
+    ),
+    strict_client: bool = typer.Option(
+        False,
+        "--strict-client",
+        help="Fail if client browser automation is unavailable (no server fallback)",
+    ),
     verbose: bool = typer.Option(False, "--verbose", "-v"),
 ) -> None:
     """Crawl a URL and import admission data."""
@@ -404,6 +419,13 @@ def crawl(
     
     if page_type not in ["auto", "index", "detail"]:
         typer.echo(f"Error: --page-type must be one of: auto, index, detail", err=True)
+        raise typer.Exit(code=1)
+    
+    if browser_provider not in ["auto", "server", "client"]:
+        typer.echo(
+            "Error: --browser-provider must be one of: auto, server, client",
+            err=True,
+        )
         raise typer.Exit(code=1)
 
     typer.echo(f"Crawling: {url}  (univ={name}, year={year}, depth={continue_depth}, type={page_type})")
@@ -421,6 +443,9 @@ def crawl(
                 export_md=export_md,
                 export_path=export_path,
                 html_content=None,  # CLI doesn't provide pre-rendered HTML
+                browser_provider=browser_provider,
+                client_id=client_id,
+                strict_client=strict_client,
             )
         )
         typer.echo(f"✅ Crawl complete: {result.imported_count} programs imported")
