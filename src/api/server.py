@@ -281,6 +281,10 @@ def _has_available_client(preferred_client_id: Optional[str]) -> bool:
     return client_registry.select_client_id(preferred_client_id) is not None
 
 
+def _select_available_client_id(preferred_client_id: Optional[str]) -> Optional[str]:
+    return client_registry.select_client_id(preferred_client_id)
+
+
 async def _fetch_browser_payload_from_client(
     *,
     url: str,
@@ -314,6 +318,7 @@ async def _fetch_browser_payload_from_client(
 browser_provider_service.configure_client_dispatchers(
     availability_fn=_has_available_client,
     fetch_fn=_fetch_browser_payload_from_client,
+    select_client_fn=_select_available_client_id,
 )
 
 
@@ -1030,9 +1035,12 @@ def _runtime_status_payload() -> dict[str, Any]:
     client_ids = [
         str(row.get("client_id") or "").strip()
         for row in client_rows
-        if str(row.get("client_id") or "").strip()
+        if (
+            str(row.get("client_id") or "").strip()
+            and bool((row.get("capabilities") or {}).get("browser_automation"))
+        )
     ]
-    client_available = bool(client_ids)
+    client_available = client_registry.select_client_id(None) is not None
     return {
         "client_available": client_available,
         "client_count": len(client_ids),
@@ -1040,6 +1048,27 @@ def _runtime_status_payload() -> dict[str, Any]:
         "internal_llm_available": _internal_llm_available(),
         "default_browser_provider_resolved": "client" if client_available else "server",
     }
+
+
+def _resolve_provider_metadata_for_response(
+    *,
+    browser_provider: str,
+    client_id: Optional[str],
+    strict_client: bool,
+) -> dict[str, Any]:
+    try:
+        return browser_provider_service.resolve_provider_metadata(
+            browser_provider=browser_provider,
+            client_id=client_id,
+            strict_client=strict_client,
+        )
+    except RuntimeError:
+        raise
+    except Exception:
+        return {
+            "resolved_browser_provider": "server",
+            "client_id_used": None,
+        }
 
 
 try:
@@ -1071,7 +1100,17 @@ try:
             client_id=client_id,
             strict_client=strict_client,
         )
-        return dict(result)
+        response = dict(result or {})
+        if "resolved_browser_provider" not in response:
+            metadata = _resolve_provider_metadata_for_response(
+                browser_provider=browser_provider,
+                client_id=client_id,
+                strict_client=strict_client,
+            )
+            response.update(metadata)
+        if "client_id_used" not in response:
+            response["client_id_used"] = None
+        return response
 
     @mcp.tool(name="crawl_detail_batch")
     async def mcp_crawl_detail_batch(
@@ -1147,7 +1186,17 @@ try:
             candidate_taxonomy_filter_threshold=candidate_taxonomy_filter_threshold,
             candidate_taxonomy_filter_top_k=candidate_taxonomy_filter_top_k,
         )
-        return result.model_dump()
+        response = result.model_dump()
+        if "resolved_browser_provider" not in response:
+            metadata = _resolve_provider_metadata_for_response(
+                browser_provider=browser_provider,
+                client_id=client_id,
+                strict_client=strict_client,
+            )
+            response.update(metadata)
+        if "client_id_used" not in response:
+            response["client_id_used"] = None
+        return response
 
     @mcp.tool(name="db_query")
     def mcp_db_query(

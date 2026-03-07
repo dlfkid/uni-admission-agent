@@ -57,6 +57,14 @@ class CrawlResult(BaseModel):
         default=None,
         description="Phase 2 ingestion job identifier",
     )
+    resolved_browser_provider: str = Field(
+        default="server",
+        description="Resolved browser provider for this request",
+    )
+    client_id_used: Optional[str] = Field(
+        default=None,
+        description="Selected client id when browser provider resolves to client",
+    )
 
 
 class ImportResult(BaseModel):
@@ -142,6 +150,8 @@ async def analyze_url_candidates(
     ``analyze_page`` logic.
     """
     source = "provided" if html_content else "unknown"
+    resolved_browser_provider = "server"
+    client_id_used: Optional[str] = None
     if not html_content:
         resolved_browser_inputs = await browser_provider_service.resolve_browser_inputs(
             url=url,
@@ -152,10 +162,19 @@ async def analyze_url_candidates(
             client_id=client_id,
             strict_client=strict_client,
         )
+        resolved_provider_value = resolved_browser_inputs.get("resolved_browser_provider")
+        if resolved_provider_value:
+            resolved_browser_provider = str(resolved_provider_value)
+        elif resolved_browser_inputs.get("html_content"):
+            resolved_browser_provider = "client"
+        else:
+            resolved_browser_provider = "server"
+        resolved_client_id = resolved_browser_inputs.get("client_id_used")
+        client_id_used = str(resolved_client_id).strip() if resolved_client_id else None
         resolved_html = resolved_browser_inputs.get("html_content")
         html_content = str(resolved_html or "").strip() or None
         if html_content:
-            source = "client"
+            source = "client" if resolved_browser_provider == "client" else "server"
 
     if not html_content:
         raise RuntimeError(
@@ -166,6 +185,8 @@ async def analyze_url_candidates(
     result = await asyncio.to_thread(analyze_page, url, html_content, page_type_hint)
     payload = dict(result or {})
     payload["html_source"] = source
+    payload["resolved_browser_provider"] = resolved_browser_provider
+    payload["client_id_used"] = client_id_used
     return payload
 
 
@@ -371,6 +392,11 @@ async def crawl_url(
         client_id=client_id,
         strict_client=strict_client,
     )
+    resolved_browser_provider = str(
+        resolved_browser_inputs.get("resolved_browser_provider") or "server"
+    )
+    resolved_client_id = resolved_browser_inputs.get("client_id_used")
+    client_id_used = str(resolved_client_id).strip() if resolved_client_id else None
     if "html_content" in resolved_browser_inputs:
         html_content = resolved_browser_inputs.get("html_content")
     if "detail_pages_batch" in resolved_browser_inputs:
@@ -417,6 +443,8 @@ async def crawl_url(
         univ_slug=univ_slug,
         year=year,
         ingestion_job_id=result.get("job_uid"),
+        resolved_browser_provider=resolved_browser_provider,
+        client_id_used=client_id_used,
     )
 
 
