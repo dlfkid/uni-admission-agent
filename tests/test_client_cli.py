@@ -112,3 +112,67 @@ def test_client_stop_force_sends_sigkill(tmp_path: Path, monkeypatch) -> None:
     assert result.exit_code == 0
     assert calls == [(54321, 0), (54321, signal.SIGKILL)]
     assert not pid_file.exists()
+
+
+def test_client_version_outputs_current_version(monkeypatch) -> None:
+    monkeypatch.setattr("src.cmd.client_cli.get_current_version", lambda: "v9.9.9")
+    result = runner.invoke(app, ["version"])
+    assert result.exit_code == 0
+    assert result.stdout.strip() == "v9.9.9"
+
+
+def test_client_upgrade_check_uses_client_artifact(monkeypatch) -> None:
+    captured: dict = {}
+
+    def _fake_check_for_updates_for_artifact(*, artifact_name: str, verbose: bool):
+        captured["artifact_name"] = artifact_name
+        captured["verbose"] = verbose
+        return {
+            "current_version": "v1.0.0",
+            "latest_version": "v1.1.0",
+            "is_newer": True,
+            "asset_available": True,
+            "release_url": "https://example.com/release",
+        }
+
+    monkeypatch.setattr(
+        "src.cmd.client_cli.check_for_updates_for_artifact",
+        _fake_check_for_updates_for_artifact,
+    )
+
+    result = runner.invoke(app, ["upgrade", "--check"])
+    assert result.exit_code == 0
+    assert captured["artifact_name"] == "adm-agent-client"
+    assert captured["verbose"] is False
+    assert "Update available" in result.stdout
+
+
+def test_client_upgrade_runs_upgrade_artifact(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "src.cmd.client_cli.check_for_updates_for_artifact",
+        lambda **_kwargs: {
+            "current_version": "v1.0.0",
+            "latest_version": "v1.1.0",
+            "is_newer": True,
+            "asset_available": True,
+            "release_url": "https://example.com/release",
+        },
+    )
+    called: dict = {}
+
+    def _fake_upgrade_artifact(*, artifact_name: str, force: bool, verbose: bool) -> bool:
+        called["artifact_name"] = artifact_name
+        called["force"] = force
+        called["verbose"] = verbose
+        return True
+
+    monkeypatch.setattr("src.cmd.client_cli.upgrade_artifact", _fake_upgrade_artifact)
+
+    result = runner.invoke(app, ["upgrade", "--force", "--verbose"])
+    assert result.exit_code == 0
+    assert called == {
+        "artifact_name": "adm-agent-client",
+        "force": True,
+        "verbose": True,
+    }
+    assert "Upgrade completed successfully" in result.stdout

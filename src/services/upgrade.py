@@ -104,13 +104,18 @@ def get_latest_release() -> dict:
         raise UpgradeError(f"Failed to fetch release information: {e}")
 
 
-def find_backend_asset(release_data: dict, os_name: str, arch_name: str) -> dict | None:
-    """Find matching backend asset for current platform."""
+def find_release_asset(
+    release_data: dict,
+    os_name: str,
+    arch_name: str,
+    artifact_name: str = "adm-agent",
+) -> dict | None:
+    """Find matching release asset for current platform and artifact."""
     assets = release_data.get("assets", [])
     version = release_data.get("tag_name", "unknown")
     
-    # Expected filename pattern: adm-agent-{version}-{os}-{arch}.{ext}
-    expected_name = f"adm-agent-{version}-{os_name}-{arch_name}"
+    # Expected filename pattern: <artifact_name>-{version}-{os}-{arch}.{ext}
+    expected_name = f"{artifact_name}-{version}-{os_name}-{arch_name}"
     extension = ".zip" if os_name == "windows" else ".tar.gz"
     expected_filename = f"{expected_name}{extension}"
     
@@ -121,8 +126,23 @@ def find_backend_asset(release_data: dict, os_name: str, arch_name: str) -> dict
     return None
 
 
-def download_and_extract(asset: dict, target_dir: Path) -> tuple[Path, Path]:
-    """Download and extract the backend asset to target directory.
+def find_backend_asset(release_data: dict, os_name: str, arch_name: str) -> dict | None:
+    """Backward-compatible backend asset helper."""
+    return find_release_asset(
+        release_data=release_data,
+        os_name=os_name,
+        arch_name=arch_name,
+        artifact_name="adm-agent",
+    )
+
+
+def download_and_extract(
+    asset: dict,
+    target_dir: Path,
+    *,
+    executable_basename: str = "adm-agent",
+) -> tuple[Path, Path]:
+    """Download and extract a release asset to target directory.
 
     Returns:
         (payload_dir, executable_path)
@@ -178,7 +198,11 @@ def download_and_extract(asset: dict, target_dir: Path) -> tuple[Path, Path]:
                 shutil.copy2(item, target_dir / item.name)
         
         # Find the executable
-        executable_name = "adm-agent.exe" if platform.system().lower() == "windows" else "adm-agent"
+        executable_name = (
+            f"{executable_basename}.exe"
+            if platform.system().lower() == "windows"
+            else executable_basename
+        )
         executable_path = target_dir / executable_name
         
         if not executable_path.exists():
@@ -272,8 +296,12 @@ def replace_executable(new_exe: Path, backup_path: Path) -> None:
         raise UpgradeError(f"Failed to replace executable: {e}")
 
 
-def check_for_updates(verbose: bool = False) -> dict:
-    """Check for available updates without downloading."""
+def check_for_updates_for_artifact(
+    *,
+    artifact_name: str,
+    verbose: bool = False,
+) -> dict:
+    """Check for available updates for one release artifact."""
     current_version = get_current_version()
     
     if verbose:
@@ -290,9 +318,15 @@ def check_for_updates(verbose: bool = False) -> dict:
         is_newer = latest_version != current_version and latest_version > current_version
         
         os_name, arch_name = get_platform_info()
-        asset = find_backend_asset(latest_release, os_name, arch_name)
+        asset = find_release_asset(
+            latest_release,
+            os_name,
+            arch_name,
+            artifact_name=artifact_name,
+        )
         
         return {
+            "artifact_name": artifact_name,
             "current_version": current_version,
             "latest_version": latest_version,
             "is_newer": is_newer,
@@ -308,12 +342,26 @@ def check_for_updates(verbose: bool = False) -> dict:
             "latest_version": "unknown",
             "is_newer": False,
             "asset_available": False,
+            "artifact_name": artifact_name,
             "error": str(e)
         }
 
 
-def upgrade_backend(force: bool = False, verbose: bool = False) -> bool:
-    """Perform backend upgrade if newer version available."""
+def check_for_updates(verbose: bool = False) -> dict:
+    """Backward-compatible backend update check."""
+    return check_for_updates_for_artifact(
+        artifact_name="adm-agent",
+        verbose=verbose,
+    )
+
+
+def upgrade_artifact(
+    *,
+    artifact_name: str,
+    force: bool = False,
+    verbose: bool = False,
+) -> bool:
+    """Perform self-upgrade for a packaged executable artifact."""
     if not is_frozen():
         raise UpgradeError(
             "Self-upgrade is only supported in packaged executable mode. "
@@ -322,7 +370,10 @@ def upgrade_backend(force: bool = False, verbose: bool = False) -> bool:
 
     logger.info("🔍 Checking for updates...")
     
-    update_info = check_for_updates(verbose=verbose)
+    update_info = check_for_updates_for_artifact(
+        artifact_name=artifact_name,
+        verbose=verbose,
+    )
     
     if "error" in update_info:
         raise UpgradeError(f"Update check failed: {update_info['error']}")
@@ -337,7 +388,7 @@ def upgrade_backend(force: bool = False, verbose: bool = False) -> bool:
     if not update_info["asset_available"]:
         os_name, arch_name = get_platform_info()
         raise UpgradeError(
-            f"No backend asset found for {os_name}-{arch_name}. "
+            f"No {artifact_name} asset found for {os_name}-{arch_name}. "
             "Check GitHub releases for manual download options."
         )
     
@@ -350,7 +401,11 @@ def upgrade_backend(force: bool = False, verbose: bool = False) -> bool:
         
         # Download and extract
         logger.info("⬇️  Downloading new version...")
-        payload_dir, new_executable = download_and_extract(asset, temp_path / "new_version")
+        payload_dir, new_executable = download_and_extract(
+            asset,
+            temp_path / "new_version",
+            executable_basename=artifact_name,
+        )
 
         # Backup current version
         logger.info("💾 Creating backup...")
@@ -372,3 +427,21 @@ def upgrade_backend(force: bool = False, verbose: bool = False) -> bool:
         except Exception as e:
             logger.error(f"❌ Upgrade failed: {e}")
             raise
+
+
+def upgrade_backend(force: bool = False, verbose: bool = False) -> bool:
+    """Backward-compatible backend upgrader."""
+    return upgrade_artifact(
+        artifact_name="adm-agent",
+        force=force,
+        verbose=verbose,
+    )
+
+
+def upgrade_client(force: bool = False, verbose: bool = False) -> bool:
+    """Upgrade packaged `adm-agent-client` executable."""
+    return upgrade_artifact(
+        artifact_name="adm-agent-client",
+        force=force,
+        verbose=verbose,
+    )

@@ -36,6 +36,9 @@ def test_api_crawl_passes_browser_provider_args(monkeypatch) -> None:
                 "browser_provider": "client",
                 "client_id": "c1",
                 "strict_client": True,
+                "candidate_taxonomy_filter_enabled": True,
+                "candidate_taxonomy_filter_threshold": 0.82,
+                "candidate_taxonomy_filter_top_k": 9,
             },
         )
         assert res.status_code == 200
@@ -52,4 +55,6 @@ def test_api_crawl_passes_browser_provider_args(monkeypatch) -> None:
     assert captured["browser_provider"] == "client"
     assert captured["client_id"] == "c1"
     assert captured["strict_client"] is True
-
+    assert captured["candidate_taxonomy_filter_enabled"] is True
+    assert captured["candidate_taxonomy_filter_threshold"] == 0.82
+    assert captured["candidate_taxonomy_filter_top_k"] == 9

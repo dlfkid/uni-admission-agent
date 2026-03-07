@@ -9,6 +9,7 @@ import os
 import platform
 from pathlib import Path
 import signal
+import sys
 
 import typer
 
@@ -22,6 +23,12 @@ from src.client.config import (
 )
 from src.client.native_browser import fetch_browser_payload
 from src.client.runtime import ClientRuntime
+from src.services.upgrade import (
+    check_for_updates_for_artifact,
+    get_current_version,
+    get_platform_info,
+    upgrade_artifact,
+)
 
 
 app = typer.Typer(
@@ -62,6 +69,27 @@ def _remove_client_pid_file() -> None:
         pid_file.unlink(missing_ok=True)
     except OSError:
         pass
+
+
+def _print_upgrade_check(update_info: dict) -> None:
+    if "error" in update_info:
+        typer.echo(f"❌ Failed to check for updates: {update_info['error']}", err=True)
+        raise typer.Exit(code=1)
+
+    typer.echo(f"📋 Current version: {update_info['current_version']}")
+    typer.echo(f"📋 Latest version:  {update_info['latest_version']}")
+
+    if not update_info.get("is_newer"):
+        typer.echo("✅ Already on latest version.")
+        return
+    if update_info.get("asset_available"):
+        typer.echo("🎯 Update available! Run 'adm-agent-client upgrade' to install.")
+        return
+
+    typer.echo("⚠️  Update available but no compatible client asset found.")
+    release_url = update_info.get("release_url")
+    if release_url:
+        typer.echo(f"   Manual download: {release_url}")
 
 
 @app.command()
@@ -163,6 +191,59 @@ def stop(
         _remove_client_pid_file()
     except (ProcessLookupError, PermissionError, OSError) as exc:
         typer.echo(f"❌ Failed to stop client (PID {pid}): {exc}", err=True)
+        raise typer.Exit(code=1)
+
+
+@app.command()
+def version(
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Show detailed version info"),
+) -> None:
+    """Display current client version information."""
+    try:
+        current = get_current_version()
+        if verbose:
+            os_name, arch_name = get_platform_info()
+            typer.echo(f"adm-agent-client {current}")
+            typer.echo(f"Platform: {os_name}-{arch_name}")
+            typer.echo(f"Python: {sys.version}")
+            typer.echo(f"Executable: {sys.executable}")
+            return
+        typer.echo(current)
+    except Exception as exc:
+        typer.echo(f"❌ Failed to get version: {exc}", err=True)
+        raise typer.Exit(code=1)
+
+
+@app.command()
+def upgrade(
+    check_only: bool = typer.Option(False, "--check", help="Only check for updates, do not install"),
+    force: bool = typer.Option(False, "--force", help="Force upgrade even if already latest version"),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Show detailed upgrade logs"),
+) -> None:
+    """Check for and install client updates from GitHub releases."""
+    try:
+        update_info = check_for_updates_for_artifact(
+            artifact_name="adm-agent-client",
+            verbose=verbose,
+        )
+        if check_only:
+            _print_upgrade_check(update_info)
+            return
+
+        upgraded = upgrade_artifact(
+            artifact_name="adm-agent-client",
+            force=force,
+            verbose=verbose,
+        )
+        if not upgraded:
+            typer.echo("ℹ️  No upgrade needed.")
+            return
+        typer.echo("🎉 Upgrade completed successfully!")
+        typer.echo("ℹ️  Restart the client if it is currently running.")
+    except typer.Exit:
+        raise
+    except Exception as exc:
+        typer.echo(f"❌ Upgrade failed: {exc}", err=True)
         raise typer.Exit(code=1)
 
 

@@ -360,3 +360,107 @@ def test_extract_structured_allows_browser_html_in_detail_mode(monkeypatch) -> N
     extract_mock.assert_called_once()
     assert result["extracted_count"] == 1
     assert len(result["extract_errors"]) == 0
+
+
+@pytest.mark.asyncio
+async def test_select_detail_urls_applies_candidate_taxonomy_filter(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "src.services.ingestion_pipeline.extract_links_with_text",
+        lambda _markdown, _base: [
+            ("https://example.edu/programmes/msc-finance", "MSc Finance"),
+            ("https://example.edu/programmes/msc-data-analytics", "MSc Data Analytics"),
+            ("https://example.edu/apply", "Apply Now"),
+        ],
+    )
+    monkeypatch.setattr(
+        "src.services.ingestion_pipeline.filter_links_by_llm",
+        lambda *_args, **_kwargs: [
+            "https://example.edu/programmes/msc-finance",
+            "https://example.edu/programmes/msc-data-analytics",
+            "https://example.edu/apply",
+        ],
+    )
+
+    pipeline = IngestionPipeline(db_manager=MagicMock())
+    taxonomy_service = MagicMock()
+
+    def _match_signals(signals, top_k=1):
+        _ = top_k
+        joined = " ".join(signals).lower()
+        if "finance" in joined:
+            return [{"name_en": "Finance", "score": 0.93}]
+        if "analytics" in joined:
+            return [{"name_en": "Data Analytics", "score": 0.88}]
+        return [{"name_en": "Noise", "score": 0.35}]
+
+    taxonomy_service.match_signals.side_effect = _match_signals
+    pipeline.taxonomy_service = taxonomy_service
+
+    page = CrawlPageResult(
+        url="https://example.edu/programmes",
+        markdown="# Programmes",
+        char_count=12,
+        links=[],
+    )
+    scraper = MagicMock()
+    scraper.router = MagicMock()
+
+    urls, text_map = await pipeline._select_detail_urls(
+        scraper,
+        page,
+        candidate_taxonomy_filter_enabled=True,
+        candidate_taxonomy_filter_threshold=0.8,
+        candidate_taxonomy_filter_top_k=2,
+    )
+
+    assert urls == [
+        "https://example.edu/programmes/msc-finance",
+        "https://example.edu/programmes/msc-data-analytics",
+    ]
+    assert set(text_map.keys()) == set(urls)
+
+
+@pytest.mark.asyncio
+async def test_select_detail_urls_taxonomy_filter_falls_back_when_all_rejected(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "src.services.ingestion_pipeline.extract_links_with_text",
+        lambda _markdown, _base: [
+            ("https://example.edu/programmes/msc-finance", "MSc Finance"),
+            ("https://example.edu/programmes/msc-data-analytics", "MSc Data Analytics"),
+        ],
+    )
+    monkeypatch.setattr(
+        "src.services.ingestion_pipeline.filter_links_by_llm",
+        lambda *_args, **_kwargs: [
+            "https://example.edu/programmes/msc-finance",
+            "https://example.edu/programmes/msc-data-analytics",
+        ],
+    )
+
+    pipeline = IngestionPipeline(db_manager=MagicMock())
+    taxonomy_service = MagicMock()
+    taxonomy_service.match_signals.return_value = [{"name_en": "Noise", "score": 0.2}]
+    pipeline.taxonomy_service = taxonomy_service
+
+    page = CrawlPageResult(
+        url="https://example.edu/programmes",
+        markdown="# Programmes",
+        char_count=12,
+        links=[],
+    )
+    scraper = MagicMock()
+    scraper.router = MagicMock()
+
+    urls, text_map = await pipeline._select_detail_urls(
+        scraper,
+        page,
+        candidate_taxonomy_filter_enabled=True,
+        candidate_taxonomy_filter_threshold=0.95,
+        candidate_taxonomy_filter_top_k=1,
+    )
+
+    assert urls == [
+        "https://example.edu/programmes/msc-finance",
+        "https://example.edu/programmes/msc-data-analytics",
+    ]
+    assert set(text_map.keys()) == set(urls)

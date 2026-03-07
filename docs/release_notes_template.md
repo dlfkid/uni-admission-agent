@@ -51,6 +51,9 @@
    - `ADM_AGENT_CLIENT_FETCH_CMD='adm-agent-client fetch --url "{url}" --page-type "{page_type_hint}" --json'`
 4. Run `adm-agent-client start --continuous`.
 5. Stop with `adm-agent-client stop` (or `adm-agent-client stop --force` if needed).
+6. Check or upgrade client:
+   - `adm-agent-client version --verbose`
+   - `adm-agent-client upgrade --check`
 
 ### Extension
 1. Unzip extension package.

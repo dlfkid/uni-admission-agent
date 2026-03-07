@@ -143,6 +143,9 @@ async def crawl_url(
     browser_provider: str = "auto",
     client_id: Optional[str] = None,
     strict_client: bool = False,
+    candidate_taxonomy_filter_enabled: bool = False,
+    candidate_taxonomy_filter_threshold: float = 0.75,
+    candidate_taxonomy_filter_top_k: int = 30,
     taxonomy_enabled: Optional[bool] = None,
     taxonomy_low_threshold: Optional[float] = None,
     taxonomy_high_threshold: Optional[float] = None,
@@ -177,6 +180,9 @@ async def crawl_url(
         browser_provider: Browser HTML provider strategy: auto/server/client.
         client_id: Optional target connected client id.
         strict_client: Whether to fail instead of fallback when client flow is unavailable.
+        candidate_taxonomy_filter_enabled: Enable taxonomy filter on index candidate links.
+        candidate_taxonomy_filter_threshold: Minimum taxonomy score for candidate keep.
+        candidate_taxonomy_filter_top_k: Max candidate links retained after taxonomy filter.
         taxonomy_enabled: Optional per-request taxonomy toggle.
         taxonomy_low_threshold: Optional hint injection score threshold.
         taxonomy_high_threshold: Optional override score threshold.
@@ -220,6 +226,9 @@ async def crawl_url(
         detail_pages_batch=detail_pages_batch,
         batch_index=batch_index,
         batch_total=batch_total,
+        candidate_taxonomy_filter_enabled=candidate_taxonomy_filter_enabled,
+        candidate_taxonomy_filter_threshold=candidate_taxonomy_filter_threshold,
+        candidate_taxonomy_filter_top_k=candidate_taxonomy_filter_top_k,
         taxonomy_enabled=taxonomy_enabled,
         taxonomy_low_threshold=taxonomy_low_threshold,
         taxonomy_high_threshold=taxonomy_high_threshold,

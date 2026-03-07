@@ -38,6 +38,11 @@ def test_cli_crawl_passes_browser_provider(monkeypatch) -> None:
             "--client-id",
             "c1",
             "--strict-client",
+            "--candidate-taxonomy-filter-enabled",
+            "--candidate-taxonomy-filter-threshold",
+            "0.84",
+            "--candidate-taxonomy-filter-top-k",
+            "11",
         ],
     )
 
@@ -45,4 +50,6 @@ def test_cli_crawl_passes_browser_provider(monkeypatch) -> None:
     assert captured["browser_provider"] == "client"
     assert captured["client_id"] == "c1"
     assert captured["strict_client"] is True
-
+    assert captured["candidate_taxonomy_filter_enabled"] is True
+    assert captured["candidate_taxonomy_filter_threshold"] == 0.84
+    assert captured["candidate_taxonomy_filter_top_k"] == 11
