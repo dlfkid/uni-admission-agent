@@ -15,10 +15,9 @@ def test_build_ws_url() -> None:
 
 def test_render_fetch_command_injects_url_and_page_type() -> None:
     rendered = render_fetch_command(
-        template='cliten fetch --url "{url}" --page-type "{page_type_hint}"',
+        template='client fetch --url "{url}" --page-type "{page_type_hint}"',
         url="https://example.edu/programmes",
         page_type_hint="index",
     )
     assert "https://example.edu/programmes" in rendered
     assert "index" in rendered
-

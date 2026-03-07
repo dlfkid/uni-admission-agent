@@ -141,7 +141,7 @@ Per-request overrides are supported on `/crawl`:
 Client dispatch flow:
 1. External caller uses existing `crawl` (REST or MCP)
 2. `browser_provider=auto|client` resolves through connected client when available
-3. Client executes external browser command (e.g. cliten), returns HTML/`detail_pages_batch`
+3. Client executes external browser command (e.g. client), returns HTML/`detail_pages_batch`
 4. Existing ingestion pipeline consumes returned payload (no extension dependency required)
 
 ---
