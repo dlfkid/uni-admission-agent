@@ -413,6 +413,17 @@ curl -X POST http://localhost:8910/crawl \
     "taxonomy_override_enabled": true
   }'
 
+# Force user-side browser automation client (no extension required)
+curl -X POST http://localhost:8910/crawl \
+  -H "Content-Type: application/json" \
+  -d '{
+    "url": "https://www.manchester.ac.uk/study/masters/courses/list/?k=&s=All",
+    "univ_slug": "uom",
+    "year": 2026,
+    "browser_provider": "client",
+    "strict_client": true
+  }'
+
 # Analyze page for link selection (two-phase crawl)
 curl -X POST http://localhost:8910/analyze \
   -H "Content-Type: application/json" \
@@ -420,6 +431,9 @@ curl -X POST http://localhost:8910/analyze \
 
 # Check task status
 curl http://localhost:8910/tasks/{task_id}
+
+# List connected browser-automation clients
+curl http://localhost:8910/clients
 
 # Database statistics
 curl http://localhost:8910/status
@@ -442,6 +456,53 @@ curl -X POST http://localhost:8910/export \
 The MCP server is mounted at `/mcp` and exposes two tools:
 - **`crawl`** — Crawl a URL and import admission data
 - **`db_query`** — Query programs from the database
+
+`crawl` also supports optional browser provider controls:
+- `browser_provider`: `auto` | `server` | `client`
+- `client_id`: optional target client id
+- `strict_client`: fail instead of fallback when no client available
+
+### `adm-agent-client` (Extension Optional)
+
+When external LLMs call MCP/REST directly, users may not have extension pages open.  
+Use `adm-agent-client` to connect the user's machine to `serve` and execute browser automation.
+
+**Quickstart (source mode):**
+```bash
+uv run src/cmd/client_cli.py init
+uv run src/cmd/client_cli.py status
+uv run src/cmd/client_cli.py start --continuous
+```
+
+**Client bridge endpoint:**
+- WebSocket: `ws://<serve-host>:<serve-port>/clients/ws`
+- Status API: `GET /clients`
+
+**Browser fetch command contract:**
+- Set env var `ADM_AGENT_CLIENT_FETCH_CMD`
+- Template placeholders: `{url}`, `{page_type_hint}`
+- Command must output JSON to stdout (e.g. `{"html_content":"..."}` or `{"detail_pages_batch":[...]}`)
+
+Example:
+```bash
+export ADM_AGENT_CLIENT_FETCH_CMD='cliten fetch --url "{url}" --page-type "{page_type_hint}" --json'
+```
+
+### Platform Permissions
+
+- **macOS**: after unzip, run `xattr -cr .` once in extracted folder.
+- **Windows**: first run may show SmartScreen; choose "More info" → "Run anyway".
+- **Linux**: ensure executable bit (`chmod +x adm-agent-client`).
+
+### LLM Bootstrap Prompt (Codex / Claude / OpenClaw)
+
+Generate copy-paste setup prompt:
+
+```bash
+uv run src/cmd/client_cli.py bootstrap --target codex --emit-prompt
+uv run src/cmd/client_cli.py bootstrap --target claude --emit-prompt
+uv run src/cmd/client_cli.py bootstrap --target openclaw --emit-prompt
+```
 
 ### Chrome Extension
 
@@ -485,10 +546,16 @@ To package the agent for distribution (standalone executable + extension zip):
     ```bash
     python scripts/build_dist.py
     ```
+    Optional:
+    ```bash
+    python scripts/build_dist.py --client-only
+    python scripts/build_dist.py --separate-artifacts
+    ```
 
 3.  **Check Release Folder**:
     The script generates a `release/` directory containing:
     -   `adm-agent/`: The standalone executable (backend engine).
+    -   `adm-agent-client/`: The standalone user-side browser automation client (when built).
     -   `extension.zip`: The packaged Chrome extension.
     -   `README.txt`: Quick start guide for end-users.
 

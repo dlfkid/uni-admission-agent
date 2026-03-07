@@ -199,3 +199,15 @@
 3. 接入 cliten 执行器并串通 `detail_pages_batch` 既有 ingestion 分支。
 4. 补齐 `/clients` 观测、README 权限章节、bootstrap prompt 模板（含 openclaw）。
 5. 最后做跨平台打包与端到端验收。
+
+---
+
+## 十、实施补充（2026-03-07）
+- `serve` 与 `browser_provider` 的对接方式：
+  - `availability_fn`: 基于 `client_registry.select_client_id(...)`
+  - `fetch_fn`: 通过 `WS /clients/ws` 发送 `rpc_request`，等待 `rpc_result`
+- 当前 client 执行器采用“外部命令模板”契约：
+  - 环境变量：`ADM_AGENT_CLIENT_FETCH_CMD`
+  - 占位符：`{url}`、`{page_type_hint}`
+  - stdout 必须返回 JSON payload（`html_content` 或 `detail_pages_batch`）
+- `adm-agent-client` 连续模式 (`start --continuous`) 已实现 websocket 长连与心跳。

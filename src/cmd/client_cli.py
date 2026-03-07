@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import asyncio
 import platform
-import time
 from pathlib import Path
 
 import typer
@@ -73,11 +72,10 @@ def start(
     once: bool = typer.Option(
         True,
         "--once/--continuous",
-        help="Run one connection probe or continuous probe loop",
+        help="Run one connectivity probe or continuous websocket runtime",
     ),
-    interval_seconds: int = typer.Option(10, "--interval", min=1, help="Continuous probe interval in seconds"),
 ) -> None:
-    """Start client runtime (currently connectivity probe loop)."""
+    """Start client runtime."""
     config = load_client_config()
     if not config:
         typer.echo("Client is not initialized. Run: adm-agent-client init", err=True)
@@ -90,13 +88,9 @@ def start(
         typer.echo(f"{state}: {result.endpoint}")
         return
 
-    typer.echo("Starting continuous probe. Press Ctrl+C to stop.")
+    typer.echo("Starting websocket runtime. Press Ctrl+C to stop.")
     try:
-        while True:
-            result = asyncio.run(runtime.start_once())
-            state = "connected" if result.connected else "disconnected"
-            typer.echo(f"{state}: {result.endpoint}")
-            time.sleep(interval_seconds)
+        asyncio.run(runtime.run_forever())
     except KeyboardInterrupt:
         typer.echo("Stopped.")
 

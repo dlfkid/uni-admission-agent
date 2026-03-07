@@ -10,8 +10,10 @@ logger = logging.getLogger(__name__)
 ClientAvailabilityFn = Callable[[Optional[str]], bool]
 ClientFetchFn = Callable[..., Awaitable[dict[str, Any]]]
 
-_client_availability_fn: Optional[ClientAvailabilityFn] = None
-_client_fetch_fn: Optional[ClientFetchFn] = None
+_dispatchers: dict[str, Optional[Callable[..., Any]]] = {
+    "availability_fn": None,
+    "fetch_fn": None,
+}
 
 
 def configure_client_dispatchers(
@@ -20,19 +22,19 @@ def configure_client_dispatchers(
     fetch_fn: Optional[ClientFetchFn] = None,
 ) -> None:
     """Configure client bridge callbacks used by provider resolution."""
-    global _client_availability_fn, _client_fetch_fn
     if availability_fn is not None:
-        _client_availability_fn = availability_fn
+        _dispatchers["availability_fn"] = availability_fn
     if fetch_fn is not None:
-        _client_fetch_fn = fetch_fn
+        _dispatchers["fetch_fn"] = fetch_fn
 
 
 def has_available_client(preferred_client_id: Optional[str]) -> bool:
     """Whether there is a usable browser-automation client."""
-    if _client_availability_fn is None:
+    availability_fn = _dispatchers.get("availability_fn")
+    if availability_fn is None:
         return False
     try:
-        return bool(_client_availability_fn(preferred_client_id))
+        return bool(availability_fn(preferred_client_id))
     except Exception:
         logger.exception("Client availability check failed")
         return False
@@ -45,9 +47,10 @@ async def fetch_index_and_details_via_client(
     client_id: Optional[str],
 ) -> dict[str, Any]:
     """Fetch browser-rendered payload from connected client."""
-    if _client_fetch_fn is None:
+    fetch_fn = _dispatchers.get("fetch_fn")
+    if fetch_fn is None:
         raise RuntimeError("Client bridge fetch handler is not configured")
-    payload = await _client_fetch_fn(
+    payload = await fetch_fn(
         url=url,
         page_type_hint=page_type_hint,
         client_id=client_id,
@@ -99,4 +102,3 @@ async def resolve_browser_inputs(
         for key, value in payload.items()
         if key in {"html_content", "detail_pages_batch", "selected_urls", "selected_link_texts"}
     }
-

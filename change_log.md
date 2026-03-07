@@ -1,5 +1,28 @@
 # Change Log (Consolidated)
 
+## 2026-03-07
+
+### Serve ↔ Client Browser Automation
+- Added `crawl` browser provider controls: `browser_provider`, `client_id`, `strict_client`.
+- Added serve-side client bridge:
+  - `GET /clients`
+  - `WS /clients/ws` (register, heartbeat, rpc result/error relay)
+- Added client registry + RPC broker primitives with timeout/failure handling.
+- Added browser provider orchestration in crawler service (`auto|server|client` with fallback).
+
+### New Client Runtime
+- Added `adm-agent-client` CLI (`init`, `status`, `start`, `bootstrap`).
+- Added websocket runtime loop to receive RPC requests and return browser payloads.
+- Added external fetch command template support via `ADM_AGENT_CLIENT_FETCH_CMD`.
+- Added LLM bootstrap prompt templates for `codex`, `claude`, `openclaw`, `generic`.
+
+### Build/Distribution
+- Added `adm-agent-client.spec`.
+- Extended `scripts/build_dist.py`:
+  - `--client-only`
+  - `--skip-client-build`
+  - separate client artifact packaging.
+
 ## 2026-03-06
 
 ### CLI / Upgrade Compatibility

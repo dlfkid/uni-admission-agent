@@ -16,6 +16,7 @@ Build a trusted, self-updating database of university admission requirements.
 - **Cookie consent auto-dismissal** with JS injection to prevent navigation hijacking
 - **Resilient Pydantic validation** with field validators for LLM response edge cases
 - **Chrome Extension** with interactive control, real-time monitoring, and database preview
+- **Serve ↔ Client browser automation bridge** (`/clients/ws`) for MCP/REST-triggered user-side automation
 - **Stand-alone Executable** build for easy distribution
 
 ---
@@ -29,8 +30,9 @@ Build a trusted, self-updating database of university admission requirements.
 | **Data Validation** | `pydantic` (v2) with strict schema enforcement |
 | **Database** | `sqlmodel` (PostgreSQL default, SQLite fallback) |
 | **API / Control** | `fastapi`, `uvicorn`, `mcp` (Model Context Protocol) |
+| **Client Bridge** | FastAPI WebSocket + `websockets` runtime client |
 | **CLI** | `typer` |
-| **Build** | `pyinstaller` (Backend), `npm` (Extension) |
+| **Build** | `pyinstaller` (Backend + Client), `npm` (Extension) |
 | **Migration** | `alembic` |
 | **Env Management** | `uv` package manager, Python 3.12+ |
 
@@ -125,6 +127,23 @@ Per-request overrides are supported on `/crawl`:
 - `taxonomy_override_enabled`
 - `selected_link_texts`
 
+### 3.7 Serve-Client Browser Automation
+
+`crawl` now supports browser provider selection:
+- `browser_provider`: `auto` / `server` / `client`
+- `client_id`: optional target connected client
+- `strict_client`: fail when no client is available (no fallback)
+
+`serve` maintains connected user-side clients:
+- `GET /clients` for live client status
+- `WS /clients/ws` for register / heartbeat / rpc request/response
+
+Client dispatch flow:
+1. External caller uses existing `crawl` (REST or MCP)
+2. `browser_provider=auto|client` resolves through connected client when available
+3. Client executes external browser command (e.g. cliten), returns HTML/`detail_pages_batch`
+4. Existing ingestion pipeline consumes returned payload (no extension dependency required)
+
 ---
 
 ## 4. Build & Distribution System
@@ -133,13 +152,15 @@ The project supports a fully automated build pipeline to generate standalone art
 
 ### 4.1 Artifacts
 -   **Backend Engine**: `adm-agent` (Single-directory executable via PyInstaller)
+-   **Client Engine**: `adm-agent-client` (Single-directory executable via PyInstaller)
 -   **Frontend**: `extension/uni-admission-extension.zip` (Chrome Extension)
 
 ### 4.2 Build Process
 Managed by `scripts/build_dist.py`:
 1.  `npm run build` (Extension) → `dist/` + `.zip`
 2.  `pyinstaller adm-agent.spec` (Backend) → `dist/adm-agent/`
-3.  **Assembly** → `release/` folder with everything needed.
+3.  `pyinstaller adm-agent-client.spec` (Client) → `dist/adm-agent-client/`
+4.  **Assembly** → `release/` folder with everything needed.
 
 ### 4.3 Path Resolution
 `src/core/paths.py` handles runtime path resolution transparently:
@@ -168,6 +189,7 @@ uni-admission-agent/
 ├── data/                   # Default data storage (dev mode)
 ├── migrations/             # Alembic migrations
 ├── adm-agent.spec          # PyInstaller config
+├── adm-agent-client.spec   # PyInstaller config (client)
 ├── pyproject.toml          # Project config
 └── README.md               # User guide
 ```

@@ -50,7 +50,8 @@ from src.api.schemas import (
     ClientInfoResponse,
 )
 from src.api.task_manager import TaskManager, TaskState
-from src.services.client_bridge import ClientRegistry, ClientSession
+from src.services import browser_provider as browser_provider_service
+from src.services.client_bridge import ClientRegistry, ClientSession, ClientRpcBroker
 from src.services.crawler import (
     CrawlResult,
     analyze_page,
@@ -271,6 +272,47 @@ app.add_middleware(
 task_manager = TaskManager()
 client_registry = ClientRegistry()
 client_sockets: Dict[str, WebSocket] = {}
+client_rpc_broker = ClientRpcBroker(timeout_seconds=45.0)
+
+
+def _has_available_client(preferred_client_id: Optional[str]) -> bool:
+    return client_registry.select_client_id(preferred_client_id) is not None
+
+
+async def _fetch_browser_payload_from_client(
+    *,
+    url: str,
+    page_type_hint: str,
+    client_id: Optional[str],
+) -> Dict[str, Any]:
+    target_client_id = client_registry.select_client_id(client_id)
+    if not target_client_id:
+        raise RuntimeError("No available client for browser automation")
+
+    websocket = client_sockets.get(target_client_id)
+    if websocket is None:
+        raise RuntimeError(f"Client websocket unavailable: {target_client_id}")
+
+    request_id, _future = client_rpc_broker.create_pending(target_client_id)
+    await websocket.send_json(
+        {
+            "type": "rpc_request",
+            "request_id": request_id,
+            "action": "fetch_browser_payload",
+            "payload": {
+                "url": url,
+                "page_type_hint": page_type_hint,
+            },
+        }
+    )
+    payload = await client_rpc_broker.wait_for_response(request_id)
+    return dict(payload or {})
+
+
+browser_provider_service.configure_client_dispatchers(
+    availability_fn=_has_available_client,
+    fetch_fn=_fetch_browser_payload_from_client,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -601,10 +643,32 @@ async def ws_clients(websocket: WebSocket) -> None:
                 continue
 
             if msg_type == "rpc_result":
+                request_id = str(message.get("request_id") or "").strip()
+                payload = message.get("payload")
+                payload_dict = payload if isinstance(payload, dict) else {}
+                accepted = False
+                if request_id:
+                    accepted = client_rpc_broker.resolve(request_id, payload_dict)
                 await websocket.send_json(
                     {
                         "type": "rpc_ack",
-                        "request_id": message.get("request_id"),
+                        "request_id": request_id or None,
+                        "accepted": accepted,
+                    }
+                )
+                continue
+
+            if msg_type == "rpc_error":
+                request_id = str(message.get("request_id") or "").strip()
+                error_msg = str(message.get("message") or "client rpc error")
+                accepted = False
+                if request_id:
+                    accepted = client_rpc_broker.fail(request_id, error_msg)
+                await websocket.send_json(
+                    {
+                        "type": "rpc_ack",
+                        "request_id": request_id or None,
+                        "accepted": accepted,
                     }
                 )
                 continue
@@ -622,6 +686,10 @@ async def ws_clients(websocket: WebSocket) -> None:
             current = client_sockets.get(registered_client_id)
             if current is websocket:
                 client_sockets.pop(registered_client_id, None)
+            client_rpc_broker.fail_all_for_client(
+                registered_client_id,
+                "Client disconnected",
+            )
             client_registry.remove(registered_client_id)
 
 
