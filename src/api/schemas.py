@@ -7,7 +7,7 @@ in ``src.services.crawler``.
 
 from typing import Optional, List, Dict, Any
 
-from pydantic import BaseModel, Field, ConfigDict, model_validator
+from pydantic import BaseModel, Field, ConfigDict, model_validator, field_validator
 
 
 # ---------------------------------------------------------------------------
@@ -76,6 +76,18 @@ class CrawlRequest(BaseModel):
         default=None,
         description="Total batch count in a multi-batch crawl session",
     )
+    browser_provider: str = Field(
+        default="auto",
+        description="Browser HTML provider: auto, server, or client",
+    )
+    client_id: Optional[str] = Field(
+        default=None,
+        description="Optional connected client id for browser automation dispatch",
+    )
+    strict_client: bool = Field(
+        default=False,
+        description="When true, fail instead of falling back if client automation is unavailable",
+    )
     taxonomy_enabled: Optional[bool] = Field(
         default=None,
         description="Enable taxonomy-guided name matching for this crawl",
@@ -110,6 +122,14 @@ class CrawlRequest(BaseModel):
         if low is not None and high is not None and low > high:
             raise ValueError("taxonomy_low_threshold must be <= taxonomy_high_threshold")
         return self
+
+    @field_validator("browser_provider")
+    @classmethod
+    def _validate_browser_provider(cls, value: str) -> str:
+        normalized = str(value or "").strip().lower()
+        if normalized not in {"auto", "server", "client"}:
+            raise ValueError("browser_provider must be one of: auto, server, client")
+        return normalized
 
 
 class AnalyzeRequest(BaseModel):
