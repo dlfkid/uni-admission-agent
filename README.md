@@ -480,6 +480,7 @@ uv run src/cmd/client_cli.py start --continuous
 
 **Browser fetch behavior:**
 - Default: built-in `adm-agent-client fetch` drives local Chrome/Edge via CDP (no Playwright required on client side).
+- Default detail batch size is `4` (`ADM_AGENT_CLIENT_DETAIL_LIMIT` can override).
 - Optional override: set env var `ADM_AGENT_CLIENT_FETCH_CMD` to a custom command template.
 - Template placeholders: `{url}`, `{page_type_hint}`
 - Command must output JSON to stdout (e.g. `{"html_content":"..."}` or `{"detail_pages_batch":[...]}`)

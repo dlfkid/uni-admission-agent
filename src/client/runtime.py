@@ -79,7 +79,7 @@ class ClientRuntime:
     def __init__(self, config: ClientConfig) -> None:
         self.config = config
         self.fetch_command_template = os.environ.get("ADM_AGENT_CLIENT_FETCH_CMD", "").strip()
-        self.native_detail_limit = int(os.environ.get("ADM_AGENT_CLIENT_DETAIL_LIMIT", "8") or "8")
+        self.native_detail_limit = int(os.environ.get("ADM_AGENT_CLIENT_DETAIL_LIMIT", "4") or "4")
         self.heartbeat_interval_seconds = 15
 
     async def start_once(self) -> ClientConnectivity:

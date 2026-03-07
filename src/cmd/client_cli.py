@@ -141,7 +141,7 @@ def fetch(
     url: str = typer.Option(..., "--url", help="Target page URL"),
     page_type: str = typer.Option("auto", "--page-type", help="auto | index | detail"),
     json_output: bool = typer.Option(False, "--json", help="Print JSON payload to stdout"),
-    max_detail_links: int = typer.Option(8, "--max-detail-links", help="Max detail links to fetch for index page"),
+    max_detail_links: int = typer.Option(4, "--max-detail-links", help="Max detail links to fetch for index page"),
     debug_port: int = typer.Option(9222, "--debug-port", help="Chrome/Edge remote debugging port"),
     browser_path: str = typer.Option("", "--browser-path", help="Optional browser executable path"),
 ) -> None:
