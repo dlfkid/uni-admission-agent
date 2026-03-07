@@ -405,6 +405,21 @@ def crawl(
         "--strict-client",
         help="Fail if client browser automation is unavailable (no server fallback)",
     ),
+    candidate_taxonomy_filter_enabled: bool = typer.Option(
+        False,
+        "--candidate-taxonomy-filter-enabled",
+        help="Enable taxonomy scoring filter for index/auto candidate links",
+    ),
+    candidate_taxonomy_filter_threshold: float = typer.Option(
+        0.75,
+        "--candidate-taxonomy-filter-threshold",
+        help="Minimum taxonomy score to keep candidate links (0~1)",
+    ),
+    candidate_taxonomy_filter_top_k: int = typer.Option(
+        30,
+        "--candidate-taxonomy-filter-top-k",
+        help="Maximum candidate links retained after taxonomy filter",
+    ),
     verbose: bool = typer.Option(False, "--verbose", "-v"),
 ) -> None:
     """Crawl a URL and import admission data."""
@@ -427,6 +442,18 @@ def crawl(
             err=True,
         )
         raise typer.Exit(code=1)
+    if candidate_taxonomy_filter_threshold < 0 or candidate_taxonomy_filter_threshold > 1:
+        typer.echo(
+            "Error: --candidate-taxonomy-filter-threshold must be between 0 and 1",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+    if candidate_taxonomy_filter_top_k < 1:
+        typer.echo(
+            "Error: --candidate-taxonomy-filter-top-k must be >= 1",
+            err=True,
+        )
+        raise typer.Exit(code=1)
 
     typer.echo(f"Crawling: {url}  (univ={name}, year={year}, depth={continue_depth}, type={page_type})")
     if export_md:
@@ -446,6 +473,9 @@ def crawl(
                 browser_provider=browser_provider,
                 client_id=client_id,
                 strict_client=strict_client,
+                candidate_taxonomy_filter_enabled=candidate_taxonomy_filter_enabled,
+                candidate_taxonomy_filter_threshold=candidate_taxonomy_filter_threshold,
+                candidate_taxonomy_filter_top_k=candidate_taxonomy_filter_top_k,
             )
         )
         typer.echo(f"✅ Crawl complete: {result.imported_count} programs imported")

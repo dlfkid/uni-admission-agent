@@ -209,8 +209,9 @@ def filter_links_by_llm(
 ) -> List[str]:
     """Use the LLM to identify which links are likely course detail pages.
 
-    Sends the anchor text + URL list to the LLM in a single call.
-    Returns only the URLs that the LLM considers course-related.
+    Sends anchor text + URL list to the LLM in batches to avoid
+    truncating long index pages. Returns only the URLs that the
+    LLM considers course-related.
 
     Args:
         router: LLM router agent.
@@ -224,18 +225,61 @@ def filter_links_by_llm(
     if not link_pairs:
         return []
 
-    # Truncate if too many links
     prioritized = _prioritize_links_for_llm(link_pairs, base_url)
-    truncated = prioritized[:_MAX_LINKS_FOR_LLM]
-    if len(link_pairs) > _MAX_LINKS_FOR_LLM:
-        logger.warning(
-            "Truncated link list from %d to %d for LLM filtering",
-            len(link_pairs), _MAX_LINKS_FOR_LLM,
+    total_links = len(prioritized)
+    batch_size = _MAX_LINKS_FOR_LLM
+    batch_total = max(1, (total_links + batch_size - 1) // batch_size)
+
+    if total_links > batch_size:
+        logger.info(
+            "Link list has %d entries; filtering in %d batches (size=%d)",
+            total_links,
+            batch_total,
+            batch_size,
         )
 
-    # Build numbered link list for prompt
+    filtered_all: List[str] = []
+    for batch_index in range(batch_total):
+        start = batch_index * batch_size
+        end = min(start + batch_size, total_links)
+        batch_pairs = prioritized[start:end]
+        if not batch_pairs:
+            continue
+        filtered_batch = _filter_link_batch_by_llm(
+            router=router,
+            link_pairs=batch_pairs,
+            base_url=base_url,
+            batch_index=batch_index + 1,
+            batch_total=batch_total,
+        )
+        filtered_all.extend(filtered_batch)
+
+    seen: set[str] = set()
+    deduped: List[str] = []
+    for url in filtered_all:
+        if url in seen:
+            continue
+        seen.add(url)
+        deduped.append(url)
+
+    logger.info(
+        "[LLM Filter] Selected %d/%d links as course detail pages",
+        len(deduped), total_links,
+    )
+    return deduped
+
+
+def _filter_link_batch_by_llm(
+    router: RouterAgent,
+    link_pairs: List[Tuple[str, str]],
+    base_url: str,
+    *,
+    batch_index: int,
+    batch_total: int,
+) -> List[str]:
+    """Filter one batch of candidate links via LLM."""
     lines: List[str] = []
-    for idx, (url, text) in enumerate(truncated, 1):
+    for idx, (url, text) in enumerate(link_pairs, 1):
         display = text if text else "(no text)"
         lines.append(f"{idx}. [{display}]({url})")
     link_list_text = "\n".join(lines)
@@ -243,55 +287,63 @@ def filter_links_by_llm(
     prompt_template = load_prompt("filter_index_links.txt")
     prompt = prompt_template.format(
         base_url=base_url,
-        link_count=len(truncated),
+        link_count=len(link_pairs),
         link_list=link_list_text,
     )
 
     logger.info(
-        "[LLM Filter] Asking LLM to evaluate %d links from %s",
-        len(truncated), base_url,
+        "[LLM Filter] Evaluating batch %d/%d with %d links from %s",
+        batch_index,
+        batch_total,
+        len(link_pairs),
+        base_url,
     )
 
     try:
         response = router.generate(prompt, FilteredLinks)
 
         if not response.text:
-            logger.warning("LLM returned empty response for link filtering")
-            return [u for u, _ in truncated]
+            logger.warning(
+                "[LLM Filter] Empty response on batch %d/%d; "
+                "falling back to all %d links in batch",
+                batch_index,
+                batch_total,
+                len(link_pairs),
+            )
+            return [u for u, _ in link_pairs]
 
         result = FilteredLinks.model_validate_json(response.text)
-
-        # Build url set from original pairs for validation
-        valid_urls = {u for u, _ in truncated}
+        valid_urls = {u for u, _ in link_pairs}
         filtered = [u for u in result.urls if u in valid_urls]
 
-        if not filtered:
-            heuristic_fallback = [
-                url
-                for url, text in truncated
-                if _course_link_score(url, text, base_url) > 0
-            ]
-            if heuristic_fallback:
-                logger.warning(
-                    "[LLM Filter] LLM returned empty list; "
-                    "using %d heuristic course-like links",
-                    len(heuristic_fallback),
-                )
-                return heuristic_fallback
+        if filtered:
+            return filtered
 
-        logger.info(
-            "[LLM Filter] Selected %d/%d links as course detail pages",
-            len(filtered), len(truncated),
-        )
-        return filtered
-
+        heuristic_fallback = [
+            url
+            for url, text in link_pairs
+            if _course_link_score(url, text, base_url) > 0
+        ]
+        if heuristic_fallback:
+            logger.warning(
+                "[LLM Filter] Batch %d/%d returned empty list; "
+                "using %d heuristic course-like links",
+                batch_index,
+                batch_total,
+                len(heuristic_fallback),
+            )
+            return heuristic_fallback
+        return []
     except Exception as exc:  # pylint: disable=broad-except
         logger.error(
-            "LLM link filtering failed (%s). "
-            "Falling back to all %d links.",
-            exc, len(truncated),
+            "LLM link filtering failed on batch %d/%d (%s). "
+            "Falling back to all %d links in batch.",
+            batch_index,
+            batch_total,
+            exc,
+            len(link_pairs),
         )
-        return [u for u, _ in truncated]
+        return [u for u, _ in link_pairs]
 
 
 def detect_page_type(markdown: str, link_count: int) -> PageType:

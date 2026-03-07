@@ -202,6 +202,9 @@ class IngestionPipeline:
         detail_pages_batch: Optional[List[Dict[str, Any]]] = None,
         batch_index: Optional[int] = None,
         batch_total: Optional[int] = None,
+        candidate_taxonomy_filter_enabled: bool = False,
+        candidate_taxonomy_filter_threshold: float = 0.75,
+        candidate_taxonomy_filter_top_k: int = 30,
         taxonomy_enabled: Optional[bool] = None,
         taxonomy_low_threshold: Optional[float] = None,
         taxonomy_high_threshold: Optional[float] = None,
@@ -224,6 +227,9 @@ class IngestionPipeline:
             "detail_pages_batch": list(detail_pages_batch or []),
             "batch_index": batch_index,
             "batch_total": batch_total,
+            "candidate_taxonomy_filter_enabled": bool(candidate_taxonomy_filter_enabled),
+            "candidate_taxonomy_filter_threshold": candidate_taxonomy_filter_threshold,
+            "candidate_taxonomy_filter_top_k": candidate_taxonomy_filter_top_k,
             "taxonomy_enabled": taxonomy_enabled,
             "taxonomy_low_threshold": taxonomy_low_threshold,
             "taxonomy_high_threshold": taxonomy_high_threshold,
@@ -611,6 +617,24 @@ class IngestionPipeline:
             batch_total = int(raw_batch_total) if raw_batch_total is not None else None
         except (TypeError, ValueError):
             batch_total = None
+        candidate_taxonomy_filter_enabled = self._coerce_bool(
+            request_payload.get("candidate_taxonomy_filter_enabled"),
+            default=False,
+        )
+        candidate_taxonomy_filter_threshold = self._coerce_float(
+            request_payload.get("candidate_taxonomy_filter_threshold"),
+            default=0.75,
+        )
+        candidate_taxonomy_filter_threshold = max(
+            0.0,
+            min(1.0, float(candidate_taxonomy_filter_threshold)),
+        )
+        candidate_taxonomy_filter_top_k = self._coerce_int(
+            request_payload.get("candidate_taxonomy_filter_top_k"),
+            default=30,
+            minimum=1,
+            maximum=200,
+        )
 
         fetched_pages: List[Dict[str, Any]] = []
         failed_urls: List[str] = []
@@ -839,7 +863,13 @@ class IngestionPipeline:
                     },
                     source="index_probe",
                 )
-                detail_urls, detail_link_texts = await self._select_detail_urls(scraper, probe)
+                detail_urls, detail_link_texts = await self._select_detail_urls(
+                    scraper,
+                    probe,
+                    candidate_taxonomy_filter_enabled=candidate_taxonomy_filter_enabled,
+                    candidate_taxonomy_filter_threshold=candidate_taxonomy_filter_threshold,
+                    candidate_taxonomy_filter_top_k=candidate_taxonomy_filter_top_k,
+                )
                 selected_link_texts.update(detail_link_texts)
                 crawl_urls = self._dedupe_urls(detail_urls, visited_urls)
                 _emit_fetch_event(
@@ -892,7 +922,13 @@ class IngestionPipeline:
                     },
                     source="entry_index",
                 )
-                detail_urls, detail_link_texts = await self._select_detail_urls(scraper, seed_page)
+                detail_urls, detail_link_texts = await self._select_detail_urls(
+                    scraper,
+                    seed_page,
+                    candidate_taxonomy_filter_enabled=candidate_taxonomy_filter_enabled,
+                    candidate_taxonomy_filter_threshold=candidate_taxonomy_filter_threshold,
+                    candidate_taxonomy_filter_top_k=candidate_taxonomy_filter_top_k,
+                )
                 selected_link_texts.update(detail_link_texts)
                 crawl_urls = self._dedupe_urls(detail_urls, visited_urls)
                 _emit_fetch_event(
@@ -1347,6 +1383,10 @@ class IngestionPipeline:
         self,
         scraper: AdmissionScraper,
         page: CrawlPageResult,
+        *,
+        candidate_taxonomy_filter_enabled: bool = False,
+        candidate_taxonomy_filter_threshold: float = 0.75,
+        candidate_taxonomy_filter_top_k: int = 30,
     ) -> tuple[List[str], Dict[str, str]]:
         if not page.markdown:
             return [], {}
@@ -1372,6 +1412,55 @@ class IngestionPipeline:
                 continue
             seen.add(url)
             deduped.append(url)
+
+        url_to_text = {
+            str(url).strip(): str(text).strip()
+            for url, text in link_pairs
+            if str(url).strip()
+        }
+
+        if candidate_taxonomy_filter_enabled and deduped:
+            ranked: List[tuple[float, str]] = []
+            for detail_url in deduped:
+                signals: list[str] = []
+                anchor_text = str(url_to_text.get(detail_url) or "").strip()
+                if anchor_text:
+                    signals.append(anchor_text)
+                url_signal = build_url_name_signal(detail_url)
+                if url_signal:
+                    signals.append(url_signal)
+                if not signals:
+                    continue
+                matches = self.taxonomy_service.match_signals(signals, top_k=1)
+                if not matches:
+                    continue
+                score = float(matches[0].get("score") or 0.0)
+                if score >= candidate_taxonomy_filter_threshold:
+                    ranked.append((score, detail_url))
+
+            if ranked:
+                ranked.sort(key=lambda item: item[0], reverse=True)
+                filtered_urls = [
+                    url
+                    for _score, url in ranked[: max(1, int(candidate_taxonomy_filter_top_k))]
+                ]
+                logger.info(
+                    "Candidate taxonomy filter retained %d/%d links "
+                    "(threshold=%.2f, top_k=%d)",
+                    len(filtered_urls),
+                    len(deduped),
+                    candidate_taxonomy_filter_threshold,
+                    candidate_taxonomy_filter_top_k,
+                )
+                deduped = filtered_urls
+                seen = set(filtered_urls)
+            else:
+                logger.warning(
+                    "Candidate taxonomy filter retained 0/%d links; "
+                    "falling back to unfiltered candidates",
+                    len(deduped),
+                )
+
         text_map = {
             str(url).strip(): str(text).strip()
             for url, text in link_pairs

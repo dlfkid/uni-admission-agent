@@ -421,7 +421,10 @@ curl -X POST http://localhost:8910/crawl \
     "univ_slug": "uom",
     "year": 2026,
     "browser_provider": "client",
-    "strict_client": true
+    "strict_client": true,
+    "candidate_taxonomy_filter_enabled": true,
+    "candidate_taxonomy_filter_threshold": 0.8,
+    "candidate_taxonomy_filter_top_k": 20
   }'
 
 # Analyze page for link selection (two-phase crawl)
@@ -453,7 +456,9 @@ curl -X POST http://localhost:8910/export \
 
 ### MCP Server
 
-The MCP server is mounted at `/mcp` and exposes two tools:
+The MCP server is mounted at `/mcp` and exposes:
+- **`analyze`** — Analyze entry page and return candidate detail links
+- **`crawl_detail_batch`** — Crawl user-selected detail links in batches via client browser automation
 - **`crawl`** — Crawl a URL and import admission data
 - **`db_query`** — Query programs from the database
 
@@ -461,6 +466,15 @@ The MCP server is mounted at `/mcp` and exposes two tools:
 - `browser_provider`: `auto` | `server` | `client`
 - `client_id`: optional target client id
 - `strict_client`: fail instead of fallback when no client available
+- `candidate_taxonomy_filter_enabled`: apply taxonomy scoring to index/auto candidates
+- `candidate_taxonomy_filter_threshold`: minimum candidate taxonomy score (0~1)
+- `candidate_taxonomy_filter_top_k`: max candidates kept after taxonomy filtering
+- Index candidate filtering is batch-evaluated by LLM (80 links per call) without a global 80-link cap.
+
+Recommended MCP interactive flow for any MCP-capable app:
+1. Call `analyze` (`browser_provider=client`) on the index URL.
+2. Show returned candidate links to user for selection.
+3. Call `crawl_detail_batch` with selected URLs to execute batched detail crawling/import.
 
 ### `adm-agent-client` (Extension Optional)
 
@@ -473,6 +487,8 @@ uv run src/cmd/client_cli.py init
 uv run src/cmd/client_cli.py status
 uv run src/cmd/client_cli.py start --continuous
 uv run src/cmd/client_cli.py stop
+uv run src/cmd/client_cli.py version --verbose
+uv run src/cmd/client_cli.py upgrade --check
 ```
 
 For non-developer users, command-line launch is recommended (double-clicking executables may close immediately with no visible logs).

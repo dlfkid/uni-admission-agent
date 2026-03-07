@@ -3,7 +3,7 @@ FastAPI + MCP server for UniAdmission Agent.
 
 Exposes:
     REST endpoints — ``/crawl``, ``/tasks/{id}``, ``/status``, ``/programs``, ``/config``, ``/cancel``
-    MCP tools     — ``crawl``, ``db_query``
+    MCP tools     — ``analyze``, ``crawl_detail_batch``, ``crawl``, ``db_query``
 
 Start via CLI:
     uv run src/cmd/cli.py serve          # defaults to 0.0.0.0:8910
@@ -55,6 +55,8 @@ from src.services.client_bridge import ClientRegistry, ClientSession, ClientRpcB
 from src.services.crawler import (
     CrawlResult,
     analyze_page,
+    analyze_url_candidates,
+    crawl_selected_detail_urls_via_client,
     crawl_url,
     get_ingestion_job,
     get_db_status,
@@ -516,6 +518,9 @@ async def api_crawl(body: CrawlRequest) -> CrawlResponse:
                     browser_provider=body.browser_provider,
                     client_id=body.client_id,
                     strict_client=body.strict_client,
+                    candidate_taxonomy_filter_enabled=body.candidate_taxonomy_filter_enabled,
+                    candidate_taxonomy_filter_threshold=body.candidate_taxonomy_filter_threshold,
+                    candidate_taxonomy_filter_top_k=body.candidate_taxonomy_filter_top_k,
                     taxonomy_enabled=body.taxonomy_enabled,
                     taxonomy_low_threshold=body.taxonomy_low_threshold,
                     taxonomy_high_threshold=body.taxonomy_high_threshold,
@@ -1013,6 +1018,62 @@ try:
     mcp = FastMCP("UniAdmission Agent")
 
     @mcp.tool()
+    async def mcp_analyze(
+        url: str,
+        page_type_hint: str = "auto",
+        browser_provider: str = "auto",
+        client_id: Optional[str] = None,
+        strict_client: bool = False,
+        html_content: Optional[str] = None,
+    ) -> dict:
+        """Analyze entry page and return candidate detail links for user selection.
+
+        Designed for interactive MCP workflows:
+        1) Detect whether entry is index/detail
+        2) Return candidate links (if index)
+        3) Let user decide which links to crawl next
+        """
+        result = await analyze_url_candidates(
+            url=url,
+            page_type_hint=page_type_hint,
+            html_content=html_content,
+            browser_provider=browser_provider,
+            client_id=client_id,
+            strict_client=strict_client,
+        )
+        return dict(result)
+
+    @mcp.tool()
+    async def mcp_crawl_detail_batch(
+        index_url: str,
+        selected_urls: List[str],
+        univ_slug: str,
+        year: int,
+        batch_size: int = 4,
+        client_id: Optional[str] = None,
+        strict_client: bool = True,
+        selected_link_texts: Optional[Dict[str, str]] = None,
+    ) -> dict:
+        """Fetch selected detail pages via client browser and crawl in batches.
+
+        Typical usage:
+        - Call ``mcp_analyze`` first to get ``links``
+        - Ask user to choose subset (all/top N/bottom N/manual)
+        - Call this tool with chosen URLs for batched detail crawling
+        """
+        result = await crawl_selected_detail_urls_via_client(
+            index_url=index_url,
+            selected_urls=selected_urls,
+            univ_slug=univ_slug,
+            year=year,
+            batch_size=batch_size,
+            client_id=client_id,
+            strict_client=strict_client,
+            selected_link_texts=selected_link_texts,
+        )
+        return dict(result)
+
+    @mcp.tool()
     async def mcp_crawl(
         url: str,
         univ_slug: str,
@@ -1021,6 +1082,9 @@ try:
         browser_provider: str = "auto",
         client_id: Optional[str] = None,
         strict_client: bool = False,
+        candidate_taxonomy_filter_enabled: bool = False,
+        candidate_taxonomy_filter_threshold: float = 0.75,
+        candidate_taxonomy_filter_top_k: int = 30,
     ) -> dict:
         """Crawl a university admission page and import structured data.
 
@@ -1049,6 +1113,9 @@ try:
             browser_provider=browser_provider,
             client_id=client_id,
             strict_client=strict_client,
+            candidate_taxonomy_filter_enabled=candidate_taxonomy_filter_enabled,
+            candidate_taxonomy_filter_threshold=candidate_taxonomy_filter_threshold,
+            candidate_taxonomy_filter_top_k=candidate_taxonomy_filter_top_k,
         )
         return result.model_dump()
 
@@ -1145,7 +1212,7 @@ repair:
 
     # Mount MCP as a sub-application at /mcp
     app.mount("/mcp", mcp.sse_app())
-    logger.info("MCP tools registered: crawl, db_query, help")
+    logger.info("MCP tools registered: analyze, crawl_detail_batch, crawl, db_query, help")
 
 except ImportError:
     logger.info("MCP SDK not installed — MCP tools disabled. Install with: uv add 'mcp[cli]'")

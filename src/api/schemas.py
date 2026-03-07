@@ -88,6 +88,22 @@ class CrawlRequest(BaseModel):
         default=False,
         description="When true, fail instead of falling back if client automation is unavailable",
     )
+    candidate_taxonomy_filter_enabled: bool = Field(
+        default=False,
+        description="Enable taxonomy scoring filter for index/auto candidate detail links",
+    )
+    candidate_taxonomy_filter_threshold: float = Field(
+        default=0.75,
+        ge=0.0,
+        le=1.0,
+        description="Minimum taxonomy score to keep a candidate detail link",
+    )
+    candidate_taxonomy_filter_top_k: int = Field(
+        default=30,
+        ge=1,
+        le=200,
+        description="Maximum candidate links retained after taxonomy filter",
+    )
     taxonomy_enabled: Optional[bool] = Field(
         default=None,
         description="Enable taxonomy-guided name matching for this crawl",
