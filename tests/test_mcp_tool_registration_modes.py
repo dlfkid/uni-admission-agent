@@ -49,6 +49,7 @@ def test_base_tools_registered_without_internal_llm(monkeypatch) -> None:
         "analyze",
         "crawl",
         "crawl_detail_batch",
+        "ingest",
         "db_query",
         "runtime_status",
         "program_patch",
@@ -58,6 +59,11 @@ def test_base_tools_registered_without_internal_llm(monkeypatch) -> None:
     assert "analyze_internal_llm" not in tool_names
     assert "crawl_internal_llm" not in tool_names
     assert "crawl_detail_batch_internal_llm" not in tool_names
+    assert "db_query_internal_llm" not in tool_names
+    assert "runtime_status_internal_llm" not in tool_names
+    assert "program_patch_internal_llm" not in tool_names
+    assert "program_patch_batch_internal_llm" not in tool_names
+    assert "help_internal_llm" not in tool_names
 
 
 def test_internal_llm_tools_registered_only_when_available(monkeypatch) -> None:
@@ -69,6 +75,7 @@ def test_internal_llm_tools_registered_only_when_available(monkeypatch) -> None:
     assert "analyze_internal_llm" not in tool_names_without_internal
     assert "crawl_internal_llm" not in tool_names_without_internal
     assert "crawl_detail_batch_internal_llm" not in tool_names_without_internal
+    assert "ingest_internal_llm" not in tool_names_without_internal
 
     server_with_internal = _reload_server_with_router_probe(
         monkeypatch,
@@ -79,4 +86,10 @@ def test_internal_llm_tools_registered_only_when_available(monkeypatch) -> None:
         "analyze_internal_llm",
         "crawl_internal_llm",
         "crawl_detail_batch_internal_llm",
+        "ingest_internal_llm",
+        "db_query_internal_llm",
+        "runtime_status_internal_llm",
+        "program_patch_internal_llm",
+        "program_patch_batch_internal_llm",
+        "help_internal_llm",
     }.issubset(tool_names_with_internal)

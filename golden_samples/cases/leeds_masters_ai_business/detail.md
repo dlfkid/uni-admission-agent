@@ -28,6 +28,7 @@ Search leeds.ac.uk Search all leeds.ac.uk
 
 #  AI for Business MSc 
 ## Year of entry 2026
+[Apply](https://myleedsportal.leeds.ac.uk/signin-landing/?courseId=MSC-BS%2FAIBU&year=2026%2F27)
 ### Masters Discovery Fair
 Shape the future you want. Come along to our on-campus Masters Discovery Fair on Wednesday 11 March. [Book your place](https://www.leeds.ac.uk/masters-discovery-fair) Start date
     September 2026 Delivery type
@@ -35,7 +36,7 @@ Shape the future you want. Come along to our on-campus Masters Discovery Fair on
     12 Months (Full time) Entry requirements
     A bachelor degree with a 2:1 (hons) in any subject.  
 [Full entry requirements](https://courses.leeds.ac.uk/k198/ai-for-business-msc?searchOrigin=query%3D%26type%3DPGT%26term%3D202627#applying) English language requirements
-    IELTS 6.5 overall, with no less than 6.0 in any component. UK fees
+    IELTS 6.5 overall, with no less than 6.0 in any component UK fees
     £17,500 (Total) International fees
     £33,000 (Total) Contact
     masters@lubs.leeds.ac.uk
@@ -156,7 +157,7 @@ A bachelor degree with a 2:1 (hons) in any subject.
 #### International qualifications
 We accept a range of [international equivalent qualifications](https://business.leeds.ac.uk/masters/doc/international-equivalents-2).
 #### English language requirements
-IELTS 6.5 overall, with no less than 6.0 in any component.. For other English qualifications, read [English language equivalent qualifications](https://www.leeds.ac.uk/international-admissions/doc/entry-requirements "English language equivalent qualifications").
+IELTS 6.5 overall, with no less than 6.0 in any component. For other English qualifications, read [English language equivalent qualifications](https://www.leeds.ac.uk/international-admissions/doc/entry-requirements "English language equivalent qualifications").
 **Improve your English**
 International students who do not meet the English language requirements for this programme may be able to study our postgraduate pre-sessional English course, to help improve your English language level.
 This pre-sessional course is designed with a progression route to your degree programme and you'll learn academic English in the context of your subject area. To find out more, read [Language for Business (6 weeks)](https://courses.leeds.ac.uk/k022/language-for-business-6-weeks- "Language for Marketing 6 weeks") and [Language for Business (10 weeks)](https://courses.leeds.ac.uk/k023/language-for-business-10-weeks- "Language for Business: Marketing \(10 weeks\)").

@@ -166,3 +166,56 @@ async def test_review_required_when_count_gt_10_or_low_confidence(monkeypatch) -
     assert result_low["decision_reason"] == "confidence_below_auto_threshold"
     assert len(result_low["candidates"]) == 3
     assert crawl_calls["count"] == 0
+
+
+@pytest.mark.asyncio
+async def test_crawl_respects_manual_page_type_hint_detail(monkeypatch) -> None:
+    captured: dict = {}
+
+    async def _fake_crawl_url(**kwargs):
+        captured.update(kwargs)
+        return CrawlResult(
+            imported_count=1,
+            univ_slug="edinburgh",
+            year=2026,
+            ingestion_job_id="job-detail-hint",
+        )
+
+    monkeypatch.setattr("src.api.server.crawl_url", _fake_crawl_url)
+
+    result = await server.mcp_crawl(
+        url="https://example.edu/detail/program-1",
+        univ_slug="edinburgh",
+        year=2026,
+        page_type_hint="detail",
+    )
+
+    assert captured["page_type_hint"] == "detail"
+    assert result["page_type"] == "detail"
+    assert result["imported_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_crawl_normalizes_multilingual_page_type_hint(monkeypatch) -> None:
+    captured: dict = {}
+
+    async def _fake_crawl_url(**kwargs):
+        captured.update(kwargs)
+        return CrawlResult(
+            imported_count=1,
+            univ_slug="polyu",
+            year=2026,
+            ingestion_job_id="job-detail-zh",
+        )
+
+    monkeypatch.setattr("src.api.server.crawl_url", _fake_crawl_url)
+
+    result = await server.mcp_crawl(
+        url="https://example.edu/detail/program-1",
+        univ_slug="polyu",
+        year=2026,
+        page_type_hint="细节",
+    )
+
+    assert captured["page_type_hint"] == "detail"
+    assert result["page_type_hint_applied"] == "detail"

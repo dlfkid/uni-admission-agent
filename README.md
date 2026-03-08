@@ -459,9 +459,10 @@ curl -X POST http://localhost:8910/export \
 The MCP server is mounted at `/mcp`.
 
 Base toolset (always registered):
-- **`analyze`** — Analyze entry page and return candidate detail links.
+- **`analyze`** — Analyze entry page and return candidate detail links (external-LLM friendly path).
 - **`crawl_detail_batch`** — Crawl user-selected detail links in batches via client browser automation.
-- **`crawl`** — Crawl a URL and import admission data.
+- **`crawl`** — Crawl a URL and import admission data. Supports `page_type_hint=auto|index|detail`.
+- **`ingest`** — Persist caller-LLM structured program records directly (no server-side LLM extraction).
 - **`db_query`** — Query programs from the database.
 - **`runtime_status`** — Report live runtime capability (`client_available`, `client_count`, `client_ids`, `internal_llm_available`, `default_browser_provider_resolved`).
 - **`program_patch`** — Patch one persisted `program_id` from user feedback.
@@ -472,6 +473,12 @@ Internal-LLM toolset (registered only when server-side LLM is available):
 - **`analyze_internal_llm`**
 - **`crawl_detail_batch_internal_llm`**
 - **`crawl_internal_llm`**
+- **`ingest_internal_llm`**
+- **`db_query_internal_llm`**
+- **`runtime_status_internal_llm`**
+- **`program_patch_internal_llm`**
+- **`program_patch_batch_internal_llm`**
+- **`help_internal_llm`**
 
 Decision and correction flow in `crawl`:
 - Missing `year` is blocked with:
@@ -497,13 +504,18 @@ Post-persist review loop:
 - Apply user corrections via `program_patch` / `program_patch_batch`.
 - Batch patch returns `updated_count`, `failed_items`, and `summary` (no all-or-nothing abort).
 
-Recommended MCP interactive flow for any MCP-capable app:
+Recommended MCP interactive flow (single entrypoint):
 1. Call `runtime_status` to inspect available runtime path.
-2. Call `analyze` (`browser_provider=auto|client`) on the index URL.
-3. Confirm `year` before crawl if missing.
-4. If `crawl` returns `requires_user_review=true`, ask user to confirm candidates.
-5. Execute crawl, then ask if corrections are needed.
-6. Apply corrections with `program_patch` / `program_patch_batch`.
+2. Call `analyze` as the **only entrypoint**. Read:
+   - `page_type_detected`
+   - `requires_user_confirmation`
+   - `next_step_options`
+3. If `requires_user_confirmation=true`, ask user whether to continue with detected `index/detail`.
+4. Follow selected next-step tool path:
+   - `detail` path: `crawl` or `crawl_internal_llm`
+   - `index` + external LLM path: select candidates, externally structure data, then `ingest`
+   - `index` + server LLM path: `crawl_detail_batch_internal_llm` (or `crawl_detail_batch`)
+5. Ask user for corrections if needed, then apply `program_patch` / `program_patch_batch`.
 
 ### `adm-agent-client` (Extension Optional)
 

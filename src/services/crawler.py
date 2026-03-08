@@ -33,7 +33,13 @@ from src.models.requirement import (
     RequirementVersion,
 )
 from src.models.ingestion import IngestionStage
+from src.models.scraper_models import PageType
 from src.scrapers.engine import AdmissionScraper
+from src.scrapers.link_parser import (
+    detect_page_type,
+    extract_links_with_text,
+    filter_links_by_heuristic,
+)
 from src.services import browser_provider as browser_provider_service
 from src.services.ingestion_pipeline import IngestionPipeline
 from src.storage.db_manager import DatabaseManager
@@ -143,6 +149,94 @@ def analyze_page(
     return scraper.analyze_page_links(url, html_content, page_type_hint)
 
 
+def _normalize_page_type_hint(value: str) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return "auto"
+    normalized = raw.lower()
+    compact = normalized.replace(" ", "").replace("-", "").replace("_", "")
+    alias_map = {
+        "auto": "auto",
+        "自动": "auto",
+        "自动识别": "auto",
+        "默认": "auto",
+        "index": "index",
+        "listing": "index",
+        "list": "index",
+        "索引": "index",
+        "目录": "index",
+        "列表": "index",
+        "索引页": "index",
+        "目录页": "index",
+        "列表页": "index",
+        "detail": "detail",
+        "details": "detail",
+        "详情": "detail",
+        "细节": "detail",
+        "详细": "detail",
+        "详情页": "detail",
+        "细节页": "detail",
+        "详细页": "detail",
+    }
+    if compact in alias_map:
+        return alias_map[compact]
+    if normalized in alias_map:
+        return alias_map[normalized]
+    return "auto"
+
+
+def _html_to_markdown_for_analyze(url: str, html_content: str) -> str:
+    raw_markdown = str(html_content or "")
+    if not raw_markdown:
+        return ""
+
+    try:
+        from crawl4ai.markdown_generation_strategy import DefaultMarkdownGenerator
+
+        markdown_obj = DefaultMarkdownGenerator().generate_markdown(
+            input_html=raw_markdown,
+            base_url=url,
+        )
+        if markdown_obj and hasattr(markdown_obj, "raw_markdown"):
+            generated = str(markdown_obj.raw_markdown or "").strip()
+            if generated:
+                return generated
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.warning("Analyze markdown conversion failed; using raw html text fallback: %s", exc)
+    return raw_markdown
+
+
+def analyze_page_external(
+    url: str,
+    html_content: str,
+    page_type_hint: str = "auto",
+) -> dict:
+    """Analyze page by deterministic heuristics (no internal LLM calls)."""
+    normalized_hint = _normalize_page_type_hint(page_type_hint)
+    markdown = _html_to_markdown_for_analyze(url, html_content)
+    link_pairs = extract_links_with_text(markdown, url)
+    total_found = len(link_pairs)
+
+    if normalized_hint == "index":
+        page_type = "index"
+    elif normalized_hint == "detail":
+        page_type = "detail"
+    else:
+        detected = detect_page_type(markdown, total_found)
+        page_type = "index" if detected == PageType.INDEX else "detail"
+
+    if page_type == "detail":
+        return {"page_type": "detail", "links": [], "total_found": 0}
+
+    selected_urls = filter_links_by_heuristic(link_pairs, url)
+    url_to_text = dict(link_pairs)
+    links = [
+        {"url": selected_url, "text": url_to_text.get(selected_url, "")}
+        for selected_url in selected_urls
+    ]
+    return {"page_type": "index", "links": links, "total_found": total_found}
+
+
 async def analyze_url_candidates(
     *,
     url: str,
@@ -151,6 +245,7 @@ async def analyze_url_candidates(
     browser_provider: str = "auto",
     client_id: Optional[str] = None,
     strict_client: bool = False,
+    use_internal_llm: bool = True,
 ) -> dict[str, Any]:
     """Analyze one URL and return detail-link candidates for interactive selection.
 
@@ -191,11 +286,13 @@ async def analyze_url_candidates(
             "Provide html_content or use browser_provider=client with an online client."
         )
 
-    result = await asyncio.to_thread(analyze_page, url, html_content, page_type_hint)
+    analyzer = analyze_page if use_internal_llm else analyze_page_external
+    result = await asyncio.to_thread(analyzer, url, html_content, page_type_hint)
     payload = dict(result or {})
     payload["html_source"] = source
     payload["resolved_browser_provider"] = resolved_browser_provider
     payload["client_id_used"] = client_id_used
+    payload["analysis_mode"] = "internal_llm" if use_internal_llm else "external_llm"
     return payload
 
 
@@ -510,6 +607,124 @@ async def resume_crawl_job(
         year=int(result.get("year") or 0),
         ingestion_job_id=str(result.get("job_uid") or job_uid),
     )
+
+
+def ingest_program_records_external(
+    *,
+    univ_slug: str,
+    year: int,
+    programs: list[Any],
+) -> dict[str, Any]:
+    """Persist caller-provided structured program records without internal LLM calls."""
+    normalized_univ_slug = str(univ_slug or "").strip().lower()
+    if not normalized_univ_slug:
+        raise ValueError("univ_slug is required")
+
+    try:
+        normalized_year = int(year)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("year must be a positive integer") from exc
+    if normalized_year <= 0:
+        raise ValueError("year must be a positive integer")
+
+    submitted_items = list(programs or [])
+    if not submitted_items:
+        return {
+            "imported_count": 0,
+            "updated_count": 0,
+            "total_submitted": 0,
+            "failed_items": [],
+            "review_token": uuid.uuid4().hex,
+            "review_items": [],
+            "univ_slug": normalized_univ_slug,
+            "year": normalized_year,
+            "summary": "No program records supplied.",
+        }
+
+    db = DatabaseManager()
+    imported_count = 0
+    updated_count = 0
+    failed_items: list[dict[str, Any]] = []
+    persisted_program_ids: list[int] = []
+
+    for idx, raw_item in enumerate(submitted_items):
+        if not isinstance(raw_item, dict):
+            failed_items.append(
+                {
+                    "index": idx,
+                    "error_code": "invalid_item_type",
+                    "message": "Each program item must be an object.",
+                }
+            )
+            continue
+
+        payload = dict(raw_item)
+        payload["academic_year"] = normalized_year
+        if not str(payload.get("name_en") or "").strip():
+            failed_items.append(
+                {
+                    "index": idx,
+                    "error_code": "missing_name_en",
+                    "message": "name_en is required for external ingest.",
+                }
+            )
+            continue
+
+        try:
+            program, created = db.upsert_program(
+                payload,
+                normalized_univ_slug,
+                enable_auto_translation=False,
+            )
+        except Exception as exc:  # pylint: disable=broad-except
+            failed_items.append(
+                {
+                    "index": idx,
+                    "error_code": "upsert_failed",
+                    "message": str(exc),
+                }
+            )
+            continue
+
+        if getattr(program, "id", None) is not None:
+            persisted_program_ids.append(int(program.id))
+        if created:
+            imported_count += 1
+        else:
+            updated_count += 1
+
+    try:
+        review_items = _build_review_items(
+            univ_slug=normalized_univ_slug,
+            year=normalized_year,
+            persisted_program_ids=persisted_program_ids,
+        )
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.warning(
+            "Failed building review items for external ingest (univ=%s year=%s): %s",
+            normalized_univ_slug,
+            normalized_year,
+            exc,
+        )
+        review_items = []
+
+    upserted_count = imported_count + updated_count
+    summary = (
+        f"External ingest upserted {upserted_count}/{len(submitted_items)} items; "
+        f"created={imported_count}, updated={updated_count}, failed={len(failed_items)}."
+    )
+    return {
+        "imported_count": imported_count,
+        "updated_count": updated_count,
+        "total_submitted": len(submitted_items),
+        "failed_items": failed_items,
+        "review_token": uuid.uuid4().hex,
+        "review_items": review_items,
+        "persisted_program_ids": persisted_program_ids,
+        "univ_slug": normalized_univ_slug,
+        "year": normalized_year,
+        "summary": summary,
+    }
 
 
 def import_file(

@@ -134,6 +134,9 @@ Anthropology students will design and execute an independent research project, c
  
 [Year 1](https://www.ucl.ac.uk/prospective-students/undergraduate/degrees/anthropology-year-abroad-bsc#tab1-year1) [Year 2](https://www.ucl.ac.uk/prospective-students/undergraduate/degrees/anthropology-year-abroad-bsc#tab2-year2) [Year 3](https://www.ucl.ac.uk/prospective-students/undergraduate/degrees/anthropology-year-abroad-bsc#tab3-year3) [Year 4](https://www.ucl.ac.uk/prospective-students/undergraduate/degrees/anthropology-year-abroad-bsc#tab4-year4)
 #### Compulsory modules
+[Methods and Techniques in Biological Anthropology](https://www.ucl.ac.uk/module-catalogue/modules/methods-and-techniques-in-biological-anthropology-ANTH0007)
+  
+
 [Introduction to Material and Visual Culture](https://www.ucl.ac.uk/module-catalogue/modules/introduction-to-material-and-visual-culture-ANTH0001)
   
 
@@ -141,9 +144,6 @@ Anthropology students will design and execute an independent research project, c
   
 
 [Researching the Social World](https://www.ucl.ac.uk/module-catalogue/modules/researching-the-social-world-ANTH0006)
-  
-
-[Methods and Techniques in Biological Anthropology](https://www.ucl.ac.uk/module-catalogue/modules/methods-and-techniques-in-biological-anthropology-ANTH0007)
   
 
 [Introduction to Biological Anthropology](https://www.ucl.ac.uk/module-catalogue/modules/introduction-to-biological-anthropology-ANTH0008)
@@ -171,6 +171,9 @@ Turkana Basin Field School: Full Term A
 Turkana Basin Field School: Full Term B 
   
 
+[Environmental Anthropology (UG)](https://www.ucl.ac.uk/module-catalogue/modules/environmental-anthropology-ug-ANTH0188)
+  
+
 Turkana Basin Field School: Full Term C 
   
 
@@ -178,9 +181,6 @@ Turkana Basin Field School: Full Term C
   
 
 [Digital Practices in Society: Researching the Media II](https://www.ucl.ac.uk/module-catalogue/modules/digital-practices-in-society-researching-the-media-ii-ANTH0168)
-  
-
-[Environmental Anthropology (UG)](https://www.ucl.ac.uk/module-catalogue/modules/environmental-anthropology-ug-ANTH0188)
   
   
 
@@ -324,7 +324,7 @@ uganthro@ucl.ac.uk
 UCL is regulated by the [Office for Students](https://www.officeforstudents.org.uk).
 ### Stay in touch
 Register interest in your chosen subject to receive notice of undergraduate open days, events and more.
-[Register for updates](https://www.ucl.ac.uk/prospective-students/undergraduate/admissions-enquiries/stay-touch)
+[Register for updates](https://www.ucl.ac.uk/study/prospective-students/stay-touch/undergraduate-study)
 ### Visit us
 [View upcoming open days](https://www.ucl.ac.uk/prospective-students/undergraduate/events-and-open-days)
 ### Get the prospectus

@@ -10,6 +10,9 @@ def test_bootstrap_prompt_supports_openclaw_target() -> None:
     assert "OpenClaw" in prompt
     assert "adm-agent-client init" in prompt
     assert "adm-agent-client start" in prompt
+    assert "page_type" in prompt
+    assert "索引" in prompt
+    assert "详情" in prompt
 
 
 def test_bootstrap_prompt_falls_back_to_generic_template() -> None:
@@ -21,4 +24,4 @@ def test_bootstrap_prompt_falls_back_to_generic_template() -> None:
     assert "10.0.0.12" in prompt
     assert "9100" in prompt
     assert "adm-agent-client status" in prompt
-
+    assert "page_type_hint=\"auto\"" in prompt

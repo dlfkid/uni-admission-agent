@@ -1,0 +1,27 @@
+{
+  "case_id": "edinburgh_undergrad_accounting_business",
+  "name": "Edinburgh",
+  "index_url": "https://study.ed.ac.uk/programmes/undergraduate?page=0",
+  "detail_url": "https://study.ed.ac.uk/programmes/undergraduate/189-accounting-and-business",
+  "fetched_at": "2026-03-08T04:01:31.161354+00:00",
+  "pages": {
+    "index": {
+      "status": "ok",
+      "status_code": 200,
+      "url": "https://study.ed.ac.uk/programmes/undergraduate?page=0",
+      "html_chars": 105002,
+      "markdown_chars": 13272,
+      "html_path": "golden_samples/cases/edinburgh_undergrad_accounting_business/index.html",
+      "markdown_path": "golden_samples/cases/edinburgh_undergrad_accounting_business/index.md"
+    },
+    "detail": {
+      "status": "ok",
+      "status_code": 200,
+      "url": "https://study.ed.ac.uk/programmes/undergraduate/189-accounting-and-business",
+      "html_chars": 116169,
+      "markdown_chars": 32960,
+      "html_path": "golden_samples/cases/edinburgh_undergrad_accounting_business/detail.html",
+      "markdown_path": "golden_samples/cases/edinburgh_undergrad_accounting_business/detail.md"
+    }
+  }
+}

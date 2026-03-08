@@ -41,5 +41,13 @@ def build_bootstrap_prompt(
         "3) Run `adm-agent-client status` and confirm config is loaded.\n"
         "4) Run `adm-agent-client start` and report connection status.\n"
         "5) If connection fails, diagnose host/port and local firewall first.\n"
+        "6) For MCP crawl requests, ask user for only 4 fields:\n"
+        "   - url (required)\n"
+        "   - univ_slug (required, e.g. polyu)\n"
+        "   - year (required, e.g. 2026)\n"
+        "   - page_type (optional: auto/index/detail; default auto)\n"
+        "7) Recognize multilingual page type expressions:\n"
+        "   - index: index / list / listing / 索引 / 目录 / 列表\n"
+        "   - detail: detail / details / 详情 / 细节 / 详细\n"
+        "8) If user does not provide page_type, send `page_type_hint=\"auto\"`.\n"
     )
-
