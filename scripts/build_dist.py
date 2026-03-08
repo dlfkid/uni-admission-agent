@@ -64,6 +64,11 @@ RELEASE_ROOT = PROJECT_ROOT / "dist" / "release"
 
 ENGINE_NAME = "adm-agent"
 CLIENT_NAME = "adm-agent-client"
+TAXONOMY_SEED_CANDIDATES = [
+    PROJECT_ROOT / "golden_samples" / "programs_names.json",
+    PROJECT_ROOT / "golden_samples" / "programs_name.json",
+    PROJECT_ROOT / "golden_samples" / "program_names" / "cleaned_programs_names.json",
+]
 
 
 # ---------------------------------------------------------------------------
@@ -452,6 +457,22 @@ def _write_readme(dest: Path, exe_name: str) -> None:
     (dest / "README.txt").write_text(content, encoding="utf-8")
 
 
+def _copy_taxonomy_seed(staging_dir: Path) -> Path | None:
+    """Copy default taxonomy seed into the distributable as a user-editable sidecar."""
+    for candidate in TAXONOMY_SEED_CANDIDATES:
+        if not candidate.exists():
+            continue
+
+        target = staging_dir / "golden_samples" / "programs_names.json"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(candidate, target)
+        logger.info("  📚 Added taxonomy seed: %s", target.relative_to(staging_dir))
+        return target
+
+    logger.warning("  ⚠️  No taxonomy seed file found; release will bootstrap with empty seed")
+    return None
+
+
 def package_release(
     engine_dir: Path,
     extension_zip: Path | None,
@@ -487,6 +508,9 @@ def package_release(
     env_example = PROJECT_ROOT / ".env.example"
     if env_example.exists():
         shutil.copy2(env_example, staging_dir / ".env.example")
+
+    # 3.5 Copy editable taxonomy seed
+    _copy_taxonomy_seed(staging_dir)
         
     # 4. README
     exe_name = f"{ENGINE_NAME}.exe" if os_name == "windows" else f"./{ENGINE_NAME}"
@@ -562,6 +586,9 @@ def package_backend_release(
     env_example = PROJECT_ROOT / ".env.example"
     if env_example.exists():
         shutil.copy2(env_example, staging_dir / ".env.example")
+
+    # 2.5 Copy editable taxonomy seed
+    _copy_taxonomy_seed(staging_dir)
         
     # 3. README (backend-only version)
     exe_name = f"{ENGINE_NAME}.exe" if os_name == "windows" else f"./{ENGINE_NAME}"

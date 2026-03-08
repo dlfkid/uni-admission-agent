@@ -41,6 +41,39 @@ _NAV_TEXT_PATTERN = re.compile(
     r")\b",
     re.IGNORECASE,
 )
+_INDEX_CONTENT_PATTERN = re.compile(
+    r"\b("
+    r"find your (course|programme|programmes?)|course search|search degree programmes?|"
+    r"showing\s+\d+\s+courses?|filters?|browse( by)? subject|a\s*to\s*z|degree finder|"
+    r"list of courses?"
+    r")\b",
+    re.IGNORECASE,
+)
+_DETAIL_CONTENT_PATTERN = re.compile(
+    r"\b("
+    r"tuition fees?|programme starts?|program starts?|application deadlines?|"
+    r"entry requirements?|admission requirements?|duration|start date|modules?|"
+    r"course structure|how to apply|uk tuition fees|international fees|study mode"
+    r")\b",
+    re.IGNORECASE,
+)
+_DEGREE_HEADING_PATTERN = re.compile(
+    r"(?m)^\s*#\s+.*\b("
+    r"msc|ma|mba|llm|mres|mphil|pgdip|pgcert|master|masters|"
+    r"bsc|ba|meng|beng|phd|doctor"
+    r")\b",
+    re.IGNORECASE,
+)
+_DETAIL_URL_SIGNAL_PATTERN = re.compile(
+    r"/("
+    r"courses?/list/\d+|"
+    r"tpg/\d{4}/[0-9a-z\-]{4,}|"
+    r"degrees/[0-9a-z\-]{6,}|"
+    r"programmes?/[0-9a-z\-]{6,}|"
+    r"programs?/[0-9a-z\-]{6,}"
+    r")",
+    re.IGNORECASE,
+)
 
 
 def _course_link_score(url: str, text: str, base_url: str) -> int:
@@ -375,7 +408,11 @@ def _filter_link_batch_by_llm(
         return [u for u, _ in link_pairs]
 
 
-def detect_page_type(markdown: str, link_count: int) -> PageType:
+def detect_page_type(  # pylint: disable=too-many-return-statements
+    markdown: str,
+    link_count: int,
+    page_url: str = "",
+) -> PageType:
     """
     Determines if a page is an INDEX or DETAIL page using heuristics.
     
@@ -389,26 +426,63 @@ def detect_page_type(markdown: str, link_count: int) -> PageType:
     Returns:
         PageType.INDEX or PageType.DETAIL.
     """
-    # 1. Strong content signals for Detail Page
-    # If these keywords appear, it's likely a program page regardless of links
-    content_lower = markdown.lower()
-    detail_signals = [
-        "tuition fee", "program fee", "application deadline", 
-        "entry requirements", "admission requirements",
-        "course structure", "module list", "what you will study",
-        "program overview", "degree requirements"
-    ]
-    
-    if any(signal in content_lower for signal in detail_signals):
-        logger.info("Page Type Detection: DETAIL (Found content signal)")
+    content = str(markdown or "")
+    link_total = max(0, int(link_count or 0))
+    detail_hits = len(_DETAIL_CONTENT_PATTERN.findall(content))
+    index_hits = len(_INDEX_CONTENT_PATTERN.findall(content))
+    degree_heading_hit = bool(_DEGREE_HEADING_PATTERN.search(content))
+
+    url_path = ""
+    if page_url:
+        try:
+            url_path = urlparse(page_url).path.lower()
+        except Exception:  # pragma: no cover - defensive
+            url_path = ""
+
+    index_url_hint = bool(
+        url_path
+        and (
+            "find-your-programmes" in url_path
+            or "course-search" in url_path
+            or url_path.rstrip("/").endswith("/degrees")
+            or url_path.rstrip("/").endswith("/courses/list")
+            or url_path.rstrip("/").endswith("/programmes")
+            or url_path.rstrip("/").endswith("/programs")
+        )
+    )
+    detail_url_hint = bool(url_path and _DETAIL_URL_SIGNAL_PATTERN.search(url_path))
+
+    if detail_hits >= 2 and (degree_heading_hit or detail_url_hint):
+        logger.info("Page Type Detection: DETAIL (strong detail content signals)")
         return PageType.DETAIL
 
-    # 2. Heuristic: Indices usually have many links
-    threshold = 15
-    
-    if link_count > threshold:
-        logger.info("Page Type Detection: INDEX (Links=%d > %d)", link_count, threshold)
+    if detail_hits >= 1 and degree_heading_hit:
+        logger.info("Page Type Detection: DETAIL (degree heading + detail signal)")
+        return PageType.DETAIL
+
+    if index_hits >= 2 and link_total >= 5 and not detail_url_hint:
+        logger.info("Page Type Detection: INDEX (listing signals + links)")
         return PageType.INDEX
-    
-    logger.info("Page Type Detection: DETAIL (Links=%d <= %d)", link_count, threshold)
+
+    if detail_url_hint and not index_url_hint:
+        logger.info("Page Type Detection: DETAIL (detail-like URL pattern)")
+        return PageType.DETAIL
+
+    if index_url_hint and index_hits >= 1 and link_total >= 3:
+        logger.info("Page Type Detection: INDEX (index-like URL + content signal)")
+        return PageType.INDEX
+
+    if link_total >= 45 and detail_hits == 0 and not detail_url_hint:
+        logger.info("Page Type Detection: INDEX (very high link count)")
+        return PageType.INDEX
+
+    if degree_heading_hit and link_total <= 12:
+        logger.info("Page Type Detection: DETAIL (degree heading + low link count)")
+        return PageType.DETAIL
+
+    if link_total >= 20:
+        logger.info("Page Type Detection: INDEX (fallback link threshold)")
+        return PageType.INDEX
+
+    logger.info("Page Type Detection: DETAIL (fallback)")
     return PageType.DETAIL

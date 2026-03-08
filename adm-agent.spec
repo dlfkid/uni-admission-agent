@@ -93,6 +93,11 @@ if (ROOT / "migrations").exists():
 if (ROOT / ".env.example").exists():
     all_datas.append((str(ROOT / ".env.example"), "."))
 
+# Default taxonomy seed for runtime bootstrap / user extension.
+taxonomy_seed = ROOT / "golden_samples" / "programs_names.json"
+if taxonomy_seed.exists():
+    all_datas.append((str(taxonomy_seed), "golden_samples"))
+
 # ---------------------------------------------------------------------------
 # Analysis
 # ---------------------------------------------------------------------------

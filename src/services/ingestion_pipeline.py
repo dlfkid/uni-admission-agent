@@ -1272,6 +1272,7 @@ class IngestionPipeline:
         updated_count = 0
         persisted_program_ids: List[int] = []
         failed_records: List[Dict[str, str]] = []
+        taxonomy_learn_records: List[Dict[str, Any]] = []
 
         for item in validated_programs:
             try:
@@ -1283,6 +1284,37 @@ class IngestionPipeline:
                     created_count += 1
                 else:
                     updated_count += 1
+
+                extra_metadata = item.get("extra_metadata")
+                taxonomy_trace = (
+                    extra_metadata.get("taxonomy_match")
+                    if isinstance(extra_metadata, dict)
+                    else None
+                )
+                confidence_raw = (
+                    taxonomy_trace.get("best_score")
+                    if isinstance(taxonomy_trace, dict)
+                    else None
+                )
+                try:
+                    confidence = float(confidence_raw)
+                except (TypeError, ValueError):
+                    confidence = 1.0
+                confidence = max(0.0, min(1.0, confidence))
+
+                persisted_name = str(item.get("name_en") or getattr(program, "name_en", "")).strip()
+                persisted_source_url = str(
+                    item.get("source_url")
+                    or getattr(program, "source_url", "")
+                    or ""
+                ).strip()
+                taxonomy_learn_records.append(
+                    {
+                        "name_en": persisted_name,
+                        "source_url": persisted_source_url,
+                        "confidence": confidence,
+                    }
+                )
             except Exception as exc:
                 failed_records.append(
                     {
@@ -1298,6 +1330,22 @@ class IngestionPipeline:
             )
             raise StageExecutionError(message)
 
+        taxonomy_learning = {
+            "enabled": True,
+            "prepared": 0,
+            "inserted": 0,
+            "updated": 0,
+            "skipped": 0,
+        }
+        if taxonomy_learn_records:
+            try:
+                taxonomy_learning = self.taxonomy_service.learn_persisted_names(
+                    taxonomy_learn_records,
+                    enabled=True,
+                )
+            except Exception as exc:  # pylint: disable=broad-except
+                logger.warning("taxonomy learning skipped after persist_versioned: %s", exc)
+
         return {
             "persisted_count": persisted_count,
             "created_count": created_count,
@@ -1312,6 +1360,7 @@ class IngestionPipeline:
                     "validated_hash": context.get("validated_hash"),
                 }
             ),
+            "taxonomy_learning": taxonomy_learning,
         }
 
     @staticmethod

@@ -206,6 +206,24 @@ def test_create_result_from_browser_html() -> None:
     assert result.html == html
 
 
+def test_create_result_from_browser_html_extracts_links() -> None:
+    router = MagicMock()
+    scraper = AdmissionScraper(router=router)
+    scraper._export_md = False
+
+    html = "<html><body><a href='https://example.com/prog-a'>A</a><a href='/prog-b'>B</a></body></html>"
+
+    with patch("crawl4ai.markdown_generation_strategy.DefaultMarkdownGenerator") as MockGen:
+        mock_md = MagicMock()
+        mock_md.raw_markdown = "[A](https://example.com/prog-a)\\n[B](/prog-b)"
+        MockGen.return_value.generate_markdown.return_value = mock_md
+
+        result = scraper._create_result_from_browser_html("https://example.com", html)
+
+    assert "https://example.com/prog-a" in result.links
+    assert "https://example.com/prog-b" in result.links
+
+
 def test_create_result_from_browser_html_conversion_fails() -> None:
     router = MagicMock()
     scraper = AdmissionScraper(router=router)

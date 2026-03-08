@@ -42,6 +42,7 @@ from src.scrapers.link_parser import (
 )
 from src.services import browser_provider as browser_provider_service
 from src.services.ingestion_pipeline import IngestionPipeline
+from src.services.subject_taxonomy import get_subject_taxonomy_service
 from src.storage.db_manager import DatabaseManager
 from src.storage.exporter import ExcelExporter
 from src.storage.importer import ExcelImporter
@@ -222,7 +223,7 @@ def analyze_page_external(
     elif normalized_hint == "detail":
         page_type = "detail"
     else:
-        detected = detect_page_type(markdown, total_found)
+        detected = detect_page_type(markdown, total_found, page_url=url)
         page_type = "index" if detected == PageType.INDEX else "detail"
 
     if page_type == "detail":
@@ -1054,7 +1055,26 @@ def _program_to_summary(program: Program) -> ProgramSummary:
 
 def delete_program_snapshot(program_id: int) -> bool:
     """Delete one year-specific program snapshot by ID."""
-    return DatabaseManager().delete_program_snapshot(program_id)
+    db = DatabaseManager()
+    program_name = ""
+    with db.get_session() as session:
+        existing = session.get(Program, program_id)
+        if existing and existing.name_en:
+            program_name = str(existing.name_en).strip()
+
+    deleted = db.delete_program_snapshot(program_id)
+    if deleted and program_name:
+        try:
+            get_subject_taxonomy_service().prune_orphaned_learned_names([program_name])
+        except Exception as exc:  # pylint: disable=broad-except
+            logger.warning(
+                "Failed pruning taxonomy after deleting program_id=%s name=%s: %s",
+                program_id,
+                program_name,
+                exc,
+            )
+
+    return deleted
 
 
 def patch_program_snapshot(

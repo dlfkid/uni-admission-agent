@@ -21,6 +21,7 @@ from src.core.environment import ScraperError
 from src.models.scraper_models import CrawlPageResult, PageType
 from src.scrapers.helpers import extract_program_name, save_markdown, save_html_debug
 from src.scrapers.link_parser import (
+    extract_links,
     extract_links_with_text,
     filter_links_by_llm,
     detect_page_type,
@@ -308,7 +309,7 @@ class AdmissionScraper:
             
         result = CrawlPageResult(
             url=url, markdown=raw_markdown, char_count=len(raw_markdown),
-            links=[], status_code=200, html=html_content,
+            links=extract_links(raw_markdown, url), status_code=200, html=html_content,
         )
         
         if self._export_md and self._export_path and raw_markdown != html_content:
@@ -328,7 +329,11 @@ class AdmissionScraper:
             return False
         
         if probe_result and probe_result.markdown:
-            page_type = detect_page_type(probe_result.markdown, len(probe_result.links))
+            page_type = detect_page_type(
+                probe_result.markdown,
+                len(probe_result.links),
+                page_url=probe_result.url,
+            )
             is_index = (page_type == PageType.INDEX)
             logger.info("Entry Point detected as: %s", page_type.value.upper())
             return is_index

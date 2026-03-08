@@ -60,6 +60,38 @@ def test_persist_versioned_counts_create_and_update() -> None:
     assert mock_db.upsert_program.call_count == 2
 
 
+def test_persist_versioned_learns_taxonomy_from_persisted_names() -> None:
+    mock_db = MagicMock()
+    created_program = MagicMock()
+    created_program.id = 101
+    created_program.name_en = "Master of Science in Finance"
+    created_program.source_url = "https://example.edu/finance"
+    created_program.extra_metadata = {
+        "taxonomy_match": {"best_score": 0.96}
+    }
+    mock_db.upsert_program.return_value = (created_program, True)
+
+    pipeline = IngestionPipeline(db_manager=mock_db)
+    pipeline.taxonomy_service = MagicMock()
+
+    request_payload = {"univ_slug": "hku"}
+    context = {
+        "validated_programs": [
+            {
+                "name_en": "Master of Science in Finance",
+                "academic_year": 2026,
+                "source_url": "https://example.edu/finance",
+                "extra_metadata": {"taxonomy_match": {"best_score": 0.96}},
+            }
+        ],
+        "validated_hash": "abc123",
+    }
+
+    pipeline._stage_persist_versioned(request_payload, context)
+
+    pipeline.taxonomy_service.learn_persisted_names.assert_called_once()
+
+
 def test_persist_versioned_raises_when_any_record_fails() -> None:
     mock_db = MagicMock()
     mock_db.upsert_program.side_effect = RuntimeError("db fail")

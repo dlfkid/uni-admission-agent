@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
+import sys
 from collections import OrderedDict
 from datetime import datetime, timezone
 from difflib import SequenceMatcher
@@ -12,13 +14,20 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from sqlmodel import select
 
+from src.core.paths import get_bundle_dir
+from src.models.admission import Program
 from src.models.taxonomy import SubjectTaxonomy
 from src.scrapers.helpers import is_noise_program_name
 from src.storage.db_manager import DatabaseManager
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_SUBJECT_TAXONOMY_SEED_PATH = "golden_samples/program_names/cleaned_programs_names.json"
+DEFAULT_SUBJECT_TAXONOMY_SEED_PATH = "golden_samples/programs_names.json"
+DEFAULT_SUBJECT_TAXONOMY_SEED_CANDIDATES = (
+    DEFAULT_SUBJECT_TAXONOMY_SEED_PATH,
+    "golden_samples/programs_name.json",
+    "golden_samples/program_names/cleaned_programs_names.json",
+)
 
 
 def _utc_now() -> datetime:
@@ -31,6 +40,49 @@ def normalize_name(value: str) -> str:
 
 def _tokenize(value: str) -> list[str]:
     return re.findall(r"[a-z0-9]+", str(value or "").lower())
+
+
+def resolve_subject_taxonomy_seed_path(seed_path: Optional[str] = None) -> str:
+    """Resolve seed path across dev, packaged, and explicit override locations."""
+    env_seed_path = str(os.getenv("SUBJECT_TAXONOMY_SEED_PATH") or "").strip()
+    explicit_path = str(seed_path or env_seed_path or "").strip()
+    candidates = [explicit_path] if explicit_path else list(DEFAULT_SUBJECT_TAXONOMY_SEED_CANDIDATES)
+
+    search_roots: list[Path] = [Path.cwd()]
+    executable_dir = Path(sys.executable).resolve().parent
+    if executable_dir not in search_roots:
+        search_roots.append(executable_dir)
+
+    bundle_dir = get_bundle_dir().resolve()
+    if bundle_dir not in search_roots:
+        search_roots.append(bundle_dir)
+
+    resolved_candidates: list[Path] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        candidate_path = Path(candidate)
+        if candidate_path.is_absolute():
+            key = str(candidate_path)
+            if key not in seen:
+                seen.add(key)
+                resolved_candidates.append(candidate_path)
+            continue
+
+        for root in search_roots:
+            resolved = root / candidate_path
+            key = str(resolved)
+            if key in seen:
+                continue
+            seen.add(key)
+            resolved_candidates.append(resolved)
+
+    for path in resolved_candidates:
+        if path.exists():
+            return str(path)
+
+    if resolved_candidates:
+        return str(resolved_candidates[0])
+    return str(Path(DEFAULT_SUBJECT_TAXONOMY_SEED_PATH))
 
 
 class SubjectTaxonomyRepository:
@@ -111,6 +163,36 @@ class SubjectTaxonomyRepository:
                 }
             )
         return entries
+
+    def list_program_names(self) -> list[str]:
+        with self.db_manager.get_session() as session:
+            names = session.exec(select(Program.name_en)).all()
+        return [str(name).strip() for name in names if str(name or "").strip()]
+
+    def delete_learned_by_normalized_names(self, normalized_names: list[str]) -> int:
+        normalized_set = {
+            str(name).strip()
+            for name in normalized_names
+            if str(name or "").strip()
+        }
+        if not normalized_set:
+            return 0
+
+        with self.db_manager.get_session() as session:
+            rows = session.exec(
+                select(SubjectTaxonomy).where(
+                    SubjectTaxonomy.normalized_name.in_(normalized_set),
+                    SubjectTaxonomy.source == "learned",
+                )
+            ).all()
+
+            deleted = 0
+            for row in rows:
+                session.delete(row)
+                deleted += 1
+            if deleted:
+                session.commit()
+            return deleted
 
 
 class SubjectTaxonomyService:
@@ -206,6 +288,114 @@ class SubjectTaxonomyService:
             "normalized_name": normalized,
             "inserted": int(result.get("inserted") or 0),
             "updated": int(result.get("updated") or 0),
+        }
+
+    def learn_persisted_names(
+        self,
+        records: list[dict],
+        *,
+        enabled: bool = True,
+    ) -> dict:
+        if not enabled:
+            return {"enabled": False, "prepared": 0, "inserted": 0, "updated": 0}
+
+        dedup: dict[str, dict] = {}
+        skipped = 0
+        for record in records:
+            if not isinstance(record, dict):
+                skipped += 1
+                continue
+
+            learned_name = str(record.get("name_en") or "").strip()
+            if not learned_name or is_noise_program_name(learned_name):
+                skipped += 1
+                continue
+
+            normalized = normalize_name(learned_name)
+            if not normalized:
+                skipped += 1
+                continue
+
+            source_url = str(record.get("source_url") or "").strip() or None
+            confidence_raw = record.get("confidence")
+            try:
+                confidence = float(confidence_raw)
+            except (TypeError, ValueError):
+                confidence = 1.0
+            confidence = max(0.0, min(1.0, confidence))
+
+            existing = dedup.get(normalized)
+            if existing is None:
+                dedup[normalized] = {
+                    "name_en": learned_name,
+                    "normalized_name": normalized,
+                    "aliases": [learned_name],
+                    "source": "learned",
+                    "first_seen_url": source_url,
+                    "confidence": confidence,
+                    "status": "active",
+                }
+                continue
+
+            aliases = sorted({*(existing.get("aliases") or []), learned_name})
+            existing["aliases"] = aliases
+            existing["confidence"] = max(float(existing.get("confidence") or 0.0), confidence)
+            if not existing.get("first_seen_url") and source_url:
+                existing["first_seen_url"] = source_url
+
+        prepared = len(dedup)
+        if prepared == 0:
+            return {
+                "enabled": True,
+                "prepared": 0,
+                "inserted": 0,
+                "updated": 0,
+                "skipped": skipped,
+            }
+
+        result = self.repository.upsert_many(list(dedup.values()))
+        self.reload_memory_index()
+        return {
+            "enabled": True,
+            "prepared": prepared,
+            "inserted": int(result.get("inserted") or 0),
+            "updated": int(result.get("updated") or 0),
+            "skipped": skipped,
+        }
+
+    def prune_orphaned_learned_names(self, names: list[str]) -> dict:
+        normalized_candidates = {
+            normalize_name(name)
+            for name in names
+            if str(name or "").strip()
+        }
+        normalized_candidates.discard("")
+        if not normalized_candidates:
+            return {"requested": 0, "orphaned": 0, "deleted": 0}
+
+        active_program_normalized = {
+            normalize_name(name)
+            for name in self.repository.list_program_names()
+            if str(name or "").strip()
+        }
+        active_program_normalized.discard("")
+
+        orphaned = sorted(normalized_candidates - active_program_normalized)
+        if not orphaned:
+            return {
+                "requested": len(normalized_candidates),
+                "orphaned": 0,
+                "deleted": 0,
+            }
+
+        deleted = int(self.repository.delete_learned_by_normalized_names(orphaned) or 0)
+        if deleted:
+            self.reload_memory_index()
+
+        return {
+            "requested": len(normalized_candidates),
+            "orphaned": len(orphaned),
+            "deleted": deleted,
         }
 
     def export_to_json(
@@ -466,8 +656,9 @@ def bootstrap_subject_taxonomy(
     seed_path: str = DEFAULT_SUBJECT_TAXONOMY_SEED_PATH,
 ) -> dict:
     service = get_subject_taxonomy_service()
+    resolved_seed_path = resolve_subject_taxonomy_seed_path(seed_path)
     try:
-        result = service.sync_seed_from_json(seed_path)
+        result = service.sync_seed_from_json(resolved_seed_path)
         logger.info(
             "Subject taxonomy bootstrap: loaded=%s inserted=%s updated=%s missing=%s path=%s",
             result.get("loaded"),
@@ -480,7 +671,7 @@ def bootstrap_subject_taxonomy(
     except Exception as exc:
         logger.warning("Subject taxonomy bootstrap skipped: %s", exc)
         return {
-            "path": str(seed_path),
+            "path": str(resolved_seed_path),
             "loaded": 0,
             "inserted": 0,
             "updated": 0,

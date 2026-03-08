@@ -172,6 +172,23 @@ def test_detect_detail_signals_override_links() -> None:
     assert detect_page_type(md, link_count=50) == PageType.DETAIL
 
 
+def test_detect_index_from_listing_signals_even_with_medium_links() -> None:
+    md = "# Find your course\n\nShowing 437 courses\n\n## Filters"
+    assert detect_page_type(md, link_count=8) == PageType.INDEX
+
+
+def test_detect_detail_from_detail_like_url_with_many_links() -> None:
+    md = "# What's New"
+    assert (
+        detect_page_type(
+            md,
+            link_count=80,
+            page_url="https://www.polyu.edu.hk/study/pg/tpg/2026/02029-dfm-dpm-ffm-fpm",
+        )
+        == PageType.DETAIL
+    )
+
+
 # ── extract_links_with_text ──────────────────────────────────────────
 
 
