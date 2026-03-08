@@ -3,14 +3,14 @@
   "name": "UCL",
   "index_url": "https://www.ucl.ac.uk/prospective-students/undergraduate/degrees",
   "detail_url": "https://www.ucl.ac.uk/prospective-students/undergraduate/degrees/anthropology-year-abroad-bsc",
-  "fetched_at": "2026-03-02T18:49:01.007871+00:00",
+  "fetched_at": "2026-03-08T04:01:07.617496+00:00",
   "pages": {
     "index": {
       "status": "ok",
       "status_code": 200,
       "url": "https://www.ucl.ac.uk/prospective-students/undergraduate/degrees",
-      "html_chars": 493206,
-      "markdown_chars": 209756,
+      "html_chars": 492285,
+      "markdown_chars": 209319,
       "html_path": "golden_samples/cases/ucl_undergrad_anthropology/index.html",
       "markdown_path": "golden_samples/cases/ucl_undergrad_anthropology/index.md"
     },
@@ -18,8 +18,8 @@
       "status": "ok",
       "status_code": 200,
       "url": "https://www.ucl.ac.uk/prospective-students/undergraduate/degrees/anthropology-year-abroad-bsc",
-      "html_chars": 108283,
-      "markdown_chars": 32373,
+      "html_chars": 108295,
+      "markdown_chars": 32364,
       "html_path": "golden_samples/cases/ucl_undergrad_anthropology/detail.html",
       "markdown_path": "golden_samples/cases/ucl_undergrad_anthropology/detail.md"
     }

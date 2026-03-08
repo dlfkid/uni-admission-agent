@@ -896,7 +896,13 @@ class DatabaseManager:
             session.refresh(program)
             return program
 
-    def upsert_program(self, program_data: dict, univ_slug: str) -> Tuple[Program, bool]:
+    def upsert_program(
+        self,
+        program_data: dict,
+        univ_slug: str,
+        *,
+        enable_auto_translation: bool = True,
+    ) -> Tuple[Program, bool]:
         """Upsert a year-specific program snapshot and normalized child records."""
         with self.get_session() as session:
             # 1) Ensure university exists.
@@ -915,7 +921,7 @@ class DatabaseManager:
             # 2) Name sanity / translation fallback.
             name_en = program_data.get("name_en")
             name_zh = program_data.get("name_zh")
-            if (not name_en and name_zh) or (not name_zh and name_en):
+            if enable_auto_translation and ((not name_en and name_zh) or (not name_zh and name_en)):
                 try:
                     from src.agents.translation_agent import TranslationAgent
 

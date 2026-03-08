@@ -456,25 +456,66 @@ curl -X POST http://localhost:8910/export \
 
 ### MCP Server
 
-The MCP server is mounted at `/mcp` and exposes:
-- **`analyze`** — Analyze entry page and return candidate detail links
-- **`crawl_detail_batch`** — Crawl user-selected detail links in batches via client browser automation
-- **`crawl`** — Crawl a URL and import admission data
-- **`db_query`** — Query programs from the database
+The MCP server is mounted at `/mcp`.
 
-`crawl` also supports optional browser provider controls:
-- `browser_provider`: `auto` | `server` | `client`
-- `client_id`: optional target client id
-- `strict_client`: fail instead of fallback when no client available
-- `candidate_taxonomy_filter_enabled`: apply taxonomy scoring to index/auto candidates
-- `candidate_taxonomy_filter_threshold`: minimum candidate taxonomy score (0~1)
-- `candidate_taxonomy_filter_top_k`: max candidates kept after taxonomy filtering
-- Index candidate filtering is batch-evaluated by LLM (80 links per call) without a global 80-link cap.
+Base toolset (always registered):
+- **`analyze`** — Analyze entry page and return candidate detail links (external-LLM friendly path).
+- **`crawl_detail_batch`** — Crawl user-selected detail links in batches via client browser automation.
+- **`crawl`** — Crawl a URL and import admission data. Supports `page_type_hint=auto|index|detail`.
+- **`ingest`** — Persist caller-LLM structured program records directly (no server-side LLM extraction).
+- **`db_query`** — Query programs from the database.
+- **`runtime_status`** — Report live runtime capability (`client_available`, `client_count`, `client_ids`, `internal_llm_available`, `default_browser_provider_resolved`).
+- **`program_patch`** — Patch one persisted `program_id` from user feedback.
+- **`program_patch_batch`** — Batch patch multiple `program_id` items with partial-failure reporting.
+- **`help`** — Return CLI help text and command overview.
 
-Recommended MCP interactive flow for any MCP-capable app:
-1. Call `analyze` (`browser_provider=client`) on the index URL.
-2. Show returned candidate links to user for selection.
-3. Call `crawl_detail_batch` with selected URLs to execute batched detail crawling/import.
+Internal-LLM toolset (registered only when server-side LLM is available):
+- **`analyze_internal_llm`**
+- **`crawl_detail_batch_internal_llm`**
+- **`crawl_internal_llm`**
+- **`ingest_internal_llm`**
+- **`db_query_internal_llm`**
+- **`runtime_status_internal_llm`**
+- **`program_patch_internal_llm`**
+- **`program_patch_batch_internal_llm`**
+- **`help_internal_llm`**
+
+Decision and correction flow in `crawl`:
+- Missing `year` is blocked with:
+  - `requires_user_input=true`
+  - `missing_fields=["year"]`
+  - prompt asking user to confirm year (e.g., 2026)
+- For index pages, taxonomy thresholds are applied:
+  - candidate keep threshold: `>= 0.75`
+  - auto-run threshold: `>= 0.92`
+  - auto-run max candidate count: `<= 10`
+- Response includes structured decision fields:
+  - `auto_ready`
+  - `requires_user_review`
+  - `decision_reason`
+  - `candidates` (for review flows)
+
+Provider metadata is standardized in tool responses:
+- `resolved_browser_provider`
+- `client_id_used` (if client path is selected)
+
+Post-persist review loop:
+- Crawl responses include `review_token` and ordered `review_items` with stable `program_id`.
+- Apply user corrections via `program_patch` / `program_patch_batch`.
+- Batch patch returns `updated_count`, `failed_items`, and `summary` (no all-or-nothing abort).
+
+Recommended MCP interactive flow (single entrypoint):
+1. Call `runtime_status` to inspect available runtime path.
+2. Call `analyze` as the **only entrypoint**. Read:
+   - `page_type_detected`
+   - `requires_user_confirmation`
+   - `next_step_options`
+3. If `requires_user_confirmation=true`, ask user whether to continue with detected `index/detail`.
+4. Follow selected next-step tool path:
+   - `detail` path: `crawl` or `crawl_internal_llm`
+   - `index` + external LLM path: select candidates, externally structure data, then `ingest`
+   - `index` + server LLM path: `crawl_detail_batch_internal_llm` (or `crawl_detail_batch`)
+5. Ask user for corrections if needed, then apply `program_patch` / `program_patch_batch`.
 
 ### `adm-agent-client` (Extension Optional)
 

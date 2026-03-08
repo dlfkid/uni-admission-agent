@@ -89,6 +89,35 @@ def _prioritize_links_for_llm(
     return [pair for _, _, pair in scored]
 
 
+def filter_links_by_heuristic(
+    link_pairs: List[Tuple[str, str]],
+    base_url: str,
+) -> List[str]:
+    """Deterministically keep course-like links without calling any LLM."""
+    if not link_pairs:
+        return []
+
+    scored: List[Tuple[int, int, str]] = []
+    for idx, (url, text) in enumerate(link_pairs):
+        score = _course_link_score(url, text, base_url)
+        if score > 0:
+            scored.append((score, idx, url))
+
+    if not scored:
+        return []
+
+    scored.sort(key=lambda item: (-item[0], item[1]))
+    seen: set[str] = set()
+    selected: List[str] = []
+    for _score, _idx, url in scored:
+        if url in seen:
+            continue
+        seen.add(url)
+        selected.append(url)
+
+    return selected
+
+
 def extract_links(markdown: str, base_url: str) -> List[str]:
     """
     Extract potential program detail page URLs from Markdown using Regex.

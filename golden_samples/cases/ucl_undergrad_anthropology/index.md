@@ -7,7 +7,7 @@ Menu
 # Find your course
 [Search](https://www.ucl.ac.uk/prospective-students/undergraduate/degrees#tab1-course-finder) [Browse by subject](https://www.ucl.ac.uk/prospective-students/undergraduate/degrees#tab2-course-finder)
 Search
-Showing **438** courses. 
+Showing **437** courses. 
 [Ancient History BA](https://www.ucl.ac.uk/prospective-students/undergraduate/degrees/ancient-history-ba) Faculty of Social and Historical Sciences | History How have events and developments in the distant past shaped our world? Dive into topics spanning ancient Greece, the imperial might of Rome and the history of the Middle East and Egypt from the third millennium BC to late antiquity. Working with...
 [Ancient Languages BA](https://www.ucl.ac.uk/prospective-students/undergraduate/degrees/ancient-languages-ba) Faculty of Arts and Humanities | Hebrew and Jewish Studies Study the Ancient Languages BA and benefit from world-leading expertise through this degree that incorporates multidisciplinary learning. You’ll learn Hebrew and either Greek or Latin, plus up to three additional languages from a wide choice....
 [Ancient Languages with Year Abroad BA](https://www.ucl.ac.uk/prospective-students/undergraduate/degrees/ancient-languages-year-abroad-ba) Faculty of Arts and Humanities | Hebrew and Jewish Studies Immerse yourself in ancient languages by studying this degree that incorporates a valuable year abroad. The Ancient Languages with Year Abroad BA enables you to learn Hebrew and either Greek or Latin, plus an additional three languages. You’ll...
@@ -278,7 +278,6 @@ Showing **438** courses.
 [Icelandic BA](https://www.ucl.ac.uk/prospective-students/undergraduate/degrees/icelandic-ba) Faculty of Arts and Humanities | School of European Languages, Culture and Society Become fluent in Icelandic through this unique degree, and gain specialist skills ideal for working in Nordic countries and companies. Through the Icelandic BA, you’ll learn Icelandic from beginner level, study a mainland Scandinavian language,...
 [Infection and Immunity BSc](https://www.ucl.ac.uk/prospective-students/undergraduate/degrees/infection-and-immunity-bsc) Faculty of Medical Sciences | Division of Infection and Immunity Gain an insight into how discovery science is carried out at the very highest level on this research-informed BSc. You'll learn about the science of infection and immunity, drawing on the world-class research carried out in the UCL Division of...
 [Information Management for Business BSc](https://www.ucl.ac.uk/prospective-students/undergraduate/degrees/information-management-business-bsc) Faculty of Engineering Sciences | UCL School of Management Developed in close collaboration with some of the UK's best-known companies, this pioneering Information Management for Business BSc offers a unique balance of IT, management and business skills to ensure that our graduates have the expertise to...
-[Information, Data and Society BSc](https://www.ucl.ac.uk/prospective-students/undergraduate/degrees/information-society-bsc) Faculty of Arts and Humanities | Information Studies Blend practical knowledge and skills from the humanities and technology through this innovative degree designed to help you solve real-world problems. The Information, Data and Society BSc will give you enhanced skills in using information, data...
 [Information, Data and Society BSc](https://www.ucl.ac.uk/prospective-students/undergraduate/degrees/information-data-and-society-bsc) Faculty of Arts and Humanities | Information Studies Blend practical knowledge and skills from the humanities and technology through this innovative degree designed to help you solve real-world problems. The Information Data and Society BSc will give you enhanced skills in using information, data...
 [International Management BSc](https://www.ucl.ac.uk/prospective-students/undergraduate/degrees/international-management-bsc) Faculty of Engineering Sciences | UCL School of Management The landscape of international business and management is rapidly changing. UCL's new 3-year International Management BSc trains you to manage business effectively and holistically in tomorrow’s complex and volatile times. You'll benefit from the...
 [International Social and Political Studies BA](https://www.ucl.ac.uk/prospective-students/undergraduate/degrees/international-social-and-political-studies-ba) Faculty of Arts and Humanities | European and International Social and Political Studies Gain specialist knowledge of global politics and social sciences, and gain excellent skills in another language. Through the International Social and Political Studies BA, you’ll have the scope to define your own path through a choice of modules,...
@@ -545,7 +544,7 @@ Showing **438** courses.
 
 ### Stay in touch
 Register interest in your chosen subject to receive notice of undergraduate open days, events and more.
-[Register for updates](https://www.ucl.ac.uk/prospective-students/undergraduate/admissions-enquiries/stay-touch)
+[Register for updates](https://www.ucl.ac.uk/study/prospective-students/stay-touch/undergraduate-study)
 ### Get the prospectus
 [Download the prospectus as a PDF](https://www.ucl.ac.uk/prospective-students/undergraduate/download-prospectus)
 ## Filter courses
@@ -553,7 +552,7 @@ Register interest in your chosen subject to receive notice of undergraduate open
 
 Year
     
-  * 2026 (438)
+  * 2026 (437)
 
 
 
@@ -566,7 +565,7 @@ Study abroad
 Degree level
     
   * BA (285)
-  * BSc (76)
+  * BSc (75)
   * MSci (38)
   * MEng (13)
   * BEng (6)
@@ -582,7 +581,7 @@ Degree level
 
 Faculty
     
-  * Faculty of Arts and Humanities (272)
+  * Faculty of Arts and Humanities (271)
   * Faculty of Mathematical and Physical Sciences (48)
   * Faculty of Engineering Sciences (30)
   * Faculty of Social and Historical Sciences (23)

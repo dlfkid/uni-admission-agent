@@ -198,11 +198,20 @@ Due to high demand for this course, we operate a [staged admissions process](htt
 [ Discover more about the course ](https://www.alliancembs.manchester.ac.uk/blogs/?author=Rebecca%20Benedetti)
 ### Course overview
 For students without a BPS accredited degree, MSc Business Psychology offers you the opportunity to study alongside the students of [MSc Organisational Psychology](https://www.alliancembs.manchester.ac.uk/study/masters/msc-organisational-psychology/) and gain a fascinating look at the science of how people and groups behave at work. 
+Master's Expo
+Attend Master's Expo - our on-campus postgraduate exhibition - on Wednesday, 25 March 2026, 12-3pm.
+[Book your place now for the Master's Expo](https://www.manchester.ac.uk/study/masters/expo/)
 ### Open days
-There will be opportunities to meet the team at a range of in person and online events. See if our team will be visiting a city near you.
-If you are based near Manchester, visit one of our information sessions hosted at AMBS. If you would prefer to connect online, we host a series of virtual information sessions, so you can join from anywhere in the world.
-Discover more about our master’s courses, get tailored advice about your eligibility and learn how to strengthen your application.
-[ **Upcoming Events >>** ](https://www.alliancembs.manchester.ac.uk/events/masters-events/)
+**Have questions about this course?**
+Join one of our upcoming webinars or in-person events to learn more about the programme and speak directly with our team.
+Whether online, on campus in Manchester, or at events worldwide, you’ll have the opportunity to ask questions and get advice on your next steps.
+At these events you can:
+  * Learn more about this programme and related Master’s courses
+  * Get guidance on eligibility, applications and funding
+  * Discover student life, careers and studying in Manchester
+
+
+[ **View upcoming events >>** ](https://www.alliancembs.manchester.ac.uk/events/masters-events/)
 ### Contact details 
 
 School/Faculty

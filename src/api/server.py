@@ -17,6 +17,7 @@ import asyncio
 import logging
 import shutil
 import threading
+import uuid
 from pathlib import Path
 from typing import List, Optional, Dict, Any
 from io import StringIO
@@ -58,6 +59,7 @@ from src.services.crawler import (
     analyze_url_candidates,
     crawl_selected_detail_urls_via_client,
     crawl_url,
+    ingest_program_records_external,
     get_ingestion_job,
     get_db_status,
     list_ingestion_jobs,
@@ -66,6 +68,7 @@ from src.services.crawler import (
     query_programs,
     resume_crawl_job,
 )
+from src.services.ingestion_pipeline import IngestionPipeline
 from src.services.subject_taxonomy import bootstrap_subject_taxonomy
 from src.storage.db_manager import DatabaseManager
 
@@ -281,6 +284,10 @@ def _has_available_client(preferred_client_id: Optional[str]) -> bool:
     return client_registry.select_client_id(preferred_client_id) is not None
 
 
+def _select_available_client_id(preferred_client_id: Optional[str]) -> Optional[str]:
+    return client_registry.select_client_id(preferred_client_id)
+
+
 async def _fetch_browser_payload_from_client(
     *,
     url: str,
@@ -314,6 +321,7 @@ async def _fetch_browser_payload_from_client(
 browser_provider_service.configure_client_dispatchers(
     availability_fn=_has_available_client,
     fetch_fn=_fetch_browser_payload_from_client,
+    select_client_fn=_select_available_client_id,
 )
 
 
@@ -1012,12 +1020,513 @@ async def api_test_connection(body: TestConnectionRequest) -> TestConnectionResp
 #  MCP tools (via FastMCP)
 # ---------------------------------------------------------------------------
 
+
+def _internal_llm_available() -> bool:
+    """Best-effort probe for server-side internal LLM availability."""
+    try:
+        from src.agents.factory import create_router
+
+        create_router()
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.info("Internal LLM unavailable: %s", exc)
+        return False
+    return True
+
+
+def _runtime_status_payload() -> dict[str, Any]:
+    client_rows = client_registry.list_clients()
+    client_ids = [
+        str(row.get("client_id") or "").strip()
+        for row in client_rows
+        if (
+            str(row.get("client_id") or "").strip()
+            and bool((row.get("capabilities") or {}).get("browser_automation"))
+        )
+    ]
+    client_available = client_registry.select_client_id(None) is not None
+    return {
+        "client_available": client_available,
+        "client_count": len(client_ids),
+        "client_ids": client_ids,
+        "internal_llm_available": _internal_llm_available(),
+        "default_browser_provider_resolved": "client" if client_available else "server",
+    }
+
+
+def _resolve_provider_metadata_for_response(
+    *,
+    browser_provider: str,
+    client_id: Optional[str],
+    strict_client: bool,
+) -> dict[str, Any]:
+    try:
+        return browser_provider_service.resolve_provider_metadata(
+            browser_provider=browser_provider,
+            client_id=client_id,
+            strict_client=strict_client,
+        )
+    except RuntimeError:
+        raise
+    except Exception:
+        return {
+            "resolved_browser_provider": "server",
+            "client_id_used": None,
+        }
+
+
+def _rank_index_candidates_by_taxonomy(
+    *,
+    links: List[Dict[str, Any]],
+    keep_threshold: float = 0.75,
+    auto_run_threshold: float = 0.92,
+    top_k: int = 30,
+) -> List[Dict[str, Any]]:
+    pipeline = IngestionPipeline()
+    return pipeline.rank_index_candidates(
+        links,
+        keep_threshold=keep_threshold,
+        auto_run_threshold=auto_run_threshold,
+        top_k=top_k,
+    )
+
+
+def _to_valid_year(value: Optional[int]) -> Optional[int]:
+    if value is None:
+        return None
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed > 0 else None
+
+
+def _normalize_page_type_hint(value: str) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return "auto"
+    normalized = raw.lower()
+    compact = normalized.replace(" ", "").replace("-", "").replace("_", "")
+
+    alias_map = {
+        # auto
+        "auto": "auto",
+        "自动": "auto",
+        "自动识别": "auto",
+        "默认": "auto",
+        # index-like
+        "index": "index",
+        "listing": "index",
+        "list": "index",
+        "索引": "index",
+        "目录": "index",
+        "列表": "index",
+        "索引页": "index",
+        "目录页": "index",
+        "列表页": "index",
+        # detail-like
+        "detail": "detail",
+        "details": "detail",
+        "详情": "detail",
+        "细节": "detail",
+        "详细": "detail",
+        "详情页": "detail",
+        "细节页": "detail",
+        "详细页": "detail",
+    }
+    if compact in alias_map:
+        return alias_map[compact]
+    if normalized in alias_map:
+        return alias_map[normalized]
+    return "auto"
+
+
+def _connected_browser_client_ids() -> List[str]:
+    rows = client_registry.list_clients()
+    return [
+        str(row.get("client_id") or "").strip()
+        for row in rows
+        if (
+            str(row.get("client_id") or "").strip()
+            and bool((row.get("capabilities") or {}).get("browser_automation"))
+        )
+    ]
+
+
+def _client_id_usage_metadata(
+    *,
+    client_id: Optional[str],
+) -> Dict[str, Any]:
+    requested = str(client_id or "").strip()
+    payload: Dict[str, Any] = {
+        "client_id_expected_source": (
+            "client_id must come from runtime_status.client_ids; "
+            "do not pass university slug (use univ_slug in crawl/crawl_detail_batch)."
+        ),
+    }
+    if not requested:
+        return payload
+
+    payload["client_id_requested"] = requested
+    online_ids = _connected_browser_client_ids()
+    if requested not in online_ids:
+        payload["client_id_warning"] = (
+            f"'{requested}' is not an online browser client id. "
+            "Use runtime_status.client_ids."
+        )
+    return payload
+
+
+def _analyze_next_step_options(
+    *,
+    page_type: str,
+) -> List[Dict[str, Any]]:
+    normalized = str(page_type or "").strip().lower()
+    if normalized == "detail":
+        return [
+            {
+                "mode": "external_llm_or_server_pipeline",
+                "tool": "crawl",
+                "when": "Use direct detail-page crawl/import path.",
+            },
+            {
+                "mode": "server_llm",
+                "tool": "crawl_internal_llm",
+                "when": "Use server-side LLM path for detail-page crawl/import.",
+            },
+        ]
+    if normalized == "index":
+        return [
+            {
+                "mode": "external_llm",
+                "tool": "ingest",
+                "when": "After selecting candidates and externally extracting structured programs[].",
+            },
+            {
+                "mode": "external_or_hybrid",
+                "tool": "crawl_detail_batch",
+                "when": "Use selected candidate URLs for batched detail crawl/import.",
+            },
+            {
+                "mode": "server_llm",
+                "tool": "crawl_detail_batch_internal_llm",
+                "when": "Use server-side LLM batch detail crawl/import path.",
+            },
+        ]
+    return [
+        {
+            "mode": "entrypoint",
+            "tool": "analyze",
+            "when": "Re-run analyze with explicit page_type_hint=index|detail if detection is uncertain.",
+        }
+    ]
+
+
+def _index_review_response(
+    *,
+    candidates: List[Dict[str, Any]],
+    decision_reason: str,
+    browser_provider: str,
+    client_id: Optional[str],
+    strict_client: bool,
+) -> dict:
+    try:
+        metadata = _resolve_provider_metadata_for_response(
+            browser_provider=browser_provider,
+            client_id=client_id,
+            strict_client=strict_client,
+        )
+    except RuntimeError:
+        metadata = {
+            "resolved_browser_provider": "server",
+            "client_id_used": None,
+        }
+
+    payload = {
+        "page_type": "index",
+        "auto_ready": False,
+        "requires_user_review": True,
+        "decision_reason": decision_reason,
+        "candidates": candidates,
+        "selected_count": 0,
+        "requires_user_input": False,
+        "next_action_hint": "Review candidates and confirm which program links to crawl.",
+    }
+    payload.update(metadata)
+    payload.update(_client_id_usage_metadata(client_id=client_id))
+    return payload
+
+
+async def _mcp_analyze_impl(
+    *,
+    url: str,
+    page_type_hint: str = "auto",
+    browser_provider: str = "auto",
+    client_id: Optional[str] = None,
+    strict_client: bool = False,
+    html_content: Optional[str] = None,
+    use_internal_llm: bool,
+) -> dict:
+    normalized_hint = _normalize_page_type_hint(page_type_hint)
+    result = await analyze_url_candidates(
+        url=url,
+        page_type_hint=normalized_hint,
+        html_content=html_content,
+        browser_provider=browser_provider,
+        client_id=client_id,
+        strict_client=strict_client,
+        use_internal_llm=use_internal_llm,
+    )
+    response = dict(result or {})
+    if "resolved_browser_provider" not in response:
+        metadata = _resolve_provider_metadata_for_response(
+            browser_provider=browser_provider,
+            client_id=client_id,
+            strict_client=strict_client,
+        )
+        response.update(metadata)
+    if "client_id_used" not in response:
+        response["client_id_used"] = None
+    response.setdefault("analysis_mode", "internal_llm" if use_internal_llm else "external_llm")
+    response["page_type_hint_applied"] = normalized_hint
+    detected_page_type = str(response.get("page_type") or "unknown").strip().lower()
+    response["page_type_detected"] = detected_page_type if detected_page_type in {"index", "detail"} else "unknown"
+    response["requires_user_confirmation"] = normalized_hint == "auto"
+    if response["requires_user_confirmation"] and response["page_type_detected"] in {"index", "detail"}:
+        response["confirmation_prompt"] = (
+            f"检测为 {response['page_type_detected']}，是否按 {response['page_type_detected']} 流程继续？"
+        )
+    else:
+        response["confirmation_prompt"] = ""
+    response["next_step_options"] = _analyze_next_step_options(page_type=response["page_type_detected"])
+    response["next_action_hint"] = (
+        "Review next_step_options and choose one tool path."
+    )
+    response.update(_client_id_usage_metadata(client_id=client_id))
+    return response
+
+
+async def _mcp_crawl_impl(
+    *,
+    url: str,
+    univ_slug: str,
+    year: Optional[int] = None,
+    continue_depth: int = 0,
+    page_type_hint: str = "auto",
+    browser_provider: str = "auto",
+    client_id: Optional[str] = None,
+    strict_client: bool = False,
+    candidate_taxonomy_filter_enabled: bool = False,
+    candidate_taxonomy_filter_threshold: float = 0.75,
+    candidate_taxonomy_filter_top_k: int = 30,
+    use_internal_llm: bool,
+) -> dict:
+    valid_year = _to_valid_year(year)
+    if valid_year is None:
+        payload = {
+            "requires_user_input": True,
+            "missing_fields": ["year"],
+            "prompt": "请确认落库年份（如 2026）",
+            "next_action_hint": "Provide year before running crawl.",
+        }
+        payload.update(_client_id_usage_metadata(client_id=client_id))
+        return payload
+
+    normalized_hint = _normalize_page_type_hint(page_type_hint)
+    analysis_result: dict[str, Any] = {}
+    page_type = normalized_hint if normalized_hint in {"index", "detail"} else "unknown"
+
+    if normalized_hint != "detail":
+        try:
+            analysis_result = await analyze_url_candidates(
+                url=url,
+                page_type_hint=normalized_hint,
+                browser_provider=browser_provider,
+                client_id=client_id,
+                strict_client=strict_client,
+                use_internal_llm=use_internal_llm,
+            )
+            if normalized_hint == "auto":
+                page_type = str(analysis_result.get("page_type") or "unknown").strip().lower()
+        except Exception as exc:  # pylint: disable=broad-except
+            logger.info("Pre-crawl analyze unavailable for %s: %s", url, exc)
+
+    if page_type == "index":
+        raw_links = [
+            item
+            for item in (analysis_result.get("links") or [])
+            if isinstance(item, dict)
+        ]
+        ranked_candidates = _rank_index_candidates_by_taxonomy(
+            links=raw_links,
+            keep_threshold=max(0.0, min(1.0, float(candidate_taxonomy_filter_threshold))),
+            auto_run_threshold=0.92,
+            top_k=max(1, int(candidate_taxonomy_filter_top_k)),
+        )
+        if not ranked_candidates:
+            response = _index_review_response(
+                candidates=[],
+                decision_reason="no_candidates_above_keep_threshold",
+                browser_provider=browser_provider,
+                client_id=client_id,
+                strict_client=strict_client,
+            )
+            response["analysis_mode"] = "internal_llm" if use_internal_llm else "external_llm"
+            response["page_type_hint_applied"] = normalized_hint
+            return response
+
+        if len(ranked_candidates) > 10:
+            response = _index_review_response(
+                candidates=ranked_candidates,
+                decision_reason="candidate_count_exceeds_auto_limit",
+                browser_provider=browser_provider,
+                client_id=client_id,
+                strict_client=strict_client,
+            )
+            response["analysis_mode"] = "internal_llm" if use_internal_llm else "external_llm"
+            response["page_type_hint_applied"] = normalized_hint
+            return response
+
+        def _auto_run_eligible(row: Dict[str, Any]) -> bool:
+            if "auto_run_eligible" in row:
+                return bool(row.get("auto_run_eligible"))
+            try:
+                return float(row.get("taxonomy_score") or 0.0) >= 0.92
+            except (TypeError, ValueError):
+                return False
+
+        if not all(_auto_run_eligible(row) for row in ranked_candidates):
+            response = _index_review_response(
+                candidates=ranked_candidates,
+                decision_reason="confidence_below_auto_threshold",
+                browser_provider=browser_provider,
+                client_id=client_id,
+                strict_client=strict_client,
+            )
+            response["analysis_mode"] = "internal_llm" if use_internal_llm else "external_llm"
+            response["page_type_hint_applied"] = normalized_hint
+            return response
+
+        selected_urls = [str(row.get("url") or "").strip() for row in ranked_candidates]
+        selected_urls = [item for item in selected_urls if item]
+        selected_link_texts = {
+            str(row.get("url") or "").strip(): str(row.get("text") or "").strip()
+            for row in ranked_candidates
+            if str(row.get("url") or "").strip() and str(row.get("text") or "").strip()
+        }
+        result = await crawl_url(
+            url=url,
+            univ_slug=univ_slug,
+            year=valid_year,
+            continue_depth=continue_depth,
+            page_type_hint="index",
+            selected_urls=selected_urls,
+            selected_link_texts=selected_link_texts,
+            browser_provider=browser_provider,
+            client_id=client_id,
+            strict_client=strict_client,
+            candidate_taxonomy_filter_enabled=candidate_taxonomy_filter_enabled,
+            candidate_taxonomy_filter_threshold=candidate_taxonomy_filter_threshold,
+            candidate_taxonomy_filter_top_k=candidate_taxonomy_filter_top_k,
+        )
+        response = result.model_dump()
+        response.update(
+            {
+                "page_type": "index",
+                "auto_ready": True,
+                "requires_user_review": False,
+                "decision_reason": "auto_crawl_threshold_met",
+                "candidates": ranked_candidates,
+                "selected_count": len(selected_urls),
+            }
+        )
+        if "client_id_used" not in response:
+            response["client_id_used"] = None
+        response["analysis_mode"] = "internal_llm" if use_internal_llm else "external_llm"
+        response["page_type_hint_applied"] = normalized_hint
+        response.update(_client_id_usage_metadata(client_id=client_id))
+        return response
+
+    result = await crawl_url(
+        url=url,
+        univ_slug=univ_slug,
+        year=valid_year,
+        continue_depth=continue_depth,
+        page_type_hint=normalized_hint,
+        browser_provider=browser_provider,
+        client_id=client_id,
+        strict_client=strict_client,
+        candidate_taxonomy_filter_enabled=candidate_taxonomy_filter_enabled,
+        candidate_taxonomy_filter_threshold=candidate_taxonomy_filter_threshold,
+        candidate_taxonomy_filter_top_k=candidate_taxonomy_filter_top_k,
+    )
+    response = result.model_dump()
+    if "resolved_browser_provider" not in response:
+        metadata = _resolve_provider_metadata_for_response(
+            browser_provider=browser_provider,
+            client_id=client_id,
+            strict_client=strict_client,
+        )
+        response.update(metadata)
+    if "client_id_used" not in response:
+        response["client_id_used"] = None
+    response.setdefault("page_type", page_type if page_type in {"detail", "index"} else "detail")
+    response.setdefault("auto_ready", True)
+    response.setdefault("requires_user_review", False)
+    response.setdefault("decision_reason", "direct_crawl")
+    response["analysis_mode"] = "internal_llm" if use_internal_llm else "external_llm"
+    response["page_type_hint_applied"] = normalized_hint
+    response.update(_client_id_usage_metadata(client_id=client_id))
+    return response
+
+
+async def _mcp_ingest_impl(
+    *,
+    univ_slug: str,
+    year: int,
+    programs: List[Dict[str, Any]],
+    use_internal_llm: bool,
+) -> dict:
+    try:
+        payload = ingest_program_records_external(
+            univ_slug=univ_slug,
+            year=year,
+            programs=list(programs or []),
+        )
+    except ValueError as exc:
+        return {
+            "imported_count": 0,
+            "updated_count": 0,
+            "total_submitted": len(programs or []),
+            "failed_items": [
+                {
+                    "index": None,
+                    "error_code": "invalid_input",
+                    "message": str(exc),
+                }
+            ],
+            "review_token": uuid.uuid4().hex,
+            "review_items": [],
+            "summary": str(exc),
+            "analysis_mode": "internal_llm" if use_internal_llm else "external_llm",
+            "ingest_mode": "internal_llm" if use_internal_llm else "external_llm",
+        }
+
+    response = dict(payload or {})
+    response["analysis_mode"] = "internal_llm" if use_internal_llm else "external_llm"
+    response["ingest_mode"] = "internal_llm" if use_internal_llm else "external_llm"
+    response.setdefault(
+        "next_action_hint",
+        "Use db_query to inspect persisted rows, then apply program_patch if corrections are needed.",
+    )
+    return response
+
+
 try:
     from mcp.server.fastmcp import FastMCP
 
     mcp = FastMCP("UniAdmission Agent")
 
-    @mcp.tool()
+    @mcp.tool(name="analyze")
     async def mcp_analyze(
         url: str,
         page_type_hint: str = "auto",
@@ -1032,18 +1541,23 @@ try:
         1) Detect whether entry is index/detail
         2) Return candidate links (if index)
         3) Let user decide which links to crawl next
+
+        Notes:
+        - This non-suffixed tool uses external-LLM friendly analysis path.
+        - ``client_id`` is a browser client identifier (from ``runtime_status.client_ids``),
+          not a university slug.
         """
-        result = await analyze_url_candidates(
+        return await _mcp_analyze_impl(
             url=url,
             page_type_hint=page_type_hint,
-            html_content=html_content,
             browser_provider=browser_provider,
             client_id=client_id,
             strict_client=strict_client,
+            html_content=html_content,
+            use_internal_llm=False,
         )
-        return dict(result)
 
-    @mcp.tool()
+    @mcp.tool(name="crawl_detail_batch")
     async def mcp_crawl_detail_batch(
         index_url: str,
         selected_urls: List[str],
@@ -1060,6 +1574,10 @@ try:
         - Call ``mcp_analyze`` first to get ``links``
         - Ask user to choose subset (all/top N/bottom N/manual)
         - Call this tool with chosen URLs for batched detail crawling
+
+        Notes:
+        - ``client_id`` is an optional browser client id from ``runtime_status.client_ids``.
+        - ``univ_slug`` is the university identifier (e.g. polyu/edinburgh).
         """
         result = await crawl_selected_detail_urls_via_client(
             index_url=index_url,
@@ -1073,12 +1591,13 @@ try:
         )
         return dict(result)
 
-    @mcp.tool()
+    @mcp.tool(name="crawl")
     async def mcp_crawl(
         url: str,
         univ_slug: str,
-        year: int,
+        year: Optional[int] = None,
         continue_depth: int = 0,
+        page_type_hint: str = "auto",
         browser_provider: str = "auto",
         client_id: Optional[str] = None,
         strict_client: bool = False,
@@ -1088,38 +1607,55 @@ try:
     ) -> dict:
         """Crawl a university admission page and import structured data.
 
-        Fetches the page with stealth browsing, detects page type,
-        extracts program details via LLM, and upserts to the database.
+        Fetches and imports data for one URL.
 
         Args:
             url: Starting URL to crawl (e.g. https://admissions.hku.hk/programmes).
             univ_slug: University identifier (e.g. "hku").
             year: Academic year (e.g. 2026).
             continue_depth: Extra depth levels for LLM-driven link scouting.
+            page_type_hint: Optional manual override: auto/index/detail.
+            client_id: Browser client id from runtime_status.client_ids.
 
         Returns:
             Dict with imported_count, univ_slug, and year.
         """
-        # MCP calls bypass task_manager for now to keep it simple, 
-        # as MCP tools are usually synchronous-ish from the caller's perspective
-        # or managed by the caller. 
-        # To support logging/cancellation in MCP, we'd need to wrap this too.
-        # For now, direct call is fine.
-        result = await crawl_url(
+        return await _mcp_crawl_impl(
             url=url,
             univ_slug=univ_slug,
             year=year,
             continue_depth=continue_depth,
+            page_type_hint=page_type_hint,
             browser_provider=browser_provider,
             client_id=client_id,
             strict_client=strict_client,
             candidate_taxonomy_filter_enabled=candidate_taxonomy_filter_enabled,
             candidate_taxonomy_filter_threshold=candidate_taxonomy_filter_threshold,
             candidate_taxonomy_filter_top_k=candidate_taxonomy_filter_top_k,
+            use_internal_llm=False,
         )
-        return result.model_dump()
 
-    @mcp.tool()
+    @mcp.tool(name="ingest")
+    async def mcp_ingest(
+        univ_slug: str,
+        year: int,
+        programs: List[Dict[str, Any]],
+    ) -> dict:
+        """Persist externally structured program records (no internal LLM extraction).
+
+        Intended for caller-side LLM workflows:
+        1) Caller fetches/parses pages on its side
+        2) Caller sends normalized `programs` JSON list
+        3) Server validates + upserts and returns review metadata
+        """
+        return await _mcp_ingest_impl(
+            univ_slug=univ_slug,
+            year=year,
+            programs=programs,
+            use_internal_llm=False,
+        )
+
+    @mcp.tool(name="db_query")
     def mcp_db_query(
         univ_slug: str,
         year: Optional[int] = None,
@@ -1139,7 +1675,165 @@ try:
         programs = query_programs(univ_slug=univ_slug, year=year)
         return [p.model_dump() for p in programs]
 
-    @mcp.tool()
+    @mcp.tool(name="runtime_status")
+    def mcp_runtime_status() -> dict:
+        """Report runtime availability for clients and internal LLM."""
+        return _runtime_status_payload()
+
+    @mcp.tool(name="program_patch")
+    def mcp_program_patch(program_id: int, patch: Dict[str, Any]) -> dict:
+        """Patch a single program by ID."""
+        normalized_program_id = int(program_id)
+        patch_payload = dict(patch or {})
+        if not patch_payload:
+            return {
+                "updated": False,
+                "program_id": normalized_program_id,
+                "error_code": "empty_patch",
+                "next_action_hint": "Provide at least one field to update.",
+            }
+
+        blocked_fields = {"id", "university_id", "program_catalog_id", "academic_year"}
+        blocked = sorted(blocked_fields.intersection(set(patch_payload.keys())))
+        if blocked:
+            return {
+                "updated": False,
+                "program_id": normalized_program_id,
+                "error_code": "forbidden_fields",
+                "failed_fields": blocked,
+                "next_action_hint": "Remove immutable fields from patch payload.",
+            }
+
+        try:
+            updated = patch_program_snapshot(normalized_program_id, patch_payload)
+        except ValueError as exc:
+            return {
+                "updated": False,
+                "program_id": normalized_program_id,
+                "error_code": "validation_error",
+                "message": str(exc),
+                "next_action_hint": "Fix patch payload and retry.",
+            }
+
+        if not updated:
+            return {
+                "updated": False,
+                "program_id": normalized_program_id,
+                "error_code": "not_found",
+                "next_action_hint": "Check program_id from review_items and retry.",
+            }
+
+        return {
+            "updated": True,
+            "program_id": normalized_program_id,
+            "program": updated.model_dump(),
+            "summary": "updated 1 record",
+        }
+
+    @mcp.tool(name="program_patch_batch")
+    def mcp_program_patch_batch(items: List[Dict[str, Any]]) -> dict:
+        """Patch multiple programs by ID; per-item failures do not abort the batch."""
+        normalized_items = [item for item in (items or []) if isinstance(item, dict)]
+        if not normalized_items:
+            return {
+                "updated_count": 0,
+                "failed_items": [],
+                "summary": "No patch items supplied.",
+                "error_code": "empty_batch",
+            }
+
+        updated_count = 0
+        failed_items: List[Dict[str, Any]] = []
+        updated_program_ids: List[int] = []
+        for idx, item in enumerate(normalized_items):
+            raw_program_id = item.get("program_id")
+            patch_payload = dict(item.get("patch") or {})
+
+            try:
+                program_id = int(raw_program_id)
+            except (TypeError, ValueError):
+                failed_items.append(
+                    {
+                        "index": idx,
+                        "program_id": raw_program_id,
+                        "error_code": "invalid_program_id",
+                        "message": "program_id must be an integer",
+                    }
+                )
+                continue
+
+            if not patch_payload:
+                failed_items.append(
+                    {
+                        "index": idx,
+                        "program_id": program_id,
+                        "error_code": "empty_patch",
+                        "message": "patch payload is empty",
+                    }
+                )
+                continue
+
+            blocked_fields = {"id", "university_id", "program_catalog_id", "academic_year"}
+            blocked = sorted(blocked_fields.intersection(set(patch_payload.keys())))
+            if blocked:
+                failed_items.append(
+                    {
+                        "index": idx,
+                        "program_id": program_id,
+                        "error_code": "forbidden_fields",
+                        "failed_fields": blocked,
+                    }
+                )
+                continue
+
+            try:
+                updated = patch_program_snapshot(program_id, patch_payload)
+            except ValueError as exc:
+                failed_items.append(
+                    {
+                        "index": idx,
+                        "program_id": program_id,
+                        "error_code": "validation_error",
+                        "message": str(exc),
+                    }
+                )
+                continue
+            except Exception as exc:  # pylint: disable=broad-except
+                failed_items.append(
+                    {
+                        "index": idx,
+                        "program_id": program_id,
+                        "error_code": "unexpected_error",
+                        "message": str(exc),
+                    }
+                )
+                continue
+
+            if not updated:
+                failed_items.append(
+                    {
+                        "index": idx,
+                        "program_id": program_id,
+                        "error_code": "not_found",
+                    }
+                )
+                continue
+
+            updated_count += 1
+            updated_program_ids.append(program_id)
+
+        summary = (
+            f"Updated {updated_count}/{len(normalized_items)} items; "
+            f"failed {len(failed_items)}."
+        )
+        return {
+            "updated_count": updated_count,
+            "updated_program_ids": updated_program_ids,
+            "failed_items": failed_items,
+            "summary": summary,
+        }
+
+    @mcp.tool(name="help")
     def mcp_help(
         verbose: bool = False,
     ) -> dict:
@@ -1210,9 +1904,130 @@ repair:
             "description": "Automated university admission data scraper"
         }
 
+    if _internal_llm_available():
+        @mcp.tool(name="analyze_internal_llm")
+        async def mcp_analyze_internal_llm(
+            url: str,
+            page_type_hint: str = "auto",
+            browser_provider: str = "auto",
+            client_id: Optional[str] = None,
+            strict_client: bool = False,
+            html_content: Optional[str] = None,
+        ) -> dict:
+            """Analyze page using the explicit internal-LLM toolset path."""
+            return await _mcp_analyze_impl(
+                url=url,
+                page_type_hint=page_type_hint,
+                browser_provider=browser_provider,
+                client_id=client_id,
+                strict_client=strict_client,
+                html_content=html_content,
+                use_internal_llm=True,
+            )
+
+        @mcp.tool(name="crawl_detail_batch_internal_llm")
+        async def mcp_crawl_detail_batch_internal_llm(
+            index_url: str,
+            selected_urls: List[str],
+            univ_slug: str,
+            year: int,
+            batch_size: int = 4,
+            client_id: Optional[str] = None,
+            strict_client: bool = True,
+            selected_link_texts: Optional[Dict[str, str]] = None,
+        ) -> dict:
+            """Batch detail crawl using explicit internal-LLM toolset path."""
+            return await mcp_crawl_detail_batch(
+                index_url=index_url,
+                selected_urls=selected_urls,
+                univ_slug=univ_slug,
+                year=year,
+                batch_size=batch_size,
+                client_id=client_id,
+                strict_client=strict_client,
+                selected_link_texts=selected_link_texts,
+            )
+
+        @mcp.tool(name="crawl_internal_llm")
+        async def mcp_crawl_internal_llm(
+            url: str,
+            univ_slug: str,
+            year: Optional[int] = None,
+            continue_depth: int = 0,
+            page_type_hint: str = "auto",
+            browser_provider: str = "auto",
+            client_id: Optional[str] = None,
+            strict_client: bool = False,
+            candidate_taxonomy_filter_enabled: bool = False,
+            candidate_taxonomy_filter_threshold: float = 0.75,
+            candidate_taxonomy_filter_top_k: int = 30,
+        ) -> dict:
+            """Crawl using explicit internal-LLM toolset path."""
+            return await _mcp_crawl_impl(
+                url=url,
+                univ_slug=univ_slug,
+                year=year,
+                continue_depth=continue_depth,
+                page_type_hint=page_type_hint,
+                browser_provider=browser_provider,
+                client_id=client_id,
+                strict_client=strict_client,
+                candidate_taxonomy_filter_enabled=candidate_taxonomy_filter_enabled,
+                candidate_taxonomy_filter_threshold=candidate_taxonomy_filter_threshold,
+                candidate_taxonomy_filter_top_k=candidate_taxonomy_filter_top_k,
+                use_internal_llm=True,
+            )
+
+        @mcp.tool(name="ingest_internal_llm")
+        async def mcp_ingest_internal_llm(
+            univ_slug: str,
+            year: int,
+            programs: List[Dict[str, Any]],
+        ) -> dict:
+            """Persist caller-provided structured records via internal-LLM namespaced tool."""
+            return await _mcp_ingest_impl(
+                univ_slug=univ_slug,
+                year=year,
+                programs=programs,
+                use_internal_llm=True,
+            )
+
+        @mcp.tool(name="db_query_internal_llm")
+        def mcp_db_query_internal_llm(
+            univ_slug: str,
+            year: Optional[int] = None,
+        ) -> list:
+            """Internal-LLM namespaced alias of db_query."""
+            return mcp_db_query(univ_slug=univ_slug, year=year)
+
+        @mcp.tool(name="runtime_status_internal_llm")
+        def mcp_runtime_status_internal_llm() -> dict:
+            """Internal-LLM namespaced alias of runtime_status."""
+            return mcp_runtime_status()
+
+        @mcp.tool(name="program_patch_internal_llm")
+        def mcp_program_patch_internal_llm(program_id: int, patch: Dict[str, Any]) -> dict:
+            """Internal-LLM namespaced alias of program_patch."""
+            return mcp_program_patch(program_id=program_id, patch=patch)
+
+        @mcp.tool(name="program_patch_batch_internal_llm")
+        def mcp_program_patch_batch_internal_llm(items: List[Dict[str, Any]]) -> dict:
+            """Internal-LLM namespaced alias of program_patch_batch."""
+            return mcp_program_patch_batch(items=items)
+
+        @mcp.tool(name="help_internal_llm")
+        def mcp_help_internal_llm(verbose: bool = False) -> dict:
+            """Internal-LLM namespaced alias of help."""
+            return mcp_help(verbose=verbose)
+    else:
+        logger.info("MCP internal_llm tools not registered (internal LLM unavailable).")
+
     # Mount MCP as a sub-application at /mcp
     app.mount("/mcp", mcp.sse_app())
-    logger.info("MCP tools registered: analyze, crawl_detail_batch, crawl, db_query, help")
+    logger.info(
+        "MCP tools registered: analyze, crawl_detail_batch, crawl, ingest, db_query, "
+        "runtime_status, program_patch, program_patch_batch, help"
+    )
 
 except ImportError:
     logger.info("MCP SDK not installed — MCP tools disabled. Install with: uv add 'mcp[cli]'")
