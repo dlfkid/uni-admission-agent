@@ -57,8 +57,9 @@ def resolve_program_name(
 
     top = ranked[0]
     runner_up = ranked[1] if len(ranked) > 1 else None
+    runner_up_score = float(runner_up.get("score", 0.0)) if isinstance(runner_up, dict) else 0.0
     has_conflict = (
-        runner_up is not None and (top["score"] - runner_up["score"]) < conflict_delta
+        isinstance(runner_up, dict) and (top["score"] - runner_up_score) < conflict_delta
     )
     if top["score"] >= low_threshold and not has_conflict:
         return _resolved(top["name"], top["score"], top["source"], "rule_high_confidence", ranked)
