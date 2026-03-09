@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
-from sqlalchemy import Column, UniqueConstraint
+from sqlalchemy import Column, Enum as SqlEnum, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlmodel import Field, Relationship, SQLModel
 
@@ -16,6 +16,17 @@ class IngestionStage(str, Enum):
     EXTRACT_STRUCTURED = "extract_structured"
     VALIDATE_RULES = "validate_rules"
     PERSIST_VERSIONED = "persist_versioned"
+
+
+def _enum_values(enum_cls: type[Enum]) -> List[str]:
+    return [member.value for member in enum_cls]
+
+
+INGESTION_STAGE_ENUM = SqlEnum(
+    IngestionStage,
+    name="ingestionstage",
+    values_callable=_enum_values,
+)
 
 
 class IngestionJobStatus(str, Enum):
@@ -52,8 +63,14 @@ class IngestionJob(SQLModel, table=True):
     page_type_hint: str = Field(default="auto")
 
     status: IngestionJobStatus = Field(default=IngestionJobStatus.PENDING, index=True)
-    current_stage: Optional[IngestionStage] = Field(default=None, index=True)
-    resume_from_stage: Optional[IngestionStage] = Field(default=None, index=True)
+    current_stage: Optional[IngestionStage] = Field(
+        default=None,
+        sa_column=Column(INGESTION_STAGE_ENUM, nullable=True, index=True),
+    )
+    resume_from_stage: Optional[IngestionStage] = Field(
+        default=None,
+        sa_column=Column(INGESTION_STAGE_ENUM, nullable=True, index=True),
+    )
 
     request_payload: Dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSONB))
     context_payload: Dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSONB))
@@ -77,7 +94,9 @@ class IngestionTask(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     job_id: int = Field(foreign_key="ingestion_job.id", index=True)
 
-    stage: IngestionStage = Field(index=True)
+    stage: IngestionStage = Field(
+        sa_column=Column(INGESTION_STAGE_ENUM, nullable=False, index=True),
+    )
     state: IngestionTaskState = Field(default=IngestionTaskState.PENDING, index=True)
     idempotency_key: Optional[str] = Field(default=None, index=True)
 
