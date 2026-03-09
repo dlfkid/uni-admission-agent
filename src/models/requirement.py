@@ -2,7 +2,7 @@ from typing import Optional, List, Dict, Any
 from datetime import datetime, timezone
 from enum import Enum
 
-from sqlalchemy import UniqueConstraint, Column
+from sqlalchemy import UniqueConstraint, Column, Enum as SqlEnum
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlmodel import SQLModel, Field, Relationship
 
@@ -20,6 +20,22 @@ class RequirementCategory(str, Enum):
     PORTFOLIO = "portfolio"
     EXPERIENCE = "experience"
     OTHER = "other"
+
+
+def _enum_values(enum_cls: type[Enum]) -> List[str]:
+    return [member.value for member in enum_cls]
+
+
+STUDY_MODE_ENUM = SqlEnum(
+    StudyMode,
+    name="studymode",
+    values_callable=_enum_values,
+)
+REQUIREMENT_CATEGORY_ENUM = SqlEnum(
+    RequirementCategory,
+    name="requirementcategory",
+    values_callable=_enum_values,
+)
 
 
 class SubjectDim(SQLModel, table=True):
@@ -115,7 +131,10 @@ class ProgramStudyOption(SQLModel, table=True):
     )
 
     id: Optional[int] = Field(default=None, primary_key=True)
-    mode: StudyMode = Field(default=StudyMode.UNKNOWN, index=True)
+    mode: StudyMode = Field(
+        default=StudyMode.UNKNOWN,
+        sa_column=Column(STUDY_MODE_ENUM, nullable=False, index=True),
+    )
     duration_months: Optional[int] = Field(default=None)
     notes: Optional[str] = Field(default=None)
     updated_at: datetime = Field(default_factory=_utc_now)
@@ -163,7 +182,10 @@ class ProgramRequirement(SQLModel, table=True):
     )
 
     id: Optional[int] = Field(default=None, primary_key=True)
-    category: RequirementCategory = Field(default=RequirementCategory.OTHER, index=True)
+    category: RequirementCategory = Field(
+        default=RequirementCategory.OTHER,
+        sa_column=Column(REQUIREMENT_CATEGORY_ENUM, nullable=False, index=True),
+    )
     subject_name: Optional[str] = Field(default=None, index=True)
     framework: Optional[str] = Field(default=None, index=True)
     minimum_value: Optional[str] = Field(default=None, index=True)
