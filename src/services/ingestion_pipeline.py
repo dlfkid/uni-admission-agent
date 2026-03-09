@@ -5,6 +5,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import re
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Dict, List, Optional
@@ -32,6 +33,7 @@ from src.storage.db_manager import DatabaseManager
 from src.utils.text import generate_program_group_code
 
 logger = logging.getLogger(__name__)
+_HTML_TITLE_RE = re.compile(r"<title[^>]*>(.*?)</title>", re.IGNORECASE | re.DOTALL)
 
 STAGE_ORDER = [
     IngestionStage.FETCH_RAW,
@@ -125,6 +127,16 @@ def _hash_payload(payload: Any) -> str:
 
 def _stage_order_index(stage: IngestionStage) -> int:
     return STAGE_ORDER.index(stage)
+
+
+def _extract_html_title(html_text: str) -> str:
+    match = _HTML_TITLE_RE.search(str(html_text or ""))
+    if not match:
+        return ""
+    normalized = re.sub(r"\s+", " ", str(match.group(1) or "")).strip()
+    if not normalized:
+        return ""
+    return normalized.split("|", 1)[0].strip()
 
 
 class StagePoisonedError(RuntimeError):
@@ -1152,7 +1164,7 @@ class IngestionPipeline:
                         markdown_name=str(program_data.get("name_en") or ""),
                         selected_anchor_text=str(row.get("selected_anchor_text") or ""),
                         detail_url=page.url,
-                        html_title="",
+                        html_title=_extract_html_title(row_html),
                         is_index_mode=is_index_mode_request,
                         taxonomy_matches=taxonomy_matches,
                         router=getattr(cleaner, "router", None),

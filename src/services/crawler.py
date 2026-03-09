@@ -81,6 +81,10 @@ class CrawlResult(BaseModel):
         default_factory=list,
         description="Ordered persisted program records with stable program_id",
     )
+    unresolved_urls: List[dict[str, Any]] = Field(
+        default_factory=list,
+        description="URLs skipped due to unresolved program names",
+    )
 
 
 class ImportResult(BaseModel):
@@ -574,6 +578,9 @@ async def crawl_url(
         imported,
         result.get("job_uid"),
     )
+    unresolved_urls = list(result.get("unresolved_urls") or [])
+    if unresolved_urls:
+        logger.warning("Crawl completed with unresolved program names: %d", len(unresolved_urls))
     return CrawlResult(
         imported_count=imported,
         univ_slug=univ_slug,
@@ -583,6 +590,7 @@ async def crawl_url(
         client_id_used=client_id_used,
         review_token=review_token,
         review_items=review_items,
+        unresolved_urls=unresolved_urls,
     )
 
 

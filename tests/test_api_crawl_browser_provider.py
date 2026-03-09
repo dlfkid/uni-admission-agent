@@ -18,6 +18,7 @@ def test_api_crawl_passes_browser_provider_args(monkeypatch) -> None:
             univ_slug="u",
             year=2026,
             ingestion_job_id="job-api",
+            unresolved_urls=[{"url": "https://example.edu/p", "reason": "llm_low_confidence"}],
         )
 
     monkeypatch.setattr("src.api.server.crawl_url", fake_crawl_url)
@@ -48,6 +49,10 @@ def test_api_crawl_passes_browser_provider_args(monkeypatch) -> None:
             task = client.get(f"/tasks/{task_id}").json()
             state = task["state"]
             if state in {"DONE", "FAILED"}:
+                if state == "DONE":
+                    assert task["result"]["unresolved_urls"] == [
+                        {"url": "https://example.edu/p", "reason": "llm_low_confidence"}
+                    ]
                 break
             time.sleep(0.02)
         assert state == "DONE"
