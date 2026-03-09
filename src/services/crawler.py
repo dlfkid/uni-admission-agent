@@ -81,6 +81,10 @@ class CrawlResult(BaseModel):
         default_factory=list,
         description="Ordered persisted program records with stable program_id",
     )
+    unresolved_urls: List[dict[str, Any]] = Field(
+        default_factory=list,
+        description="URLs skipped due to unresolved program names",
+    )
 
 
 class ImportResult(BaseModel):
@@ -449,6 +453,9 @@ async def crawl_url(
     taxonomy_high_threshold: Optional[float] = None,
     taxonomy_hint_top_k: Optional[int] = None,
     taxonomy_override_enabled: Optional[bool] = None,
+    name_resolution_llm_enabled: Optional[bool] = None,
+    name_resolution_low_threshold: Optional[float] = None,
+    name_resolution_conflict_delta: Optional[float] = None,
     progress_callback: Optional[Callable[[str, dict[str, Any]], None]] = None,
 ) -> CrawlResult:
     """Crawl a university admission page and import structured data.
@@ -486,6 +493,9 @@ async def crawl_url(
         taxonomy_high_threshold: Optional override score threshold.
         taxonomy_hint_top_k: Optional cap for injected taxonomy hints.
         taxonomy_override_enabled: Optional per-request name override toggle.
+        name_resolution_llm_enabled: Optional per-request LLM fallback toggle.
+        name_resolution_low_threshold: Optional name-resolution low-confidence threshold.
+        name_resolution_conflict_delta: Optional top-candidate conflict delta threshold.
 
     Returns:
         CrawlResult with the number of programs imported.
@@ -537,6 +547,9 @@ async def crawl_url(
         taxonomy_high_threshold=taxonomy_high_threshold,
         taxonomy_hint_top_k=taxonomy_hint_top_k,
         taxonomy_override_enabled=taxonomy_override_enabled,
+        name_resolution_llm_enabled=name_resolution_llm_enabled,
+        name_resolution_low_threshold=name_resolution_low_threshold,
+        name_resolution_conflict_delta=name_resolution_conflict_delta,
         event_callback=progress_callback,
     )
     imported = int(result.get("imported_count") or 0)
@@ -565,6 +578,9 @@ async def crawl_url(
         imported,
         result.get("job_uid"),
     )
+    unresolved_urls = list(result.get("unresolved_urls") or [])
+    if unresolved_urls:
+        logger.warning("Crawl completed with unresolved program names: %d", len(unresolved_urls))
     return CrawlResult(
         imported_count=imported,
         univ_slug=univ_slug,
@@ -574,6 +590,7 @@ async def crawl_url(
         client_id_used=client_id_used,
         review_token=review_token,
         review_items=review_items,
+        unresolved_urls=unresolved_urls,
     )
 
 

@@ -247,3 +247,22 @@ Curriculum
 """
     result = extract_program_name(markdown)
     assert result == "Master of Design"
+
+
+def test_extract_program_name_ignores_requirement_sentence_with_degree_keyword() -> None:
+    markdown = """
+A bachelor degree with a 2:1 (hons) in any subject.
+
+# AI for Business MSc
+## Year of entry 2026
+"""
+    assert extract_program_name(markdown) == "AI for Business MSc"
+
+
+def test_extract_program_name_ignores_whats_new_when_heading_exists() -> None:
+    markdown = """
+## What's New
+### Masters Discovery Fair
+# Master of Science in Asset and Wealth Management
+"""
+    assert extract_program_name(markdown) == "Master of Science in Asset and Wealth Management"

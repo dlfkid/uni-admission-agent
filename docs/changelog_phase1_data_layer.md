@@ -218,6 +218,25 @@ Centralize canonical normalization across subject/exam/framework/date/amount/dur
 
 ### Acceptance Criteria
 - Same raw input normalizes to same canonical output across ingestion channels.
+
+---
+
+## 2026-03-10 Phase 3 Update: Program-Name Resolution Hardening
+
+- Added deterministic `index -> detail` program-name resolver with source-priority ranking:
+  - `selected_anchor_text` > URL slug > html title > markdown extraction.
+- Added low-confidence/near-tie fallback path:
+  - one-shot LLM fallback (default enabled per request/pipeline settings),
+  - strict unresolved gate when confidence stays low.
+- Added ingestion-stage no-pollution gate:
+  - unresolved names are skipped from `program_candidates`,
+  - unresolved diagnostics captured as `unresolved_urls`.
+- Exposed request-level controls:
+  - `name_resolution_llm_enabled`
+  - `name_resolution_low_threshold`
+  - `name_resolution_conflict_delta`
+- Extended crawl/task result payloads with unresolved diagnostics for UI/operator visibility.
+- Added Leeds regression coverage and supporting unit tests for noisy heading/requirements false positives.
 - Dictionary update impact can be simulated before rollout.
 - Standardization artifacts are testable independently from crawler logic.
 

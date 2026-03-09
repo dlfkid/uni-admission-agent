@@ -150,7 +150,7 @@ _NOISE_HEADING_RE = re.compile(
     r"(?:cookie|privacy|navigation|menu|search|skip to|accept|"
     r"your .* options|tell us|changes to our|"
     r"related content|course terms|how to apply|"
-    r"footer|header|breadcrumb|sidebar|what'?s new|latest news|news)",
+    r"footer|header|breadcrumb|sidebar|what'?s new|latest news|news|discovery fair)",
     re.IGNORECASE,
 )
 
@@ -163,6 +163,10 @@ _STRONG_DEGREE_KEYWORDS_RE = re.compile(
     r"\b(?:MSc|MA|MBA|MPhil|MEng|MRes|MFA|MLitt|MChem|MComp|MMath"
     r"|BSc|BA|BEng|BBA|LLB|LLM|PhD|DPhil|EdD|DBA|PGDip|PGCert"
     r"|Master|Bachelor|Doctor|Diploma|Certificate|Masters)\b",
+    re.IGNORECASE,
+)
+_REQUIREMENT_SENTENCE_RE = re.compile(
+    r"\b(entry requirements?|a bachelor degree|hons|ielts|to apply)\b",
     re.IGNORECASE,
 )
 
@@ -223,6 +227,8 @@ def _find_prominent_plain_title(markdown: str) -> str:
         if len(candidate) < 4 or len(candidate) > 120:
             continue
         if len(candidate.split()) > 18:
+            continue
+        if _REQUIREMENT_SENTENCE_RE.search(candidate):
             continue
         if is_noise_program_name(candidate):
             continue

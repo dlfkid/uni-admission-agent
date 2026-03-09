@@ -534,6 +534,9 @@ async def api_crawl(body: CrawlRequest) -> CrawlResponse:
                     taxonomy_high_threshold=body.taxonomy_high_threshold,
                     taxonomy_hint_top_k=body.taxonomy_hint_top_k,
                     taxonomy_override_enabled=body.taxonomy_override_enabled,
+                    name_resolution_llm_enabled=body.name_resolution_llm_enabled,
+                    name_resolution_low_threshold=body.name_resolution_low_threshold,
+                    name_resolution_conflict_delta=body.name_resolution_conflict_delta,
                     progress_callback=_on_ingestion_event,
                 )
             finally:
