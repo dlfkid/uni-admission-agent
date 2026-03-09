@@ -26,6 +26,7 @@ from src.scrapers.engine import AdmissionScraper
 from src.scrapers.link_parser import extract_links_with_text, filter_links_by_llm
 from src.scrapers.page_processor import extract_program_data_from_page
 from src.scrapers.scout import run_scout
+from src.services.program_name_resolution import resolve_program_name
 from src.services.subject_taxonomy import get_subject_taxonomy_service, normalize_name as normalize_taxonomy_name
 from src.storage.db_manager import DatabaseManager
 from src.utils.text import generate_program_group_code
@@ -54,6 +55,7 @@ STAGE_CONTEXT_KEYS = {
         "program_candidates",
         "extracted_count",
         "extract_errors",
+        "unresolved_urls",
         "candidate_hash",
         "validated_programs",
         "validated_count",
@@ -68,6 +70,7 @@ STAGE_CONTEXT_KEYS = {
         "program_candidates",
         "extracted_count",
         "extract_errors",
+        "unresolved_urls",
         "candidate_hash",
         "validated_programs",
         "validated_count",
@@ -1041,9 +1044,22 @@ class IngestionPipeline:
             request_payload.get("taxonomy_override_enabled"),
             default=True,
         )
+        name_resolution_llm_enabled = self._coerce_bool(
+            request_payload.get("name_resolution_llm_enabled"),
+            default=True,
+        )
+        name_resolution_low_threshold = self._coerce_float(
+            request_payload.get("name_resolution_low_threshold"),
+            default=0.8,
+        )
+        name_resolution_conflict_delta = self._coerce_float(
+            request_payload.get("name_resolution_conflict_delta"),
+            default=0.05,
+        )
 
         candidates: List[Dict[str, Any]] = []
         extract_errors: List[Dict[str, str]] = []
+        unresolved_urls: List[Dict[str, Any]] = []
 
         for row in raw_pages:
             row_markdown = str(row.get("markdown") or "")
@@ -1125,6 +1141,39 @@ class IngestionPipeline:
                 selected_anchor_text=str(row.get("selected_anchor_text") or "").strip() or None,
             )
             if program_data:
+                if is_index_mode_request:
+                    resolution = resolve_program_name(
+                        markdown_name=str(program_data.get("name_en") or ""),
+                        selected_anchor_text=str(row.get("selected_anchor_text") or ""),
+                        detail_url=page.url,
+                        html_title="",
+                        is_index_mode=is_index_mode_request,
+                        taxonomy_matches=taxonomy_matches,
+                        router=getattr(cleaner, "router", None),
+                        llm_fallback_enabled=name_resolution_llm_enabled,
+                        low_threshold=name_resolution_low_threshold,
+                        conflict_delta=name_resolution_conflict_delta,
+                    )
+                    if resolution.status != "resolved":
+                        unresolved_urls.append(
+                            {
+                                "url": page.url,
+                                "reason": resolution.reason,
+                            }
+                        )
+                        extract_errors.append(
+                            {
+                                "url": page.url,
+                                "error": f"Program name unresolved: {resolution.reason}",
+                            }
+                        )
+                        logger.warning(
+                            "program-name unresolved, skipped url=%s reason=%s",
+                            page.url,
+                            resolution.reason,
+                        )
+                        continue
+                    program_data["name_en"] = resolution.name
                 self._attach_taxonomy_trace(
                     program_data=program_data,
                     univ_slug=univ_slug,
@@ -1152,6 +1201,7 @@ class IngestionPipeline:
             "program_candidates": candidates,
             "extracted_count": len(candidates),
             "extract_errors": extract_errors,
+            "unresolved_urls": unresolved_urls,
             "candidate_hash": _hash_payload(candidates),
         }
 
