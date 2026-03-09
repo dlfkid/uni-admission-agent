@@ -6,7 +6,7 @@ Pure functions (_normalize_text_payload, _sanitize_db_url) are tested directly.
 
 from unittest.mock import MagicMock, patch, PropertyMock
 from typing import Any
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -447,6 +447,35 @@ class TestSyncDeadlineRecords:
 
         payload = [
             {"round": 1, "description": "Early Round", "cutoff_date": "2025-10-15T00:00:00Z"},
+        ]
+
+        dm._sync_deadline_records(session, program_id=18, payload=payload)
+
+        session.delete.assert_not_called()
+        assert session.add.call_count == 1
+
+    def test_matches_existing_deadline_when_db_row_is_tz_aware_local_midnight(self) -> None:
+        dm = DatabaseManager()
+        session = MagicMock()
+        existing_row = MagicMock()
+        existing_row.round = 1
+        existing_row.description = "International"
+        existing_row.cutoff_date = datetime(
+            2026,
+            7,
+            31,
+            0,
+            0,
+            tzinfo=timezone(timedelta(hours=8)),
+        )
+        session.exec.return_value.all.return_value = [existing_row]
+
+        payload = [
+            {
+                "round": 1,
+                "description": "International",
+                "cutoff_date": datetime(2026, 7, 31, 0, 0),
+            },
         ]
 
         dm._sync_deadline_records(session, program_id=18, payload=payload)

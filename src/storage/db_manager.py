@@ -378,10 +378,8 @@ class DatabaseManager:
             parsed = parse_datetime(raw_value)
             if parsed is None:
                 return None
-            if parsed.tzinfo is not None:
-                parsed = parsed.astimezone(timezone.utc)
             day = parsed.date()
-            return datetime(day.year, day.month, day.day)
+            return datetime(day.year, day.month, day.day, tzinfo=timezone.utc)
 
         existing = session.exec(
             select(ProgramDeadline).where(ProgramDeadline.program_id == program_id)
@@ -417,10 +415,17 @@ class DatabaseManager:
                 continue
             payload_by_key[dedupe_key] = item
 
+        keys_to_delete = [key for key in existing_by_key if key not in payload_by_key]
+        for key in keys_to_delete:
+            session.delete(existing_by_key[key])
+        if keys_to_delete:
+            # Flush deletions before inserts to avoid transient unique-key collisions.
+            session.flush()
+
         for key in payload_by_key:
             round_value, description, cutoff_date = key
             existing_row = existing_by_key.get(key)
-            if existing_row is not None:
+            if existing_row is not None and key not in keys_to_delete:
                 existing_row.round = round_value
                 existing_row.description = description
                 existing_row.cutoff_date = cutoff_date
@@ -435,10 +440,6 @@ class DatabaseManager:
                     cutoff_date=cutoff_date,
                 )
             )
-
-        for key, row in existing_by_key.items():
-            if key not in payload_by_key:
-                session.delete(row)
 
     def _upsert_subject_dim(self, session: Session, subject_name: Optional[str]) -> Optional[SubjectDim]:
         normalized_name = self._normalize_dim_key(subject_name, "subject")
