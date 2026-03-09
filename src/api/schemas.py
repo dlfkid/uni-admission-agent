@@ -130,6 +130,22 @@ class CrawlRequest(BaseModel):
         default=None,
         description="Enable high-confidence taxonomy override of extracted program name",
     )
+    name_resolution_llm_enabled: Optional[bool] = Field(
+        default=None,
+        description="Enable low-confidence program-name LLM fallback in index->detail flow",
+    )
+    name_resolution_low_threshold: Optional[float] = Field(
+        default=None,
+        ge=0.0,
+        le=1.0,
+        description="Minimum confidence threshold before triggering name-resolution fallback",
+    )
+    name_resolution_conflict_delta: Optional[float] = Field(
+        default=None,
+        ge=0.0,
+        le=1.0,
+        description="Minimum top-candidate score gap required to avoid fallback",
+    )
 
     @model_validator(mode="after")
     def _validate_taxonomy_thresholds(self) -> "CrawlRequest":

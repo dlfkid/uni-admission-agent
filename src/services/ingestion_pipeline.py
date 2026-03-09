@@ -213,6 +213,9 @@ class IngestionPipeline:
         taxonomy_high_threshold: Optional[float] = None,
         taxonomy_hint_top_k: Optional[int] = None,
         taxonomy_override_enabled: Optional[bool] = None,
+        name_resolution_llm_enabled: Optional[bool] = None,
+        name_resolution_low_threshold: Optional[float] = None,
+        name_resolution_conflict_delta: Optional[float] = None,
         event_callback: Optional[IngestionEventCallback] = None,
     ) -> Dict[str, Any]:
         request_payload = {
@@ -238,6 +241,9 @@ class IngestionPipeline:
             "taxonomy_high_threshold": taxonomy_high_threshold,
             "taxonomy_hint_top_k": taxonomy_hint_top_k,
             "taxonomy_override_enabled": taxonomy_override_enabled,
+            "name_resolution_llm_enabled": name_resolution_llm_enabled,
+            "name_resolution_low_threshold": name_resolution_low_threshold,
+            "name_resolution_conflict_delta": name_resolution_conflict_delta,
         }
         job_uid = self._create_job(request_payload)
         return await self._run_job(
