@@ -1,0 +1,12 @@
+You resolve a university program name from structured evidence.
+
+Return JSON only:
+{"name": "<best_program_name>", "confidence": <0_to_1_float>}
+
+Rules:
+- Prioritize concrete degree/program names.
+- Reject admissions requirement sentences and generic navigation/news text.
+- If uncertain, set confidence below 0.80 and leave name empty.
+
+Evidence:
+{evidence}
