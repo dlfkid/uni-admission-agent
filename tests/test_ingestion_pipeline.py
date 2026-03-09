@@ -394,6 +394,110 @@ def test_extract_structured_allows_browser_html_in_detail_mode(monkeypatch) -> N
     assert len(result["extract_errors"]) == 0
 
 
+def test_extract_structured_skips_unresolved_program_name(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "src.services.ingestion_pipeline.LLMCleanerAgent",
+        MagicMock,
+    )
+    pipeline = IngestionPipeline(db_manager=MagicMock())
+    monkeypatch.setattr(
+        "src.services.ingestion_pipeline.resolve_program_name",
+        lambda **_kwargs: type(
+            "Resolution",
+            (),
+            {
+                "status": "unresolved",
+                "name": "",
+                "confidence": 0.0,
+                "source": "none",
+                "reason": "llm_low_confidence",
+                "top_candidates": [],
+            },
+        )(),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "src.services.ingestion_pipeline.extract_program_data_from_page",
+        lambda **_kwargs: ({"name_en": "Study with us"}, None),
+    )
+
+    result = pipeline._stage_extract_structured(
+        {"univ_slug": "leeds", "year": 2026, "page_type_hint": "index", "selected_urls": ["https://x"]},
+        {
+            "raw_pages": [
+                {
+                    "url": "https://courses.leeds.ac.uk/k198/ai-for-business-msc",
+                    "markdown": "# Study with us",
+                    "char_count": 15,
+                    "links": [],
+                    "status_code": 200,
+                    "html": "<html></html>",
+                    "crawl_depth": 0,
+                    "from_browser": True,
+                    "selected_anchor_text": "AI for Business MSc",
+                }
+            ]
+        },
+    )
+
+    assert result["extracted_count"] == 0
+    assert len(result["unresolved_urls"]) == 1
+    assert result["unresolved_urls"][0]["reason"] == "llm_low_confidence"
+
+
+def test_persist_versioned_not_called_for_unresolved(monkeypatch) -> None:
+    mock_db = MagicMock()
+    pipeline = IngestionPipeline(db_manager=mock_db)
+    monkeypatch.setattr(
+        "src.services.ingestion_pipeline.LLMCleanerAgent",
+        MagicMock,
+    )
+    monkeypatch.setattr(
+        "src.services.ingestion_pipeline.resolve_program_name",
+        lambda **_kwargs: type(
+            "Resolution",
+            (),
+            {
+                "status": "unresolved",
+                "name": "",
+                "confidence": 0.0,
+                "source": "none",
+                "reason": "llm_low_confidence",
+                "top_candidates": [],
+            },
+        )(),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "src.services.ingestion_pipeline.extract_program_data_from_page",
+        lambda **_kwargs: ({"name_en": "Study with us"}, None),
+    )
+
+    extract_result = pipeline._stage_extract_structured(
+        {"univ_slug": "leeds", "year": 2026, "page_type_hint": "index", "selected_urls": ["https://x"]},
+        {
+            "raw_pages": [
+                {
+                    "url": "https://courses.leeds.ac.uk/k198/ai-for-business-msc",
+                    "markdown": "# Study with us",
+                    "char_count": 15,
+                    "links": [],
+                    "status_code": 200,
+                    "html": "<html></html>",
+                    "crawl_depth": 0,
+                    "from_browser": True,
+                    "selected_anchor_text": "AI for Business MSc",
+                }
+            ]
+        },
+    )
+    validate_result = pipeline._stage_validate_rules({"year": 2026}, extract_result)
+    pipeline._stage_persist_versioned({"univ_slug": "leeds"}, validate_result)
+
+    assert validate_result["validated_count"] == 0
+    mock_db.upsert_program.assert_not_called()
+
+
 @pytest.mark.asyncio
 async def test_select_detail_urls_applies_candidate_taxonomy_filter(monkeypatch) -> None:
     monkeypatch.setattr(
