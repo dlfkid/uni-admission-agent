@@ -690,10 +690,35 @@ def taxonomy_export_cmd(
 def serve(
     host: str = typer.Option("0.0.0.0", help="Bind address"),
     port: int = typer.Option(8910, help="Port number"),
+    agent: bool = typer.Option(
+        False,
+        "--agent",
+        help="Enable agent runtime for this server process",
+    ),
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run",
+        help="Validate options and print mode without starting the server",
+    ),
     verbose: bool = typer.Option(False, "--verbose", "-v"),
 ) -> None:
     """Start the FastAPI + MCP server."""
     _setup_logging(verbose)
+
+    if agent:
+        os.environ["AGENT_ENABLED"] = "true"
+
+    agent_enabled = str(os.getenv("AGENT_ENABLED", "false")).strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+    typer.echo(f"Agent enabled: {agent_enabled}")
+
+    if dry_run:
+        typer.echo("Dry run mode: skipping browser/db checks and server startup.")
+        return
     
     # Pre-flight check: Ensure browser is available
     try:

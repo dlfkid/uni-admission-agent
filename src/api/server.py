@@ -15,6 +15,7 @@ Or directly:
 
 import asyncio
 import logging
+import os
 import shutil
 import threading
 import uuid
@@ -81,6 +82,15 @@ STAGE_PROGRESS_RANGES: dict[str, tuple[float, float]] = {
     "validate_rules": (70.0, 88.0),
     "persist_versioned": (88.0, 98.0),
 }
+
+_TRUTHY_ENV_VALUES = {"1", "true", "yes", "on"}
+
+
+def is_agent_enabled(explicit_flag: bool | None = None) -> bool:
+    """Resolve whether agent runtime is enabled."""
+    if explicit_flag is not None:
+        return bool(explicit_flag)
+    return str(os.getenv("AGENT_ENABLED", "false")).strip().lower() in _TRUTHY_ENV_VALUES
 
 
 def _stage_progress_start(stage: str) -> float:
