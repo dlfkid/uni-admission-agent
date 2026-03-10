@@ -23,9 +23,16 @@ _DETAIL_HINT_RE = re.compile(
 )
 _DETAIL_URL_RE = re.compile(
     r"/(courses?/list/\d+|tpg/\d{4}/[0-9a-z\-]{4,}|"
-    r"programmes?/[0-9a-z\-]{6,}|programs?/[0-9a-z\-]{6,})",
+    r"programmes?/[0-9a-z\-]*-[0-9a-z\-]+|programs?/[0-9a-z\-]*-[0-9a-z\-]+|"
+    r"programmes?/undergraduate/\d+[0-9a-z\-]*-[0-9a-z\-]+|"
+    r"programs?/undergraduate/\d+[0-9a-z\-]*-[0-9a-z\-]+)",
     re.IGNORECASE,
 )
+_DETAIL_DEGREE_HEADING_RE = re.compile(
+    r"(?m)^\s*#\s+.*\b(msc|ma|mba|llm|mres|mphil|master|bsc|ba|phd|doctor)\b",
+    re.IGNORECASE,
+)
+_DETAIL_COURSE_LIST_ID_RE = re.compile(r"/courses?/list/\d+/", re.IGNORECASE)
 
 
 @dataclass
@@ -101,21 +108,26 @@ def _score_rule_signals(url: str, markdown: str, html: str, link_count: int) -> 
     detail_score = 0.0
 
     content = str(markdown or "")
+    links = max(0, int(link_count or 0))
     index_hits = len(_INDEX_HINT_RE.findall(content))
     detail_hits = len(_DETAIL_HINT_RE.findall(content))
     if index_hits:
-        index_score += min(0.5, index_hits * 0.15)
+        index_score += min(0.45, index_hits * 0.12)
         reasons.append(f"rule:index_content_hits={index_hits}")
+    detail_multiplier = 0.12
+    detail_cap = 0.70
+    if links >= 80 and index_hits >= 2:
+        detail_multiplier = 0.03
+        detail_cap = 0.30
     if detail_hits:
-        detail_score += min(0.45, detail_hits * 0.12)
+        detail_score += min(detail_cap, detail_hits * detail_multiplier)
         reasons.append(f"rule:detail_content_hits={detail_hits}")
 
-    links = max(0, int(link_count or 0))
     if links >= 20:
-        index_score += 0.35
+        index_score += 0.08
         reasons.append("rule:high_link_density")
-    elif links <= 10:
-        detail_score += 0.1
+    elif links <= 10 and detail_hits >= 1:
+        detail_score += 0.12
         reasons.append("rule:low_link_density")
 
     path = ""
@@ -123,12 +135,19 @@ def _score_rule_signals(url: str, markdown: str, html: str, link_count: int) -> 
         path = urlparse(str(url or "")).path.lower()
     except Exception:
         path = ""
-    if "course-search" in path or "find-your-programmes" in path or "courses/list" in path:
+    if _DETAIL_COURSE_LIST_ID_RE.search(path):
+        detail_score += 0.50
+        reasons.append("rule:detail_course_id_url_signal")
+    if "course-search" in path or "find-your-programmes" in path or path.rstrip("/").endswith("/courses/list"):
         index_score += 0.3
         reasons.append("rule:index_url_signal")
     if _DETAIL_URL_RE.search(path):
         detail_score += 0.35
         reasons.append("rule:detail_url_signal")
+
+    if _DETAIL_DEGREE_HEADING_RE.search(content) and links <= 25:
+        detail_score += 0.20
+        reasons.append("rule:detail_degree_heading")
 
     title = _extract_html_title(str(html or ""))
     if title and _INDEX_HINT_RE.search(title):
