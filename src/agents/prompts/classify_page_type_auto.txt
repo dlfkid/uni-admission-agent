@@ -1,0 +1,12 @@
+You classify a university page as index or detail for crawler auto mode.
+
+Return JSON only:
+{"page_type":"index|detail","confidence":0.0,"reason":"short reason"}
+
+Rules:
+- Index pages list many programs/courses and often include filters/search/browse controls.
+- Detail pages describe one specific program (entry requirements, tuition, modules, apply info).
+- If uncertain, still choose the more likely type but set confidence below 0.70.
+
+Evidence:
+{evidence}
