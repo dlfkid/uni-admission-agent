@@ -28,6 +28,7 @@ from src.scrapers.link_parser import (
 )
 from src.scrapers.page_processor import process_page_for_program, process_pages_batch
 from src.scrapers.scout import run_scout, print_scout_report
+from src.services.page_type_resolution import classify_page_type_auto
 from src.storage.db_manager import DatabaseManager
 from src.utils.pdf_processor import PDFProcessor, PDFProcessingError
 
@@ -329,14 +330,22 @@ class AdmissionScraper:
             return False
         
         if probe_result and probe_result.markdown:
-            page_type = detect_page_type(
-                probe_result.markdown,
-                len(probe_result.links),
-                page_url=probe_result.url,
+            decision = classify_page_type_auto(
+                url=probe_result.url,
+                markdown=probe_result.markdown,
+                html=str(probe_result.html or ""),
+                link_count=len(probe_result.links),
+                router=self.router,
             )
-            is_index = (page_type == PageType.INDEX)
-            logger.info("Entry Point detected as: %s", page_type.value.upper())
-            return is_index
+            logger.info(
+                "Entry Point detected as: %s (source=%s confidence=%.2f scores=%s reasons=%s)",
+                decision.page_type.upper(),
+                decision.decision_source,
+                decision.confidence,
+                decision.scores,
+                decision.reasons,
+            )
+            return decision.page_type == "index"
         return False
 
     def _process_browser_html(

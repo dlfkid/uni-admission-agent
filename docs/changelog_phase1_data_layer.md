@@ -237,6 +237,8 @@ Centralize canonical normalization across subject/exam/framework/date/amount/dur
   - `name_resolution_conflict_delta`
 - Extended crawl/task result payloads with unresolved diagnostics for UI/operator visibility.
 - Added Leeds regression coverage and supporting unit tests for noisy heading/requirements false positives.
+- Added auto page-type golden gate (`index` + `detail`) driven by `golden_samples/manifest.json`;
+  any newly added golden case is automatically included and must pass before merge.
 - Dictionary update impact can be simulated before rollout.
 - Standardization artifacts are testable independently from crawler logic.
 
