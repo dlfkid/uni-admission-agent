@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 from src.agents.factory import create_router
@@ -15,6 +16,11 @@ def _load_manifest() -> dict:
 
 
 def main() -> int:
+    if os.environ.get("CI") or os.environ.get("GITHUB_ACTIONS"):
+        print("Refusing to run real-LLM auto page-type validation in CI/GitHub Actions.")
+        print("Run locally with .env loaded.")
+        return 2
+
     router = create_router()
     manifest = _load_manifest()
     cases = list(manifest.get("cases") or [])
