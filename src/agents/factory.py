@@ -9,6 +9,7 @@ import logging
 import os
 from typing import List, Type
 
+from dotenv import find_dotenv, load_dotenv
 from pydantic import BaseModel
 
 from src.agents.providers import (
@@ -101,6 +102,14 @@ def create_router() -> RouterAgent:
     Returns:
         RouterAgent with initialized providers in priority order.
     """
+    if "LLM_PRIORITY_LIST" not in os.environ:
+        env_path = find_dotenv(usecwd=True) or find_dotenv()
+        if env_path:
+            # Respect already-exported env vars from process/runtime.
+            load_dotenv(env_path, override=False)
+        else:
+            load_dotenv(override=False)
+
     priority_str = os.environ.get("LLM_PRIORITY_LIST", "deepseek,gemini")
     priority_names = [name.strip().lower() for name in priority_str.split(",")]
 

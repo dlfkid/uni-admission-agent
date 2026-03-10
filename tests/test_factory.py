@@ -166,3 +166,21 @@ def test_create_router_multiple_providers(monkeypatch: pytest.MonkeyPatch) -> No
     assert len(router.providers) == 2
     names = [p.name for p in router.providers]
     assert names == ["deepseek", "gemini"]
+
+
+def test_create_router_loads_priority_from_dotenv(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    dotenv_path = tmp_path / ".env"
+    dotenv_path.write_text(
+        "LLM_PRIORITY_LIST=deepseek\nDEEPSEEK_API_KEY=test-dotenv-key\n",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("LLM_PRIORITY_LIST", raising=False)
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+
+    router = create_router()
+    assert len(router.providers) == 1
+    assert router.providers[0].name == "deepseek"

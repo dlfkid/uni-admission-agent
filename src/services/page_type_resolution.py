@@ -8,6 +8,8 @@ from dataclasses import dataclass
 from typing import Any, Literal
 from urllib.parse import urlparse
 
+from pydantic import BaseModel
+
 from src.scrapers.helpers import load_prompt
 
 _INDEX_HINT_RE = re.compile(
@@ -42,6 +44,12 @@ class PageTypeDecision:
     decision_source: Literal["rule", "llm", "rule_fallback"]
     reasons: list[str]
     scores: dict[str, float]
+
+
+class _PageTypeLLMOutput(BaseModel):
+    page_type: str = ""
+    confidence: float = 0.0
+    reason: str = ""
 
 
 def classify_page_type_auto(
@@ -187,7 +195,7 @@ def _classify_with_llm_once(
         "markdown_preview": str(markdown or "")[:2500],
     }
     prompt = prompt_template.replace("{evidence}", json.dumps(evidence, ensure_ascii=False))
-    response = router.generate(prompt, dict)
+    response = router.generate(prompt, _PageTypeLLMOutput)
     text = response if isinstance(response, str) else getattr(response, "text", "")
     try:
         parsed = json.loads(text)
