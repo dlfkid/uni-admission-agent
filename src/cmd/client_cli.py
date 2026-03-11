@@ -16,6 +16,7 @@ import typer
 from src.client.bootstrap_prompt import build_bootstrap_prompt
 from src.client.config import (
     ClientConfig,
+    ClientPolicyProfile,
     ensure_client_id,
     get_client_home,
     load_client_config,
@@ -104,6 +105,7 @@ def init() -> None:
         client_name=client_name or _default_client_name(),
         client_id=ensure_client_id(None),
         workdir=str(Path.cwd()),
+        policy_profile=ClientPolicyProfile(),
     )
     path = save_client_config(config)
     typer.echo(f"Config saved: {path}")
@@ -307,6 +309,9 @@ def fetch(
         browser_path=str(browser_path or "").strip() or None,
         debug_port=int(debug_port),
     )
+    config = load_client_config()
+    if config and config.policy_profile is not None:
+        payload["policy_profile"] = config.policy_profile.model_dump(mode="json")
     if json_output:
         typer.echo(json.dumps(payload, ensure_ascii=False))
         return

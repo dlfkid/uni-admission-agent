@@ -178,6 +178,11 @@ class ClientRuntime:
                 url=str(payload_dict.get("url") or "").strip(),
                 page_type_hint=str(payload_dict.get("page_type_hint") or "auto"),
             )
+            response_payload = dict(response_payload or {})
+            if self.config.policy_profile is not None:
+                response_payload["policy_profile"] = self.config.policy_profile.model_dump(
+                    mode="json"
+                )
             await self._send_json(
                 websocket,
                 {
