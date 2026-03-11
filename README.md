@@ -463,6 +463,15 @@ curl -X POST http://localhost:8910/agent/run \
     }
   }'
 
+# Confirm low-confidence onhold selections for one finished agent task
+# (unselected indices are discarded by default)
+curl -X POST http://localhost:8910/agent/review/confirm \
+  -H "Content-Type: application/json" \
+  -d '{
+    "task_id": "<agent_task_id>",
+    "selection_text": "continue 3,6,18"
+  }'
+
 # List connected browser-automation clients
 curl http://localhost:8910/clients
 
@@ -499,6 +508,7 @@ Base toolset (always registered):
 
 Agent toolset (registered only when `AGENT_ENABLED=true`):
 - **`agent_run`** — Execute one agent orchestration request (`runtime=legacy|pydanticai`).
+- **`agent_review_confirm`** — Confirm low-confidence onhold indices for an existing `agent_run` task.
 
 Internal-LLM toolset (registered only when server-side LLM is available):
 - **`analyze_internal_llm`**
@@ -534,6 +544,12 @@ Post-persist review loop:
 - Crawl responses include `review_token` and ordered `review_items` with stable `program_id`.
 - Apply user corrections via `program_patch` / `program_patch_batch`.
 - Batch patch returns `updated_count`, `failed_items`, and `summary` (no all-or-nothing abort).
+
+Agent onhold batch-review loop:
+- `agent_run` auto-processes high-confidence candidates.
+- Low-confidence candidates are returned in `onhold_items`, sorted by `confidence` descending with dynamic indices (`1..N`).
+- Confirm via REST `POST /agent/review/confirm` or MCP `agent_review_confirm` using either `selection_text` or explicit `selected_indices`.
+- Unselected `onhold_items` are discarded by default.
 
 Recommended MCP interactive flow (single entrypoint):
 1. Call `runtime_status` to inspect available runtime path.

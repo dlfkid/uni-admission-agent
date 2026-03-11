@@ -187,11 +187,18 @@ Enablement and runtime selection:
 
 Entrypoints:
 - REST: `POST /agent/run`
-- MCP: `agent_run` tool (registered only when `AGENT_ENABLED=true`)
+- REST confirm: `POST /agent/review/confirm`
+- MCP: `agent_run` and `agent_review_confirm` tools (registered only when `AGENT_ENABLED=true`)
 
 Safety and fallback:
 - `PydanticAIRuntime` failure automatically falls back to `LegacyRuntime`
 - Base REST/MCP tools remain unchanged when agent mode is disabled
+
+Onhold batch-review behavior:
+- Index candidates are split by confidence policy (`auto-run` vs `onhold`).
+- Low-confidence candidates are persisted as `onhold_items` sorted by confidence descending and indexed per task (`1..N`).
+- Runtime returns `status=wait_user_selection` when onhold items exist.
+- Confirmation accepts dynamic index input (`selection_text` or `selected_indices`); unselected onhold items are discarded by default.
 
 Policy profile behavior:
 - Merge precedence: `request overrides > client profile > server defaults`

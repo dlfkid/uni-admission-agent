@@ -35,6 +35,20 @@
 - Added MCP tool: `agent_run` (registered only when `AGENT_ENABLED=true`)
 - Kept existing REST/MCP base tool behavior unchanged when agent runtime is disabled
 
+### Agent Onhold Batch Review
+- Added low-confidence onhold models and dynamic index selection parser:
+  - `src/agent_runtime/review_models.py`
+  - `src/agent_runtime/review_selection.py`
+- Upgraded `PydanticAIRuntime` orchestration:
+  - auto-process high-confidence candidates
+  - return `status=wait_user_selection` with confidence-desc `onhold_items`
+- Added confirmation service:
+  - `run_agent_review_confirmation(...)` processes selected indices only
+  - unselected low-confidence items are discarded by default
+- Added review confirmation entrypoints:
+  - REST: `POST /agent/review/confirm`
+  - MCP: `agent_review_confirm` (registered only when `AGENT_ENABLED=true`)
+
 ### Client Policy Transport
 - Added `ClientPolicyProfile` and TOML persistence in client config
 - Added client runtime payload propagation:
