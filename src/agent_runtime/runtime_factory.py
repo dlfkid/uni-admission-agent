@@ -5,43 +5,8 @@ from __future__ import annotations
 import os
 from typing import Any
 
-from src.agent_runtime.base import AgentRequest, AgentResponse
-
-
-class LegacyRuntime:
-    """Safe baseline runtime that preserves current behavior."""
-
-    name = "legacy"
-
-    def __init__(self, bridge: Any = None, model_adapter: Any = None) -> None:
-        self.bridge = bridge
-        self.model_adapter = model_adapter
-
-    async def run(self, request: AgentRequest) -> AgentResponse:
-        return AgentResponse(
-            status="done",
-            runtime_used=self.name,
-            trace=[],
-            output={"task": request.task},
-        )
-
-
-class PydanticAIRuntime:
-    """Placeholder runtime selected when AGENT_RUNTIME=pydanticai."""
-
-    name = "pydanticai"
-
-    def __init__(self, bridge: Any = None, model_adapter: Any = None) -> None:
-        self.bridge = bridge
-        self.model_adapter = model_adapter
-
-    async def run(self, request: AgentRequest) -> AgentResponse:
-        return AgentResponse(
-            status="done",
-            runtime_used=self.name,
-            trace=[],
-            output={"task": request.task},
-        )
+from src.agent_runtime.legacy_runtime import LegacyRuntime
+from src.agent_runtime.pydanticai_runtime import PydanticAIRuntime
 
 
 def _resolve_runtime_mode(config: Any = None) -> str:
