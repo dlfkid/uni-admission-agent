@@ -26,6 +26,19 @@ class DetailPagePayload(BaseModel):
     )
 
 
+class PolicyProfilePayload(BaseModel):
+    """Client-side policy profile overrides for one crawl request."""
+
+    auto_run_max_candidates: Optional[int] = Field(default=None, ge=1, le=200)
+    taxonomy_auto_threshold: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    taxonomy_keep_threshold: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    prefer_browser_provider: Optional[str] = Field(default=None)
+    require_manual_review_when_low_confidence: Optional[bool] = Field(default=None)
+    llm_fallback_enabled: Optional[bool] = Field(default=None)
+    batch_size: Optional[int] = Field(default=None, ge=1, le=50)
+    detail_concurrency: Optional[int] = Field(default=None, ge=1, le=20)
+
+
 class CrawlRequest(BaseModel):
     """Body for ``POST /crawl``."""
 
@@ -145,6 +158,10 @@ class CrawlRequest(BaseModel):
         ge=0.0,
         le=1.0,
         description="Minimum top-candidate score gap required to avoid fallback",
+    )
+    policy_profile: Optional[PolicyProfilePayload] = Field(
+        default=None,
+        description="Optional per-request policy profile overrides from client",
     )
 
     @model_validator(mode="after")
