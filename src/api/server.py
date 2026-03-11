@@ -2154,6 +2154,22 @@ repair:
                 runtime_mode=runtime,
                 policy_profile=policy_profile,
             )
+
+        @mcp.tool(name="agent_review_confirm")
+        async def mcp_agent_review_confirm(
+            task_id: str,
+            selection_text: str = "",
+            selected_indices: Optional[List[int]] = None,
+        ) -> dict:
+            """Confirm selected onhold indices for one agent task."""
+            response = await api_agent_review_confirm(
+                AgentReviewConfirmRequest(
+                    task_id=task_id,
+                    selection_text=selection_text,
+                    selected_indices=selected_indices,
+                )
+            )
+            return response.model_dump(mode="json")
     else:
         logger.info("MCP agent tools not registered (agent runtime disabled).")
 

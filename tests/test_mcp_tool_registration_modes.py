@@ -103,6 +103,7 @@ def test_agent_tools_registered_only_when_agent_enabled(monkeypatch) -> None:
     )
     tool_names_without_agent = _list_mcp_tool_names(server_without_agent)
     assert "agent_run" not in tool_names_without_agent
+    assert "agent_review_confirm" not in tool_names_without_agent
 
     monkeypatch.setenv("AGENT_ENABLED", "true")
     server_with_agent = _reload_server_with_router_probe(
@@ -111,3 +112,4 @@ def test_agent_tools_registered_only_when_agent_enabled(monkeypatch) -> None:
     )
     tool_names_with_agent = _list_mcp_tool_names(server_with_agent)
     assert "agent_run" in tool_names_with_agent
+    assert "agent_review_confirm" in tool_names_with_agent
