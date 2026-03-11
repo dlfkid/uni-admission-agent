@@ -132,6 +132,12 @@ The agent needs a database connection.
    # LLM Priority config (drag to reorder in Chrome extension)
    # Supported providers: deepseek, gemini, volcengine, custom
    LLM_PRIORITY_LIST=deepseek, gemini, volcengine, custom
+
+   # Agent runtime (opt-in, disabled by default)
+   AGENT_ENABLED=false
+   AGENT_RUNTIME=legacy
+   AGENT_ALLOW_INTERNAL_LLM=true
+   AGENT_ALLOW_EXTERNAL_LLM=true
    ```
 3. Set your `DATABASE_URL` and API keys in `.env`.
 
@@ -375,6 +381,8 @@ upgrade delivery path (`upgrade` → `db-migrate`).
 # Start the API + MCP server (default: 0.0.0.0:8910)
 ./adm-agent serve
 ./adm-agent serve --port 9000
+./adm-agent serve --agent
+./adm-agent serve --agent --dry-run
 
 # Stop a running server (from another terminal)
 ./adm-agent serve-stop
@@ -385,6 +393,8 @@ upgrade delivery path (`upgrade` → `db-migrate`).
 # Start the API + MCP server (default: 0.0.0.0:8910)
 .\adm-agent.exe serve
 .\adm-agent.exe serve --port 9000
+.\adm-agent.exe serve --agent
+.\adm-agent.exe serve --agent --dry-run
 
 # Stop a running server (from another terminal)
 .\adm-agent.exe serve-stop
@@ -393,6 +403,10 @@ upgrade delivery path (`upgrade` → `db-migrate`).
 `serve` writes a PID file to `~/.adm-agent/server.pid`. `serve-stop` reads that file 
 and sends a termination signal to the process, then removes the PID file. If the server 
 is not running, `serve-stop` exits cleanly with an informational message.
+
+Agent runtime is **disabled by default**. Enable explicitly with `--agent` or
+`AGENT_ENABLED=true`. Runtime mode can be selected via `AGENT_RUNTIME=legacy|pydanticai`
+(default `legacy`), and `pydanticai` mode automatically falls back to `legacy` on runtime errors.
 
 ### REST API
 
@@ -435,6 +449,20 @@ curl -X POST http://localhost:8910/analyze \
 # Check task status
 curl http://localhost:8910/tasks/{task_id}
 
+# Run opt-in agent orchestration (requires AGENT_ENABLED=true)
+curl -X POST http://localhost:8910/agent/run \
+  -H "Content-Type: application/json" \
+  -d '{
+    "url": "https://example.com/courses",
+    "univ_slug": "hku",
+    "year": 2026,
+    "runtime": "pydanticai",
+    "policy_profile": {
+      "batch_size": 4,
+      "taxonomy_auto_threshold": 0.92
+    }
+  }'
+
 # List connected browser-automation clients
 curl http://localhost:8910/clients
 
@@ -468,6 +496,9 @@ Base toolset (always registered):
 - **`program_patch`** — Patch one persisted `program_id` from user feedback.
 - **`program_patch_batch`** — Batch patch multiple `program_id` items with partial-failure reporting.
 - **`help`** — Return CLI help text and command overview.
+
+Agent toolset (registered only when `AGENT_ENABLED=true`):
+- **`agent_run`** — Execute one agent orchestration request (`runtime=legacy|pydanticai`).
 
 Internal-LLM toolset (registered only when server-side LLM is available):
 - **`analyze_internal_llm`**
@@ -547,6 +578,7 @@ For non-developer users, command-line launch is recommended (double-clicking exe
 - Optional override: set env var `ADM_AGENT_CLIENT_FETCH_CMD` to a custom command template.
 - Template placeholders: `{url}`, `{page_type_hint}`
 - Command must output JSON to stdout (e.g. `{"html_content":"..."}` or `{"detail_pages_batch":[...]}`)
+- Client can carry local policy profile; when configured, RPC responses include `policy_profile`.
 
 Default fetch command:
 ```bash
