@@ -14,6 +14,7 @@ Or directly:
 """
 
 import asyncio
+import copy
 import logging
 import os
 import shutil
@@ -56,6 +57,7 @@ from src.api.schemas import (
     ClientInfoResponse,
 )
 from src.api.task_manager import TaskManager, TaskState
+from src.core.feature_flags import is_agent_enabled_env
 from src.services import browser_provider as browser_provider_service
 from src.services.client_bridge import ClientRegistry, ClientSession, ClientRpcBroker
 from src.services.crawler import (
@@ -90,14 +92,18 @@ STAGE_PROGRESS_RANGES: dict[str, tuple[float, float]] = {
     "persist_versioned": (88.0, 98.0),
 }
 
-_TRUTHY_ENV_VALUES = {"1", "true", "yes", "on"}
-
-
 def is_agent_enabled(explicit_flag: bool | None = None) -> bool:
     """Resolve whether agent runtime is enabled."""
-    if explicit_flag is not None:
-        return bool(explicit_flag)
-    return str(os.getenv("AGENT_ENABLED", "false")).strip().lower() in _TRUTHY_ENV_VALUES
+    return is_agent_enabled_env(explicit_flag)
+
+
+def _noop_register_agent_mcp_tools() -> None:
+    """No-op placeholder used when MCP runtime is unavailable."""
+    return
+
+
+_register_agent_mcp_tools_if_enabled = _noop_register_agent_mcp_tools
+_agent_mcp_tools_state = {"registered": False}
 
 
 def _stage_progress_start(stage: str) -> float:
@@ -265,6 +271,7 @@ def _update_env_file_structured(config: StructuredConfig) -> None:
 async def lifespan(app: FastAPI):
     """Lifespan context manager for database initialization."""
     try:
+        _register_agent_mcp_tools_if_enabled()
         DatabaseManager().init_db()
         bootstrap_subject_taxonomy()
         logger.info("Database initialised")
@@ -711,7 +718,7 @@ async def api_agent_review_confirm(body: AgentReviewConfirmRequest) -> AgentRevi
     if not isinstance(info.result, dict):
         raise HTTPException(status_code=409, detail="Task result is not ready for review confirmation")
 
-    result_payload = dict(info.result)
+    result_payload = copy.deepcopy(info.result)
     output_payload = result_payload.get("output")
     if not isinstance(output_payload, dict):
         raise HTTPException(status_code=409, detail="Task result has no output payload")
@@ -2135,43 +2142,53 @@ repair:
             "description": "Automated university admission data scraper"
         }
 
-    if is_agent_enabled():
-        @mcp.tool(name="agent_run")
-        async def mcp_agent_run(
-            url: str,
-            univ_slug: str,
-            year: int,
-            page_type_hint: str = "auto",
-            runtime: Optional[str] = None,
-            policy_profile: Optional[Dict[str, Any]] = None,
-        ) -> dict:
-            """Run one agent orchestration request when agent mode is enabled."""
-            return await run_agent_crawl(
-                url=url,
-                univ_slug=univ_slug,
-                year=year,
-                page_type_hint=page_type_hint,
-                runtime_mode=runtime,
-                policy_profile=policy_profile,
-            )
+    async def mcp_agent_run(
+        url: str,
+        univ_slug: str,
+        year: int,
+        page_type_hint: str = "auto",
+        runtime: Optional[str] = None,
+        policy_profile: Optional[Dict[str, Any]] = None,
+    ) -> dict:
+        """Run one agent orchestration request when agent mode is enabled."""
+        return await run_agent_crawl(
+            url=url,
+            univ_slug=univ_slug,
+            year=year,
+            page_type_hint=page_type_hint,
+            runtime_mode=runtime,
+            policy_profile=policy_profile,
+        )
 
-        @mcp.tool(name="agent_review_confirm")
-        async def mcp_agent_review_confirm(
-            task_id: str,
-            selection_text: str = "",
-            selected_indices: Optional[List[int]] = None,
-        ) -> dict:
-            """Confirm selected onhold indices for one agent task."""
-            response = await api_agent_review_confirm(
-                AgentReviewConfirmRequest(
-                    task_id=task_id,
-                    selection_text=selection_text,
-                    selected_indices=selected_indices,
-                )
+    async def mcp_agent_review_confirm(
+        task_id: str,
+        selection_text: str = "",
+        selected_indices: Optional[List[int]] = None,
+    ) -> dict:
+        """Confirm selected onhold indices for one agent task."""
+        response = await api_agent_review_confirm(
+            AgentReviewConfirmRequest(
+                task_id=task_id,
+                selection_text=selection_text,
+                selected_indices=selected_indices,
             )
-            return response.model_dump(mode="json")
-    else:
-        logger.info("MCP agent tools not registered (agent runtime disabled).")
+        )
+        return response.model_dump(mode="json")
+
+    def _register_agent_mcp_tools_impl() -> None:
+        """Register agent MCP tools lazily based on current feature flag state."""
+        if _agent_mcp_tools_state["registered"]:
+            return
+        if not is_agent_enabled():
+            logger.info("MCP agent tools not registered (agent runtime disabled).")
+            return
+
+        mcp.tool(name="agent_run")(mcp_agent_run)
+        mcp.tool(name="agent_review_confirm")(mcp_agent_review_confirm)
+        _agent_mcp_tools_state["registered"] = True
+
+    _register_agent_mcp_tools_if_enabled = _register_agent_mcp_tools_impl
+    _register_agent_mcp_tools_if_enabled()
 
     if _internal_llm_available():
         @mcp.tool(name="analyze_internal_llm")

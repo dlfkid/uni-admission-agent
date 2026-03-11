@@ -13,8 +13,10 @@ Functions:
 """
 
 import asyncio
+import importlib
 import logging
 import uuid
+from types import SimpleNamespace
 from typing import Any, Callable, Optional, List
 
 from pydantic import BaseModel, Field
@@ -638,11 +640,12 @@ async def run_agent_crawl(
     policy_profile: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
     """Run crawl orchestration via configured agent runtime."""
-    from src.agent_runtime.runtime_factory import build_agent_runtime
+    runtime_factory = importlib.import_module("src.agent_runtime.runtime_factory")
+    build_agent_runtime = getattr(runtime_factory, "build_agent_runtime")
 
     runtime_config = None
     if runtime_mode:
-        runtime_config = type("AgentRuntimeConfig", (), {"runtime": runtime_mode})()
+        runtime_config = SimpleNamespace(runtime=runtime_mode)
 
     runtime = build_agent_runtime(config=runtime_config, bridge=None, model_adapter=None)
     request_payload: dict[str, Any] = {

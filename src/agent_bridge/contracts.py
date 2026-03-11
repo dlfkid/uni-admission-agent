@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -35,15 +35,15 @@ class BrowserFetchInput(BaseModel):
 
     url: str
     page_type_hint: str = "auto"
-    client_id: Optional[str] = None
+    client_id: str | None = None
 
 
 class BrowserFetchOutput(BaseModel):
     """Normalized browser automation fetch payload."""
 
-    html_content: Optional[str] = None
+    html_content: str | None = None
     detail_pages_batch: list[dict[str, Any]] = Field(default_factory=list)
     selected_urls: list[str] = Field(default_factory=list)
     selected_link_texts: dict[str, str] = Field(default_factory=dict)
-    resolved_browser_provider: Optional[str] = None
-    client_id_used: Optional[str] = None
+    resolved_browser_provider: str | None = None
+    client_id_used: str | None = None

@@ -209,7 +209,7 @@ class AgentReviewConfirmRequest(BaseModel):
         default=None,
         description="Optional free-form user selection text (e.g. 'continue 3,6,18')",
     )
-    selected_indices: Optional[List[int]] = Field(
+    selected_indices: Optional[list[int]] = Field(
         default=None,
         description="Optional explicit onhold indices to continue",
     )

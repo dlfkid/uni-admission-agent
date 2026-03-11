@@ -3,15 +3,17 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import logging
 from pathlib import Path
 import tomllib
 import uuid
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 
 CLIENT_HOME_DIR = ".adm-agent"
 CLIENT_CONFIG_FILE = "client.toml"
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -101,7 +103,8 @@ def load_client_config() -> ClientConfig | None:
     if isinstance(policy_raw, dict):
         try:
             policy_profile = ClientPolicyProfile.model_validate(policy_raw)
-        except Exception:
+        except ValidationError as exc:
+            logger.warning("Invalid client policy_profile in %s, using defaults: %s", path, exc)
             policy_profile = ClientPolicyProfile()
 
     return ClientConfig(

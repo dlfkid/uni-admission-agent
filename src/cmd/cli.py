@@ -37,6 +37,7 @@ from src.core.paths import configure_playwright_path  # noqa: E402
 configure_playwright_path()
 
 from src.core.token_tracker import tracker
+from src.core.feature_flags import is_agent_enabled_env
 from src.services.crawler import (
     check_environment,
     crawl_url,
@@ -708,12 +709,7 @@ def serve(
     if agent:
         os.environ["AGENT_ENABLED"] = "true"
 
-    agent_enabled = str(os.getenv("AGENT_ENABLED", "false")).strip().lower() in {
-        "1",
-        "true",
-        "yes",
-        "on",
-    }
+    agent_enabled = is_agent_enabled_env()
     typer.echo(f"Agent enabled: {agent_enabled}")
 
     if dry_run:
