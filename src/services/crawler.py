@@ -640,6 +640,9 @@ async def run_agent_crawl(
     policy_profile: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
     """Run crawl orchestration via configured agent runtime."""
+    # Lazy import: runtime_factory → pydanticai_runtime → crawler forms a
+    # circular dependency chain.  Breaking it here (the less-used direction)
+    # keeps the hot path (direct crawler imports) free of lazy-import noise.
     runtime_factory = importlib.import_module("src.agent_runtime.runtime_factory")
     build_agent_runtime = getattr(runtime_factory, "build_agent_runtime")
 

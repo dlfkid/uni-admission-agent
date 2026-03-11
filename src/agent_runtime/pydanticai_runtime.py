@@ -6,6 +6,8 @@ from dataclasses import dataclass
 import logging
 from typing import Any
 
+from src.agent_runtime.policy import PolicyMergeResult, PolicyProfile
+
 from src.agent_runtime.base import AgentRequest, AgentResponse
 from src.agent_runtime.legacy_runtime import LegacyRuntime
 from src.agent_runtime.policy import merge_policy
@@ -18,23 +20,26 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class _CrawlPlan:
+    """Internal plan object produced by ``_plan_crawl_request``."""
+
     request: AgentRequest
     payload: dict[str, Any]
     url: str
     univ_slug: str
     year: int
     page_type_hint: str
-    profile: Any
-    merged_policy: Any
+    profile: PolicyProfile
+    merged_policy: PolicyMergeResult
     trace: list[dict[str, Any]]
 
 
 class PydanticAIRuntime:
     """Opt-in runtime using typed async orchestration with guarded fallback.
 
-    Note:
-    - This runtime currently does not invoke the external ``pydantic-ai`` package.
-    - The class name reflects the target evolution path and runtime mode label.
+    The class name reflects the target evolution path rather than the current
+    implementation.  Direct ``pydantic-ai`` agent integration is planned for
+    Phase C (Selective Rollout).  Until then, orchestration uses plain async
+    Python with typed bridge/skill contracts.
     """
 
     name = "pydanticai"

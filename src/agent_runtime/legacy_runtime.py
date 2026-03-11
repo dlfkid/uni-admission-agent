@@ -30,5 +30,12 @@ class LegacyRuntime:
                     "task": request.task,
                 }
             ],
-            output={"task": request.task, **dict(request.payload or {})},
+            output={
+                "task": request.task,
+                **dict(request.payload or {}),
+                "warning": (
+                    "LegacyRuntime executed: no orchestration performed.  "
+                    "This may indicate a fallback from PydanticAIRuntime."
+                ),
+            },
         )

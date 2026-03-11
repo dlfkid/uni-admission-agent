@@ -88,6 +88,11 @@ def build_skill_registry(
 
     Registry contracts are kept stable so runtime orchestration can migrate
     from direct service calls to fully skill-driven dispatch incrementally.
+
+    .. note::
+        Currently ``PydanticAIRuntime`` calls services directly.  Once the
+        ``pydantic-ai`` Agent integration lands (Phase C), skills registered
+        here will be exposed as agent tools via the ``pydantic-ai`` tool API.
     """
     serve_bridge = serve_bridge or ServeToolBridge()
     client_bridge = client_bridge or ClientAutomationBridge()

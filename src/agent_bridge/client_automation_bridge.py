@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from functools import partial
 import inspect
 from typing import Any, Awaitable, Callable
 
@@ -31,6 +32,6 @@ class ClientAutomationBridge:
     def fetch_browser_payload(self, payload: BrowserFetchInput) -> BrowserFetchOutput:
         """Synchronous helper for runtimes that execute skills in sync contexts."""
         return run_sync(
-            lambda: self.fetch_browser_payload_async(payload),
+            partial(self.fetch_browser_payload_async, payload),
             label="fetch_browser_payload()",
         )

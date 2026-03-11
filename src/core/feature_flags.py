@@ -1,4 +1,10 @@
-"""Shared feature-flag helpers."""
+"""Shared feature-flag helpers.
+
+TODO(phase-b): Migrate ``AGENT_ENABLED``, ``AGENT_RUNTIME``,
+``AGENT_ALLOW_INTERNAL_LLM``, and ``AGENT_ALLOW_EXTERNAL_LLM`` into the
+project's ``pydantic-settings`` ``Settings`` model so that all env-var
+access is type-safe and centralized.
+"""
 
 from __future__ import annotations
 
