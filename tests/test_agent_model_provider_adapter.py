@@ -6,10 +6,13 @@ from src.agent_runtime.model_provider import AgentConfigError, ModelProviderAdap
 def test_model_provider_uses_internal_router_when_enabled(monkeypatch):
     del monkeypatch
 
+    def _internal_factory():
+        return object()
+
     adapter = ModelProviderAdapter(
         allow_internal=True,
         allow_external=False,
-        internal_factory=lambda: object(),
+        internal_factory=_internal_factory,
     )
     client = adapter.resolve(mode="internal")
 
