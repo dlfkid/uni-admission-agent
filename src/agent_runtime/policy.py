@@ -29,6 +29,17 @@ class PolicyMergeResult(BaseModel):
 
 _BOOL_TRUE = {"1", "true", "yes", "on"}
 _BOOL_FALSE = {"0", "false", "no", "off"}
+_PROVIDER_CHOICES = {"auto", "server", "client"}
+_FIELD_SPECS: dict[str, dict[str, Any]] = {
+    "auto_run_max_candidates": {"kind": "int", "minimum": 1, "maximum": 200},
+    "taxonomy_auto_threshold": {"kind": "float", "minimum": 0.0, "maximum": 1.0},
+    "taxonomy_keep_threshold": {"kind": "float", "minimum": 0.0, "maximum": 1.0},
+    "prefer_browser_provider": {"kind": "enum", "choices": _PROVIDER_CHOICES},
+    "require_manual_review_when_low_confidence": {"kind": "bool"},
+    "llm_fallback_enabled": {"kind": "bool"},
+    "batch_size": {"kind": "int", "minimum": 1, "maximum": 50},
+    "detail_concurrency": {"kind": "int", "minimum": 1, "maximum": 20},
+}
 
 
 def _coerce_int(
@@ -99,43 +110,44 @@ def _normalize_policy(raw_policy: dict[str, Any]) -> tuple[dict[str, Any], list[
     normalized = dict(defaults)
 
     for key, value in raw_policy.items():
-        if key not in defaults:
+        spec = _FIELD_SPECS.get(key)
+        if spec is None:
             warnings.append(f"{key}: unknown policy key ignored")
             continue
 
-        if key == "auto_run_max_candidates":
+        kind = spec.get("kind")
+        if kind == "int":
             normalized[key] = _coerce_int(
                 value,
                 field_name=key,
-                minimum=1,
-                maximum=200,
+                minimum=int(spec["minimum"]),
+                maximum=int(spec["maximum"]),
                 default=defaults[key],
                 warnings=warnings,
             )
             continue
-        if key == "taxonomy_auto_threshold":
+        if kind == "float":
             normalized[key] = _coerce_float(
                 value,
                 field_name=key,
-                minimum=0.0,
-                maximum=1.0,
+                minimum=float(spec["minimum"]),
+                maximum=float(spec["maximum"]),
                 default=defaults[key],
                 warnings=warnings,
             )
             continue
-        if key == "taxonomy_keep_threshold":
-            normalized[key] = _coerce_float(
+        if kind == "bool":
+            normalized[key] = _coerce_bool(
                 value,
                 field_name=key,
-                minimum=0.0,
-                maximum=1.0,
                 default=defaults[key],
                 warnings=warnings,
             )
             continue
-        if key == "prefer_browser_provider":
+        if kind == "enum":
             provider = str(value or "").strip().lower()
-            if provider not in {"auto", "server", "client"}:
+            choices = set(spec["choices"])
+            if provider not in choices:
                 warnings.append(
                     "prefer_browser_provider: invalid value "
                     f"{value!r}; using default {defaults[key]}"
@@ -143,42 +155,8 @@ def _normalize_policy(raw_policy: dict[str, Any]) -> tuple[dict[str, Any], list[
                 provider = str(defaults[key])
             normalized[key] = provider
             continue
-        if key == "require_manual_review_when_low_confidence":
-            normalized[key] = _coerce_bool(
-                value,
-                field_name=key,
-                default=defaults[key],
-                warnings=warnings,
-            )
-            continue
-        if key == "llm_fallback_enabled":
-            normalized[key] = _coerce_bool(
-                value,
-                field_name=key,
-                default=defaults[key],
-                warnings=warnings,
-            )
-            continue
-        if key == "batch_size":
-            normalized[key] = _coerce_int(
-                value,
-                field_name=key,
-                minimum=1,
-                maximum=50,
-                default=defaults[key],
-                warnings=warnings,
-            )
-            continue
-        if key == "detail_concurrency":
-            normalized[key] = _coerce_int(
-                value,
-                field_name=key,
-                minimum=1,
-                maximum=20,
-                default=defaults[key],
-                warnings=warnings,
-            )
-            continue
+        warnings.append(f"{key}: unknown policy kind ignored")
+        continue
 
     if normalized["taxonomy_keep_threshold"] > normalized["taxonomy_auto_threshold"]:
         original_value = normalized["taxonomy_keep_threshold"]

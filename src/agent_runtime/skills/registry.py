@@ -84,7 +84,11 @@ def build_skill_registry(
     serve_bridge: ServeToolBridge | None = None,
     client_bridge: ClientAutomationBridge | None = None,
 ) -> SkillRegistry:
-    """Build the default skill registry used by agent runtimes."""
+    """Build the default skill registry used by agent runtimes.
+
+    Registry contracts are kept stable so runtime orchestration can migrate
+    from direct service calls to fully skill-driven dispatch incrementally.
+    """
     serve_bridge = serve_bridge or ServeToolBridge()
     client_bridge = client_bridge or ClientAutomationBridge()
 

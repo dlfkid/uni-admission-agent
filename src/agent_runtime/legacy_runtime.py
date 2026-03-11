@@ -8,7 +8,11 @@ from src.agent_runtime.base import AgentRequest, AgentResponse
 
 
 class LegacyRuntime:
-    """Safe baseline runtime that mirrors current non-agent behavior."""
+    """Safe baseline runtime that mirrors non-agent request/response contract.
+
+    The legacy runtime intentionally echoes payload shape for compatibility
+    with existing callers while the typed orchestration runtime evolves.
+    """
 
     name = "legacy"
 

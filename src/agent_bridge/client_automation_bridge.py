@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-import asyncio
 import inspect
 from typing import Any, Awaitable, Callable
 
 from src.agent_bridge.contracts import BrowserFetchInput, BrowserFetchOutput
+from src.core.async_utils import run_sync
 from src.services import browser_provider as browser_provider_service
 
 FetchFn = Callable[..., Awaitable[dict[str, Any]] | dict[str, Any]]
@@ -30,11 +30,7 @@ class ClientAutomationBridge:
 
     def fetch_browser_payload(self, payload: BrowserFetchInput) -> BrowserFetchOutput:
         """Synchronous helper for runtimes that execute skills in sync contexts."""
-        try:
-            asyncio.get_running_loop()
-        except RuntimeError:
-            return asyncio.run(self.fetch_browser_payload_async(payload))
-        raise RuntimeError(
-            "fetch_browser_payload() cannot run inside an active event loop; "
-            "use fetch_browser_payload_async() instead."
+        return run_sync(
+            lambda: self.fetch_browser_payload_async(payload),
+            label="fetch_browser_payload()",
         )

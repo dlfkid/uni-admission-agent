@@ -30,7 +30,12 @@ class _CrawlPlan:
 
 
 class PydanticAIRuntime:
-    """Opt-in runtime using multi-step orchestration with guarded fallback."""
+    """Opt-in runtime using typed async orchestration with guarded fallback.
+
+    Note:
+    - This runtime currently does not invoke the external ``pydantic-ai`` package.
+    - The class name reflects the target evolution path and runtime mode label.
+    """
 
     name = "pydanticai"
 
@@ -41,6 +46,7 @@ class PydanticAIRuntime:
         fallback_runtime: LegacyRuntime | None = None,
     ) -> None:
         self.bridge = bridge
+        # Reserved for subsequent model-routing integration phases.
         self.model_adapter = model_adapter
         self.fallback_runtime = fallback_runtime or LegacyRuntime(
             bridge=bridge,

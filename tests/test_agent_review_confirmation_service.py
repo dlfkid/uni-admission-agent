@@ -1,11 +1,11 @@
 import pytest
 
-from src.services import crawler
 from src.services.crawler import CrawlResult
+from src.agent_runtime.review_service import run_agent_review_confirmation
 
 
 @pytest.mark.asyncio
-async def test_confirm_onhold_processes_selected_indices_only(monkeypatch):
+async def test_confirm_onhold_processes_selected_indices_only():
     captured: dict = {}
 
     async def _fake_crawl_url(**kwargs):
@@ -18,9 +18,7 @@ async def test_confirm_onhold_processes_selected_indices_only(monkeypatch):
             review_items=[{"program_id": 1}, {"program_id": 2}],
         )
 
-    monkeypatch.setattr(crawler, "crawl_url", _fake_crawl_url)
-
-    summary = await crawler.run_agent_review_confirmation(
+    summary = await run_agent_review_confirmation(
         task_payload={"url": "https://x/index", "univ_slug": "uom", "year": 2026},
         onhold_items=[
             {
@@ -49,6 +47,7 @@ async def test_confirm_onhold_processes_selected_indices_only(monkeypatch):
             },
         ],
         selected_indices=[3, 1],
+        crawl_executor=_fake_crawl_url,
     )
 
     assert summary["total_onhold"] == 3
@@ -71,7 +70,7 @@ async def test_confirm_onhold_processes_selected_indices_only(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_confirm_onhold_defaults_to_discard_when_no_valid_selection(monkeypatch):
+async def test_confirm_onhold_defaults_to_discard_when_no_valid_selection():
     calls = {"crawl": 0}
 
     async def _fake_crawl_url(**kwargs):
@@ -79,9 +78,7 @@ async def test_confirm_onhold_defaults_to_discard_when_no_valid_selection(monkey
         del kwargs
         return CrawlResult(imported_count=999, univ_slug="uom", year=2026)
 
-    monkeypatch.setattr(crawler, "crawl_url", _fake_crawl_url)
-
-    summary = await crawler.run_agent_review_confirmation(
+    summary = await run_agent_review_confirmation(
         task_payload={"url": "https://x/index", "univ_slug": "uom", "year": 2026},
         onhold_items=[
             {
@@ -100,6 +97,7 @@ async def test_confirm_onhold_defaults_to_discard_when_no_valid_selection(monkey
             },
         ],
         selected_indices=[0, -2, 9],
+        crawl_executor=_fake_crawl_url,
     )
 
     assert summary["total_onhold"] == 2

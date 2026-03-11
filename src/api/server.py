@@ -74,10 +74,10 @@ from src.services.crawler import (
     patch_program_snapshot,
     query_programs,
     run_agent_crawl,
-    run_agent_review_confirmation,
     resume_crawl_job,
 )
 from src.agent_runtime.review_selection import parse_selected_indices
+from src.agent_runtime.review_service import run_agent_review_confirmation
 from src.services.ingestion_pipeline import IngestionPipeline
 from src.services.subject_taxonomy import bootstrap_subject_taxonomy
 from src.storage.db_manager import DatabaseManager
