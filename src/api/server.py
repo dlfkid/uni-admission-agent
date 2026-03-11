@@ -33,6 +33,8 @@ from src.api.schemas import (
     CrawlResponse,
     AgentRunRequest,
     AgentRunResponse,
+    AgentReviewConfirmRequest,
+    AgentReviewConfirmResponse,
     ProgramResponse,
     ProgramPatchRequest,
     DeleteProgramResponse,
@@ -70,8 +72,10 @@ from src.services.crawler import (
     patch_program_snapshot,
     query_programs,
     run_agent_crawl,
+    run_agent_review_confirmation,
     resume_crawl_job,
 )
+from src.agent_runtime.review_selection import parse_selected_indices
 from src.services.ingestion_pipeline import IngestionPipeline
 from src.services.subject_taxonomy import bootstrap_subject_taxonomy
 from src.storage.db_manager import DatabaseManager
@@ -655,6 +659,151 @@ async def api_agent_run(body: AgentRunRequest) -> AgentRunResponse:
     task_obj = asyncio.create_task(_run_agent_job())
     task_manager.register_task_object(task_id, task_obj)
     return AgentRunResponse(task_id=task_id)
+
+
+def _collect_review_selected_indices(
+    *,
+    selection_text: Optional[str],
+    selected_indices: Optional[List[int]],
+) -> tuple[list[int], list[str]]:
+    selected: list[int] = []
+    invalid_tokens: list[str] = []
+
+    if selection_text is not None:
+        parsed = parse_selected_indices(selection_text)
+        selected.extend(parsed.selected)
+        invalid_tokens.extend(parsed.invalid_tokens)
+
+    if selected_indices:
+        selected.extend(int(value) for value in selected_indices)
+
+    return sorted(set(selected)), invalid_tokens
+
+
+def _extract_onhold_indices(onhold_items: List[Dict[str, Any]]) -> set[int]:
+    output: set[int] = set()
+    for pos, item in enumerate(list(onhold_items or []), start=1):
+        row = dict(item or {})
+        try:
+            value = int(row.get("index") or pos)
+        except (TypeError, ValueError):
+            value = pos
+        if value > 0:
+            output.add(value)
+    return output
+
+
+@app.post("/agent/review/confirm", response_model=AgentReviewConfirmResponse)
+async def api_agent_review_confirm(body: AgentReviewConfirmRequest) -> AgentReviewConfirmResponse:
+    """Confirm and apply selected low-confidence onhold indices for an agent task."""
+    if not is_agent_enabled():
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Agent runtime is disabled. "
+                "Enable with AGENT_ENABLED=true or start server with --agent."
+            ),
+        )
+
+    info = task_manager.get_task(body.task_id)
+    if info is None:
+        raise HTTPException(status_code=404, detail=f"Task {body.task_id} not found")
+    if not isinstance(info.result, dict):
+        raise HTTPException(status_code=409, detail="Task result is not ready for review confirmation")
+
+    result_payload = dict(info.result)
+    output_payload = result_payload.get("output")
+    if not isinstance(output_payload, dict):
+        raise HTTPException(status_code=409, detail="Task result has no output payload")
+
+    raw_onhold_items = output_payload.get("onhold_items")
+    if not isinstance(raw_onhold_items, list) or not raw_onhold_items:
+        raise HTTPException(status_code=400, detail="Task has no onhold items to confirm")
+
+    selected_indices, invalid_tokens = _collect_review_selected_indices(
+        selection_text=body.selection_text,
+        selected_indices=body.selected_indices,
+    )
+    if invalid_tokens:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "invalid_selection_text",
+                "invalid_tokens": invalid_tokens,
+            },
+        )
+
+    available_indices = _extract_onhold_indices(raw_onhold_items)
+    invalid_indices = [idx for idx in selected_indices if idx not in available_indices or idx <= 0]
+    if invalid_indices:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "invalid_indices",
+                "invalid_indices": invalid_indices,
+            },
+        )
+
+    request_payload = output_payload.get("request_payload")
+    if not isinstance(request_payload, dict):
+        request_payload = dict(info.params or {})
+
+    confirmation = await run_agent_review_confirmation(
+        task_payload=request_payload,
+        onhold_items=raw_onhold_items,
+        selected_indices=selected_indices,
+    )
+
+    confirmation_payload = {
+        "selection_text": str(body.selection_text or ""),
+        "selected_indices": selected_indices,
+        "invalid_tokens": invalid_tokens,
+        **confirmation,
+    }
+    output_payload["onhold_confirmation"] = confirmation_payload
+    output_payload["onhold_items_pending"] = []
+    output_payload["applied_onhold_items"] = confirmation.get("applied_items") or []
+    output_payload["discarded_onhold_items"] = confirmation.get("discarded_items") or []
+    output_payload["onhold_count"] = 0
+    output_payload["onhold_items"] = []
+
+    applied_result = confirmation.get("applied_result")
+    if isinstance(applied_result, dict):
+        if "review_items" in applied_result:
+            output_payload["review_items"] = list(applied_result.get("review_items") or [])
+        if str(applied_result.get("review_token") or "").strip():
+            output_payload["review_token"] = str(applied_result.get("review_token") or "").strip()
+
+    trace_payload = result_payload.get("trace")
+    if isinstance(trace_payload, list):
+        trace_payload.append(
+            {
+                "stage": "apply_selected_onhold",
+                "selected_count": int(confirmation.get("selected_count") or 0),
+                "discarded_count": int(confirmation.get("discarded_count") or 0),
+            }
+        )
+
+    result_payload["status"] = "done"
+    result_payload["output"] = output_payload
+    task_manager.update_task(
+        body.task_id,
+        state=TaskState.DONE,
+        progress="Agent review confirmed",
+        result=result_payload,
+        progress_percent=100.0,
+        progress_meta={"event": "agent_review_confirmed"},
+    )
+
+    return AgentReviewConfirmResponse(
+        task_id=body.task_id,
+        selected_indices=selected_indices,
+        invalid_indices=list(confirmation.get("invalid_indices") or []),
+        invalid_tokens=invalid_tokens,
+        selected_count=int(confirmation.get("selected_count") or 0),
+        discarded_count=int(confirmation.get("discarded_count") or 0),
+        total_onhold=int(confirmation.get("total_onhold") or 0),
+    )
 
 
 @app.get("/tasks/active", response_model=Optional[TaskStatusResponse])

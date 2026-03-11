@@ -201,6 +201,20 @@ class AgentRunRequest(BaseModel):
     )
 
 
+class AgentReviewConfirmRequest(BaseModel):
+    """Body for ``POST /agent/review/confirm``."""
+
+    task_id: str = Field(description="Existing agent task id with onhold review context")
+    selection_text: Optional[str] = Field(
+        default=None,
+        description="Optional free-form user selection text (e.g. 'continue 3,6,18')",
+    )
+    selected_indices: Optional[List[int]] = Field(
+        default=None,
+        description="Optional explicit onhold indices to continue",
+    )
+
+
 class AnalyzeRequest(BaseModel):
     """Body for ``POST /analyze``."""
 
@@ -322,6 +336,18 @@ class AgentRunResponse(BaseModel):
 
     task_id: str = Field(description="Unique task identifier for agent task polling")
     message: str = Field(default="Agent task submitted")
+
+
+class AgentReviewConfirmResponse(BaseModel):
+    """Response for ``POST /agent/review/confirm``."""
+
+    task_id: str = Field(description="Agent task identifier")
+    selected_indices: List[int] = Field(default_factory=list)
+    invalid_indices: List[int] = Field(default_factory=list)
+    invalid_tokens: List[str] = Field(default_factory=list)
+    selected_count: int = 0
+    discarded_count: int = 0
+    total_onhold: int = 0
 
 
 class TaskStatusResponse(BaseModel):
