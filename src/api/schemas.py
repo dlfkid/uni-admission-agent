@@ -181,6 +181,26 @@ class CrawlRequest(BaseModel):
         return normalized
 
 
+class AgentRunRequest(BaseModel):
+    """Body for ``POST /agent/run``."""
+
+    url: str = Field(description="Starting URL to crawl via agent runtime")
+    univ_slug: str = Field(description="University slug (a-z0-9-)")
+    year: int = Field(description="Academic year (e.g. 2026)")
+    page_type_hint: str = Field(
+        default="auto",
+        description="Page type hint: auto/index/detail",
+    )
+    runtime: Optional[str] = Field(
+        default=None,
+        description="Optional runtime override: legacy or pydanticai",
+    )
+    policy_profile: Optional[PolicyProfilePayload] = Field(
+        default=None,
+        description="Optional per-request policy profile overrides from client",
+    )
+
+
 class AnalyzeRequest(BaseModel):
     """Body for ``POST /analyze``."""
 
@@ -295,6 +315,13 @@ class CrawlResponse(BaseModel):
 
     task_id: str = Field(description="Unique task identifier for status polling")
     message: str = Field(default="Task submitted")
+
+
+class AgentRunResponse(BaseModel):
+    """Response for ``POST /agent/run``."""
+
+    task_id: str = Field(description="Unique task identifier for agent task polling")
+    message: str = Field(default="Agent task submitted")
 
 
 class TaskStatusResponse(BaseModel):

@@ -46,6 +46,8 @@ from src.services.subject_taxonomy import get_subject_taxonomy_service
 from src.storage.db_manager import DatabaseManager
 from src.storage.exporter import ExcelExporter
 from src.storage.importer import ExcelImporter
+from src.agent_runtime.base import AgentRequest
+from src.agent_runtime.runtime_factory import build_agent_runtime
 
 logger = logging.getLogger(__name__)
 
@@ -625,6 +627,40 @@ async def resume_crawl_job(
         year=int(result.get("year") or 0),
         ingestion_job_id=str(result.get("job_uid") or job_uid),
     )
+
+
+async def run_agent_crawl(
+    *,
+    url: str,
+    univ_slug: str,
+    year: int,
+    page_type_hint: str = "auto",
+    runtime_mode: Optional[str] = None,
+    policy_profile: Optional[dict[str, Any]] = None,
+) -> dict[str, Any]:
+    """Run crawl orchestration via configured agent runtime."""
+    runtime_config = None
+    if runtime_mode:
+        runtime_config = type("AgentRuntimeConfig", (), {"runtime": runtime_mode})()
+
+    runtime = build_agent_runtime(config=runtime_config, bridge=None, model_adapter=None)
+    request_payload: dict[str, Any] = {
+        "url": str(url or "").strip(),
+        "univ_slug": str(univ_slug or "").strip().lower(),
+        "year": int(year),
+        "page_type_hint": str(page_type_hint or "auto").strip().lower() or "auto",
+    }
+    if policy_profile:
+        request_payload["policy_profile"] = dict(policy_profile)
+
+    response = await runtime.run(
+        AgentRequest(
+            task="crawl",
+            payload=request_payload,
+            context={"entrypoint": "api"},
+        )
+    )
+    return response.model_dump(mode="json")
 
 
 def ingest_program_records_external(

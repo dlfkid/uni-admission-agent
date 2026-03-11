@@ -93,3 +93,21 @@ def test_internal_llm_tools_registered_only_when_available(monkeypatch) -> None:
         "program_patch_batch_internal_llm",
         "help_internal_llm",
     }.issubset(tool_names_with_internal)
+
+
+def test_agent_tools_registered_only_when_agent_enabled(monkeypatch) -> None:
+    monkeypatch.delenv("AGENT_ENABLED", raising=False)
+    server_without_agent = _reload_server_with_router_probe(
+        monkeypatch,
+        router_available=False,
+    )
+    tool_names_without_agent = _list_mcp_tool_names(server_without_agent)
+    assert "agent_run" not in tool_names_without_agent
+
+    monkeypatch.setenv("AGENT_ENABLED", "true")
+    server_with_agent = _reload_server_with_router_probe(
+        monkeypatch,
+        router_available=False,
+    )
+    tool_names_with_agent = _list_mcp_tool_names(server_with_agent)
+    assert "agent_run" in tool_names_with_agent

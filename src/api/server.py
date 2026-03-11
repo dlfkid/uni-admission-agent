@@ -31,6 +31,8 @@ from dotenv import find_dotenv, dotenv_values
 from src.api.schemas import (
     CrawlRequest,
     CrawlResponse,
+    AgentRunRequest,
+    AgentRunResponse,
     ProgramResponse,
     ProgramPatchRequest,
     DeleteProgramResponse,
@@ -67,6 +69,7 @@ from src.services.crawler import (
     delete_program_snapshot,
     patch_program_snapshot,
     query_programs,
+    run_agent_crawl,
     resume_crawl_job,
 )
 from src.services.ingestion_pipeline import IngestionPipeline
@@ -586,6 +589,72 @@ async def api_crawl(body: CrawlRequest) -> CrawlResponse:
     task_manager.register_task_object(task_id, task_obj)
     
     return CrawlResponse(task_id=task_id)
+
+
+@app.post("/agent/run", response_model=AgentRunResponse)
+async def api_agent_run(body: AgentRunRequest) -> AgentRunResponse:
+    """Submit one opt-in agent orchestration job."""
+    if not is_agent_enabled():
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Agent runtime is disabled. "
+                "Enable with AGENT_ENABLED=true or start server with --agent."
+            ),
+        )
+
+    try:
+        task_id = task_manager.create_task(
+            params={
+                "mode": "agent",
+                **body.model_dump(exclude_none=True),
+            }
+        )
+    except RuntimeError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+
+    async def _run_agent_job() -> None:
+        task_manager.update_task(
+            task_id,
+            state=TaskState.RUNNING,
+            progress="Agent running…",
+            progress_percent=3.0,
+            progress_meta={"event": "agent_task_started"},
+        )
+        try:
+            result = await run_agent_crawl(
+                url=body.url,
+                univ_slug=body.univ_slug,
+                year=body.year,
+                page_type_hint=body.page_type_hint,
+                runtime_mode=body.runtime,
+                policy_profile=(
+                    body.policy_profile.model_dump(exclude_none=True)
+                    if body.policy_profile
+                    else None
+                ),
+            )
+            task_manager.update_task(
+                task_id,
+                state=TaskState.DONE,
+                progress="Complete",
+                result=result,
+                progress_percent=100.0,
+                progress_meta={"event": "agent_task_succeeded"},
+            )
+        except Exception as exc:
+            logger.exception("Agent task %s failed", task_id)
+            task_manager.update_task(
+                task_id,
+                state=TaskState.FAILED,
+                error=str(exc),
+                progress_percent=100.0,
+                progress_meta={"event": "agent_task_failed"},
+            )
+
+    task_obj = asyncio.create_task(_run_agent_job())
+    task_manager.register_task_object(task_id, task_obj)
+    return AgentRunResponse(task_id=task_id)
 
 
 @app.get("/tasks/active", response_model=Optional[TaskStatusResponse])
@@ -1916,6 +1985,28 @@ repair:
             "version": "UniAdmission Agent CLI",
             "description": "Automated university admission data scraper"
         }
+
+    if is_agent_enabled():
+        @mcp.tool(name="agent_run")
+        async def mcp_agent_run(
+            url: str,
+            univ_slug: str,
+            year: int,
+            page_type_hint: str = "auto",
+            runtime: Optional[str] = None,
+            policy_profile: Optional[Dict[str, Any]] = None,
+        ) -> dict:
+            """Run one agent orchestration request when agent mode is enabled."""
+            return await run_agent_crawl(
+                url=url,
+                univ_slug=univ_slug,
+                year=year,
+                page_type_hint=page_type_hint,
+                runtime_mode=runtime,
+                policy_profile=policy_profile,
+            )
+    else:
+        logger.info("MCP agent tools not registered (agent runtime disabled).")
 
     if _internal_llm_available():
         @mcp.tool(name="analyze_internal_llm")
