@@ -139,3 +139,18 @@ def create_router() -> RouterAgent:
         )
 
     return RouterAgent(providers)
+
+
+def create_model_provider_adapter(
+    *,
+    allow_internal: bool = True,
+    allow_external: bool = True,
+):
+    """Build the agent model adapter for internal/external execution modes."""
+    from src.agent_runtime.model_provider import ModelProviderAdapter
+
+    return ModelProviderAdapter(
+        allow_internal=allow_internal,
+        allow_external=allow_external,
+        internal_factory=create_router,
+    )
