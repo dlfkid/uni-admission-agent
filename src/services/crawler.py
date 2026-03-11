@@ -47,7 +47,6 @@ from src.storage.db_manager import DatabaseManager
 from src.storage.exporter import ExcelExporter
 from src.storage.importer import ExcelImporter
 from src.agent_runtime.base import AgentRequest
-from src.agent_runtime.runtime_factory import build_agent_runtime
 
 logger = logging.getLogger(__name__)
 
@@ -639,6 +638,8 @@ async def run_agent_crawl(
     policy_profile: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
     """Run crawl orchestration via configured agent runtime."""
+    from src.agent_runtime.runtime_factory import build_agent_runtime
+
     runtime_config = None
     if runtime_mode:
         runtime_config = type("AgentRuntimeConfig", (), {"runtime": runtime_mode})()
@@ -756,7 +757,7 @@ async def run_agent_review_confirmation(
                 selected_urls=selected_urls,
                 selected_link_texts=selected_link_texts,
                 browser_provider=str((task_payload or {}).get("browser_provider") or "auto"),
-                strict_client=bool((task_payload or {}).get("strict_client") or False),
+                strict_client=bool((task_payload or {}).get("strict_client")),
                 candidate_taxonomy_filter_enabled=False,
             )
             applied_result = crawl_result.model_dump(mode="json")

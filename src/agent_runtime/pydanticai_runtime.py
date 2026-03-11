@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib
 import logging
 from typing import Any
 
@@ -16,16 +17,18 @@ logger = logging.getLogger(__name__)
 
 async def analyze_url_candidates(**kwargs: Any) -> dict[str, Any]:
     """Lazy-import crawler helper to avoid runtime/crawler circular import."""
-    from src.services import crawler as crawler_service
+    crawler_service = importlib.import_module("src.services.crawler")
+    analyze_fn = getattr(crawler_service, "analyze_url_candidates")
 
-    return await crawler_service.analyze_url_candidates(**kwargs)
+    return await analyze_fn(**kwargs)
 
 
 async def crawl_url(**kwargs: Any) -> Any:
     """Lazy-import crawl entrypoint to avoid runtime/crawler circular import."""
-    from src.services import crawler as crawler_service
+    crawler_service = importlib.import_module("src.services.crawler")
+    crawl_fn = getattr(crawler_service, "crawl_url")
 
-    return await crawler_service.crawl_url(**kwargs)
+    return await crawl_fn(**kwargs)
 
 
 class PydanticAIRuntime:
