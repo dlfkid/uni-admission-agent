@@ -6,8 +6,7 @@ from __future__ import annotations
 def build_bootstrap_prompt(
     *,
     target: str,
-    host: str,
-    port: int,
+    server_url: str,
 ) -> str:
     """Build one-shot setup prompt for a given LLM interaction environment."""
     normalized = str(target or "generic").strip().lower()
@@ -35,8 +34,7 @@ def build_bootstrap_prompt(
         "Do the following:\n"
         "1) Ensure the adm-agent-client binary is downloaded and executable.\n"
         "2) Run `adm-agent-client init` and provide:\n"
-        f"   - Serve host: {host}\n"
-        f"   - Serve port: {int(port)}\n"
+        f"   - Serve URL: {server_url}\n"
         "   - Client name: use a human-readable machine label\n"
         "3) Run `adm-agent-client status` and confirm config is loaded.\n"
         "4) Run `adm-agent-client start` and report connection status.\n"

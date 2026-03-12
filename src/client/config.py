@@ -20,8 +20,7 @@ logger = logging.getLogger(__name__)
 class ClientConfig:
     """Client connection and identity settings."""
 
-    server_host: str
-    server_port: int
+    server_url: str
     client_name: str
     client_id: str
     workdir: str
@@ -68,8 +67,7 @@ def save_client_config(config: ClientConfig) -> Path:
         return str(value).replace("\\", "\\\\").replace('"', '\\"')
 
     lines = [
-        f'server_host = "{_esc(config.server_host)}"',
-        f"server_port = {int(config.server_port)}",
+        f'server_url = "{_esc(config.server_url)}"',
         f'client_name = "{_esc(config.client_name)}"',
         f'client_id = "{_esc(config.client_id)}"',
         f'workdir = "{_esc(config.workdir)}"',
@@ -107,9 +105,14 @@ def load_client_config() -> ClientConfig | None:
             logger.warning("Invalid client policy_profile in %s, using defaults: %s", path, exc)
             policy_profile = ClientPolicyProfile()
 
+    server_url = data.get("server_url")
+    if not server_url:
+        host = data.get("server_host", "127.0.0.1")
+        port = data.get("server_port", 8910)
+        server_url = f"http://{host}:{port}"
+
     return ClientConfig(
-        server_host=str(data.get("server_host") or "127.0.0.1"),
-        server_port=int(data.get("server_port") or 8910),
+        server_url=str(server_url),
         client_name=str(data.get("client_name") or "adm-agent-client"),
         client_id=ensure_client_id(str(data.get("client_id") or "")),
         workdir=str(data.get("workdir") or str(Path.cwd())),

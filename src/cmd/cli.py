@@ -93,9 +93,11 @@ DATABASE & STATUS:
 LLM CONFIGURATION:
     llm-config Interactive wizard to configure LLM providers
     
+    
 SERVER OPERATIONS:
-    serve      Start API + MCP server (default: 0.0.0.0:8910)
-    serve-stop Stop running server instance
+    serve           Start API + MCP server (default: 0.0.0.0:8910)
+    serve-stop      Stop running server instance
+    runtime-status  Show server runtime status including connected clients
     
 SYSTEM MAINTENANCE:
     upgrade    Check for and install backend updates
@@ -510,6 +512,36 @@ def status(
                     typer.echo(f"      {yr}: {count} programs")
     except Exception as e:
         logger.error("Failed to get status: %s", e)
+        raise typer.Exit(code=1)
+@app.command(name="runtime-status")
+def runtime_status(
+    host: str = typer.Option("127.0.0.1", help="Server host"),
+    port: int = typer.Option(8910, help="Server port"),
+    verbose: bool = typer.Option(False, "--verbose", "-v"),
+) -> None:
+    """Show server runtime status (requires running server)."""
+    import requests
+
+    url = f"http://{host}:{port}/status"
+    try:
+        response = requests.get(url, timeout=5)
+        response.raise_for_status()
+        data = response.json()
+
+        typer.echo(f"\n🚀 Server Runtime Status ({host}:{port})")
+        typer.echo(f"  Connected Clients: {data.get('client_count', 0)}")
+        if data.get("client_ids"):
+            typer.echo(f"  Active Client IDs: {', '.join(data['client_ids'])}")
+        
+        typer.echo(f"\n📊 Database Stats:")
+        typer.echo(f"  Universities: {data.get('university_count', 0)}")
+        typer.echo(f"  Programs:     {data.get('program_count', 0)}")
+        
+    except requests.exceptions.ConnectionError:
+        typer.echo(f"❌ Could not connect to server at {url}. Is the server running?", err=True)
+        raise typer.Exit(code=1)
+    except Exception as e:
+        typer.echo(f"❌ Failed to get runtime status: {e}", err=True)
         raise typer.Exit(code=1)
 
 

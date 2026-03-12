@@ -96,12 +96,13 @@ def _print_upgrade_check(update_info: dict) -> None:
 @app.command()
 def init() -> None:
     """Initialize client config interactively."""
-    host = str(typer.prompt("Serve host", default="127.0.0.1")).strip()
-    port = int(typer.prompt("Serve port", default="8910"))
+    url_input = str(typer.prompt("Serve URL", default="http://127.0.0.1:8910")).strip()
+    if not url_input.startswith(("http://", "https://", "ws://", "wss://")):
+        url_input = f"http://{url_input}"
+        
     client_name = str(typer.prompt("Client name", default=_default_client_name())).strip()
     config = ClientConfig(
-        server_host=host or "127.0.0.1",
-        server_port=port,
+        server_url=url_input,
         client_name=client_name or _default_client_name(),
         client_id=ensure_client_id(None),
         workdir=str(Path.cwd()),
@@ -122,7 +123,7 @@ def status() -> None:
 
     typer.echo(f"Client ID: {config.client_id}")
     typer.echo(f"Client Name: {config.client_name}")
-    typer.echo(f"Serve: {config.server_host}:{config.server_port}")
+    typer.echo(f"Serve URL: {config.server_url}")
     typer.echo(f"Workdir: {config.workdir}")
 
     connectivity = asyncio.run(ClientRuntime(config).start_once())
@@ -133,7 +134,7 @@ def status() -> None:
 @app.command()
 def start(
     once: bool = typer.Option(
-        True,
+        False,
         "--once/--continuous",
         help="Run one connectivity probe or continuous websocket runtime",
     ),
@@ -261,25 +262,18 @@ def bootstrap(
         "--emit-prompt",
         help="Emit prompt text for copy/paste into your LLM tool",
     ),
-    host: str = typer.Option(
+    url: str = typer.Option(
         "",
-        "--host",
-        help="Override serve host in generated prompt",
-    ),
-    port: int = typer.Option(
-        0,
-        "--port",
-        help="Override serve port in generated prompt",
+        "--url",
+        help="Override serve URL in generated prompt",
     ),
 ) -> None:
     """Generate a setup prompt for external LLM tools."""
     config = load_client_config()
-    resolved_host = str(host or (config.server_host if config else "127.0.0.1")).strip()
-    resolved_port = int(port or (config.server_port if config else 8910))
+    resolved_url = str(url or (config.server_url if config else "http://127.0.0.1:8910")).strip()
     prompt = build_bootstrap_prompt(
         target=target,
-        host=resolved_host,
-        port=resolved_port,
+        server_url=resolved_url,
     )
     if emit_prompt:
         typer.echo(prompt)

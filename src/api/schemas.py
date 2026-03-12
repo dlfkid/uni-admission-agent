@@ -411,6 +411,8 @@ class StatusResponse(BaseModel):
 
     university_count: int = 0
     program_count: int = 0
+    client_count: int = Field(default=0, description="Number of currently connected browser clients")
+    client_ids: List[str] = Field(default_factory=list, description="List of connected client identifiers")
     universities: List[Dict[str, Any]] = Field(default_factory=list)
 
 

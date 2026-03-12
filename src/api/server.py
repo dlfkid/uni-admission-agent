@@ -1038,11 +1038,17 @@ async def api_cancel_task(task_id: str) -> CancelResponse:
 
 @app.get("/status", response_model=StatusResponse)
 async def api_status() -> StatusResponse:
-    """Return database statistics."""
+    """Return database statistics and connected client info."""
     result = get_db_status()
+    
+    # Fetch connected clients
+    client_ids = [c["client_id"] for c in client_registry.list_clients()]
+    
     return StatusResponse(
         university_count=result.university_count,
         program_count=result.program_count,
+        client_count=len(client_ids),
+        client_ids=client_ids,
         universities=[
             {
                 "name": u.name,

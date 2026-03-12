@@ -19,6 +19,9 @@ from src.client.native_browser import fetch_browser_payload
 logger = logging.getLogger(__name__)
 
 
+import urllib.request
+import urllib.error
+
 @dataclass
 class ClientConnectivity:
     """Connectivity probe result."""
@@ -30,12 +33,18 @@ class ClientConnectivity:
 
 def build_server_endpoint(config: ClientConfig) -> str:
     """Build human-readable server endpoint string."""
-    return f"{config.server_host}:{config.server_port}"
+    return config.server_url
 
 
 def build_ws_url(config: ClientConfig) -> str:
     """Build websocket URL for client bridge."""
-    return f"ws://{config.server_host}:{int(config.server_port)}/clients/ws"
+    url = config.server_url.rstrip("/")
+    if url.startswith("https://"):
+        return url.replace("https://", "wss://", 1) + "/clients/ws"
+    if url.startswith("http://"):
+        return url.replace("http://", "ws://", 1) + "/clients/ws"
+    # Fallback if no scheme
+    return f"ws://{url}/clients/ws"
 
 
 def render_fetch_command(template: str, *, url: str, page_type_hint: str) -> str:
@@ -50,16 +59,17 @@ async def probe_server(
     config: ClientConfig,
     timeout_seconds: float = 3.0,
 ) -> ClientConnectivity:
-    """Probe TCP reachability of configured serve endpoint."""
+    """Probe HTTP reachability of configured serve endpoint."""
     endpoint = build_server_endpoint(config)
+    url = endpoint.rstrip("/") + "/status"
+
+    def _probe() -> None:
+        req = urllib.request.Request(url, method="GET")
+        with urllib.request.urlopen(req, timeout=max(0.1, float(timeout_seconds))) as _:
+            pass
+
     try:
-        reader, writer = await asyncio.wait_for(
-            asyncio.open_connection(config.server_host, int(config.server_port)),
-            timeout=max(0.1, float(timeout_seconds)),
-        )
-        writer.close()
-        await writer.wait_closed()
-        del reader
+        await asyncio.to_thread(_probe)
         return ClientConnectivity(
             connected=True,
             message="reachable",
