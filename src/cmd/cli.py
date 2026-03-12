@@ -715,7 +715,7 @@ def serve(
     if dry_run:
         typer.echo("Dry run mode: skipping browser/db checks and server startup.")
         return
-    
+
     # Pre-flight check: Ensure browser is available
     try:
         from playwright.sync_api import sync_playwright

@@ -1761,8 +1761,14 @@ async def _mcp_ingest_impl(
 
 try:
     from mcp.server.fastmcp import FastMCP
+    from mcp.server.fastmcp.server import TransportSecuritySettings
 
-    mcp = FastMCP("UniAdmission Agent")
+    # Allow external hosts (like Cloudflare Tunnel) by disabling DNS rebinding protection
+    # since this service is explicitly intended to be exposed.
+    mcp = FastMCP(
+        "UniAdmission Agent",
+        transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),
+    )
 
     @mcp.tool(name="analyze")
     async def mcp_analyze(
