@@ -782,6 +782,8 @@ def serve(
                 port=port,
                 reload=False,
                 log_level="debug" if verbose else "info",
+                proxy_headers=True,
+                forwarded_allow_ips="*",
             )
         finally:
             _remove_pid_file()

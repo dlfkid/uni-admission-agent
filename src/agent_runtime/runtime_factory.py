@@ -9,7 +9,7 @@ from typing import Any
 def _resolve_runtime_mode(config: Any = None) -> str:
     configured_runtime = getattr(config, "runtime", None) if config is not None else None
     if configured_runtime is None or str(configured_runtime).strip() == "":
-        configured_runtime = os.getenv("AGENT_RUNTIME", "legacy")
+        configured_runtime = os.getenv("AGENT_RUNTIME", "pydanticai")
     return str(configured_runtime).strip().lower()
 
 

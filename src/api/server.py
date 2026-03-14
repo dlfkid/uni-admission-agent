@@ -2161,8 +2161,16 @@ repair:
         page_type_hint: str = "auto",
         runtime: Optional[str] = None,
         policy_profile: Optional[Dict[str, Any]] = None,
+        client_id: Optional[str] = None,
+        autonomous: bool = False,
     ) -> dict:
-        """Run one agent orchestration request when agent mode is enabled."""
+        """Run one agent orchestration request when agent mode is enabled.
+
+        By default (autonomous=False), orchestration is driven by the calling
+        LLM: index pages return candidate lists for external review instead
+        of auto-crawling.  Set autonomous=True to let the internal runtime
+        make all decisions autonomously.
+        """
         return await run_agent_crawl(
             url=url,
             univ_slug=univ_slug,
@@ -2170,6 +2178,8 @@ repair:
             page_type_hint=page_type_hint,
             runtime_mode=runtime,
             policy_profile=policy_profile,
+            client_id=client_id,
+            autonomous=autonomous,
         )
 
     async def mcp_agent_review_confirm(

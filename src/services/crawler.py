@@ -638,6 +638,8 @@ async def run_agent_crawl(
     page_type_hint: str = "auto",
     runtime_mode: Optional[str] = None,
     policy_profile: Optional[dict[str, Any]] = None,
+    client_id: Optional[str] = None,
+    autonomous: bool = False,
 ) -> dict[str, Any]:
     """Run crawl orchestration via configured agent runtime."""
     # Lazy import: runtime_factory → pydanticai_runtime → crawler forms a
@@ -664,7 +666,11 @@ async def run_agent_crawl(
         AgentRequest(
             task="crawl",
             payload=request_payload,
-            context={"entrypoint": "api"},
+            context={
+                "entrypoint": "api",
+                "client_id": str(client_id).strip() if client_id else None,
+                "autonomous": bool(autonomous),
+            },
         )
     )
     return response.model_dump(mode="json")
@@ -1075,7 +1081,7 @@ def _build_review_items(
         seen.add(program_id)
 
     if not ordered_summaries:
-        ordered_summaries = summaries
+        return []
 
     review_items: List[dict[str, Any]] = []
     for index, summary in enumerate(ordered_summaries, start=1):

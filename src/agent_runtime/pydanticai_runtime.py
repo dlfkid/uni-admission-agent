@@ -216,6 +216,18 @@ class PydanticAIRuntime:
             output=output,
         )
 
+    @staticmethod
+    def _is_autonomous(request: AgentRequest) -> bool:
+        """Check whether the runtime should operate autonomously.
+
+        When ``False`` (default for MCP callers), index flows return
+        candidate lists for the external LLM to review instead of
+        auto-crawling internally.
+        """
+        if not isinstance(request.context, dict):
+            return False
+        return bool(request.context.get("autonomous"))
+
     async def _run_index_flow(self, plan: _CrawlPlan, analysis_result: dict[str, Any]) -> AgentResponse:
         plan.trace.append({"stage": "executing_index_flow", "task": plan.request.task})
         links = [item for item in (analysis_result.get("links") or []) if isinstance(item, dict)]
@@ -228,6 +240,37 @@ class PydanticAIRuntime:
             top_k=plan.profile.auto_run_max_candidates,
         )
 
+        autonomous = self._is_autonomous(plan.request)
+
+        if not autonomous:
+            # External-LLM-driven mode: return all candidates for the
+            # calling LLM to review and selectively crawl via
+            # crawl / crawl_detail_batch.
+            plan.trace.append({"stage": "returning_candidates_for_review", "candidate_count": len(ranked_candidates)})
+            return AgentResponse(
+                status="wait_user_selection",
+                runtime_used=self.name,
+                trace=plan.trace,
+                output={
+                    "request_payload": self._request_payload(plan),
+                    "detected_page_type": "index",
+                    "analysis": {
+                        "total_found": int(analysis_result.get("total_found") or len(links)),
+                        "candidate_count": len(links),
+                    },
+                    "candidates": ranked_candidates,
+                    "auto_processed_count": 0,
+                    "onhold_count": len(ranked_candidates),
+                    "discarded_count": self._count_discarded_links(links, ranked_candidates),
+                    "policy_warnings": plan.merged_policy.warnings,
+                    "next_action_hint": (
+                        "Review the candidates list, then call crawl or "
+                        "crawl_detail_batch with the selected URLs to ingest."
+                    ),
+                },
+            )
+
+        # Autonomous mode: auto-crawl candidates above threshold
         auto_candidates = [item for item in ranked_candidates if bool(item.get("auto_run_eligible"))]
         onhold_items = build_onhold_items(self._build_onhold_rows(ranked_candidates))
         auto_result_payload = await self._run_auto_candidates(plan, auto_candidates)
