@@ -7,12 +7,12 @@ def _config(runtime=None):
     return SimpleNamespace(runtime=runtime)
 
 
-def test_factory_returns_legacy_by_default(monkeypatch):
+def test_factory_returns_pydanticai_by_default(monkeypatch):
     monkeypatch.delenv("AGENT_RUNTIME", raising=False)
 
     runtime = build_agent_runtime(_config(), bridge=None, model_adapter=None)
 
-    assert runtime.name == "legacy"
+    assert runtime.name == "pydanticai"
 
 
 def test_factory_returns_pydanticai_when_configured(monkeypatch):

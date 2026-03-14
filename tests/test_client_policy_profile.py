@@ -15,8 +15,7 @@ def test_client_policy_profile_saved_and_loaded(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
 
     config = ClientConfig(
-        server_host="127.0.0.1",
-        server_port=8910,
+        server_url="http://127.0.0.1:8910",
         client_name="Rayne-Mac",
         client_id="client-001",
         workdir="/Users/rayne",
@@ -35,8 +34,7 @@ def test_client_policy_profile_saved_and_loaded(tmp_path, monkeypatch):
 @pytest.mark.asyncio
 async def test_client_runtime_embeds_policy_in_rpc_payload(monkeypatch):
     config = ClientConfig(
-        server_host="127.0.0.1",
-        server_port=8910,
+        server_url="http://127.0.0.1:8910",
         client_name="Rayne-Mac",
         client_id="client-001",
         workdir="/Users/rayne",

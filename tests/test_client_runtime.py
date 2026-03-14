@@ -6,8 +6,7 @@ from src.client.runtime import ClientRuntime, build_ws_url, render_fetch_command
 
 def test_build_ws_url() -> None:
     config = ClientConfig(
-        server_host="127.0.0.1",
-        server_port=8910,
+        server_url="http://127.0.0.1:8910",
         client_name="Rayne-Mac",
         client_id="client-1",
         workdir="/Users/rayne",
@@ -29,8 +28,7 @@ def test_render_fetch_command_injects_url_and_page_type() -> None:
 async def test_runtime_uses_native_browser_when_fetch_command_missing(monkeypatch) -> None:
     monkeypatch.delenv("ADM_AGENT_CLIENT_FETCH_CMD", raising=False)
     config = ClientConfig(
-        server_host="127.0.0.1",
-        server_port=8910,
+        server_url="http://127.0.0.1:8910",
         client_name="Rayne-Mac",
         client_id="client-1",
         workdir="/Users/rayne",

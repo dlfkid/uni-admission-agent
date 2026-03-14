@@ -79,6 +79,7 @@ async def test_runtime_returns_wait_user_selection_with_onhold_items(monkeypatch
                     "taxonomy_auto_threshold": 0.9,
                 },
             },
+            context={"autonomous": True},
         )
     )
 
@@ -119,7 +120,11 @@ async def test_runtime_done_when_no_onhold_candidates(monkeypatch):
 
     runtime = PydanticAIRuntime()
     result = await runtime.run(
-        AgentRequest(task="crawl", payload={"url": "https://x/index", "univ_slug": "uom", "year": 2026})
+        AgentRequest(
+            task="crawl",
+            payload={"url": "https://x/index", "univ_slug": "uom", "year": 2026},
+            context={"autonomous": True},
+        )
     )
 
     assert result.status == "done"

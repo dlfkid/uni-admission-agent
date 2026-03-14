@@ -43,6 +43,7 @@ def test_agent_run_endpoint_enabled_returns_task_id(monkeypatch) -> None:
                 "url": "https://example.edu/list",
                 "univ_slug": "uom",
                 "year": 2026,
+                "runtime": "legacy",
             },
         )
 

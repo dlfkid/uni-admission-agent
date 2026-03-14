@@ -15,15 +15,14 @@ def test_client_init_writes_config(tmp_path: Path, monkeypatch) -> None:
     result = runner.invoke(
         app,
         ["init"],
-        input="127.0.0.1\n8910\nRayne-Mac\n",
+        input="http://127.0.0.1:8910\nRayne-Mac\n",
     )
     assert result.exit_code == 0
 
     cfg = tmp_path / ".adm-agent" / "client.toml"
     assert cfg.exists()
     content = cfg.read_text(encoding="utf-8")
-    assert 'server_host = "127.0.0.1"' in content
-    assert "server_port = 8910" in content
+    assert 'server_url = "http://127.0.0.1:8910"' in content
     assert 'client_name = "Rayne-Mac"' in content
 
 
@@ -33,8 +32,7 @@ def test_client_status_reads_config(tmp_path: Path, monkeypatch) -> None:
     cfg_dir.mkdir(parents=True, exist_ok=True)
     cfg_path = cfg_dir / "client.toml"
     cfg_path.write_text(
-        'server_host = "127.0.0.1"\n'
-        "server_port = 8910\n"
+        'server_url = "http://127.0.0.1:8910"\n'
         'client_name = "Rayne-Mac"\n'
         'client_id = "client-001"\n'
         'workdir = "/Users/rayne"\n',
