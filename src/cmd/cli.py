@@ -96,6 +96,7 @@ LLM CONFIGURATION:
     
 SERVER OPERATIONS:
     serve           Start API + MCP server (default: 0.0.0.0:8910)
+    serve-install   Start the server as a background daemon
     serve-stop      Stop running server instance
     runtime-status  Show server runtime status including connected clients
     
@@ -790,6 +791,65 @@ def serve(
     except ImportError:
         typer.echo("❌ uvicorn not installed. Run: uv add uvicorn[standard]", err=True)
         raise typer.Exit(code=1)
+
+
+def _build_base_cmd() -> list[str]:
+    """Return the base argv to re-invoke this CLI (handles PyInstaller too)."""
+    if getattr(sys, "frozen", False):
+        return [sys.executable]
+    return [sys.executable, sys.argv[0]]
+
+
+_LOG_FILE = _PID_DIR / "server.log"
+
+
+@app.command(name="serve-install")
+def serve_install(
+    host: str = typer.Option("0.0.0.0", help="Bind address"),
+    port: int = typer.Option(8910, help="Port number"),
+    agent: bool = typer.Option(
+        False,
+        "--agent",
+        help="Enable agent runtime for this server process",
+    ),
+    verbose: bool = typer.Option(False, "--verbose", "-v"),
+) -> None:
+    """Start the server as a background daemon.
+
+    Launches ``serve`` in a detached process so it persists after the
+    terminal is closed.  Use ``serve-stop`` to terminate it.
+    """
+    # Refuse if server is already running
+    existing_pid = _read_pid_file()
+    if existing_pid is not None:
+        try:
+            os.kill(existing_pid, 0)
+            typer.echo(
+                f"⚠️  Server already running (PID {existing_pid}). "
+                "Stop it first with: serve-stop"
+            )
+            raise typer.Exit(code=1)
+        except (ProcessLookupError, OSError):
+            _remove_pid_file()
+
+    cmd = _build_base_cmd() + ["serve", "--host", host, "--port", str(port)]
+    if agent:
+        cmd.append("--agent")
+    if verbose:
+        cmd.append("--verbose")
+
+    _PID_DIR.mkdir(parents=True, exist_ok=True)
+    log_fh = open(_LOG_FILE, "a", encoding="utf-8")  # noqa: SIM115
+    proc = subprocess.Popen(
+        cmd,
+        stdout=log_fh,
+        stderr=log_fh,
+        start_new_session=True,
+    )
+
+    typer.echo(f"🚀 Server daemon started (PID {proc.pid})")
+    typer.echo(f"   Log: {_LOG_FILE}")
+    typer.echo("   Stop: uni-admission serve-stop")
 
 
 @app.command(name="serve-stop")

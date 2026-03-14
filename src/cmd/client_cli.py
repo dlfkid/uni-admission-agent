@@ -9,6 +9,7 @@ import os
 import platform
 from pathlib import Path
 import signal
+import subprocess
 import sys
 
 import typer
@@ -160,6 +161,57 @@ def start(
         typer.echo("Stopped.")
     finally:
         _remove_client_pid_file()
+
+
+def _build_client_base_cmd() -> list[str]:
+    """Return the base argv to re-invoke this CLI (handles PyInstaller too)."""
+    if getattr(sys, "frozen", False):
+        return [sys.executable]
+    return [sys.executable, sys.argv[0]]
+
+
+_CLIENT_LOG_FILE = get_client_home() / "client.log"
+
+
+@app.command(name="start-install")
+def start_install() -> None:
+    """Start the client as a background daemon.
+
+    Launches ``start --continuous`` in a detached process so it persists
+    after the terminal is closed.  Use ``stop`` to terminate it.
+    """
+    config = load_client_config()
+    if not config:
+        typer.echo("Client is not initialized. Run: adm-agent-client init", err=True)
+        raise typer.Exit(code=1)
+
+    existing_pid = _read_client_pid_file()
+    if existing_pid is not None:
+        try:
+            os.kill(existing_pid, 0)
+            typer.echo(
+                f"⚠️  Client already running (PID {existing_pid}). "
+                "Stop it first with: adm-agent-client stop"
+            )
+            raise typer.Exit(code=1)
+        except (ProcessLookupError, OSError):
+            _remove_client_pid_file()
+
+    cmd = _build_client_base_cmd() + ["start", "--continuous"]
+
+    log_dir = get_client_home()
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_fh = open(_CLIENT_LOG_FILE, "a", encoding="utf-8")  # noqa: SIM115
+    proc = subprocess.Popen(
+        cmd,
+        stdout=log_fh,
+        stderr=log_fh,
+        start_new_session=True,
+    )
+
+    typer.echo(f"🚀 Client daemon started (PID {proc.pid})")
+    typer.echo(f"   Log: {_CLIENT_LOG_FILE}")
+    typer.echo("   Stop: adm-agent-client stop")
 
 
 @app.command()
