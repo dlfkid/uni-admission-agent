@@ -639,6 +639,7 @@ async def api_agent_run(body: AgentRunRequest) -> AgentRunResponse:
                 year=body.year,
                 page_type_hint=body.page_type_hint,
                 runtime_mode=body.runtime,
+                autonomous=body.autonomous,
                 policy_profile=(
                     body.policy_profile.model_dump(exclude_none=True)
                     if body.policy_profile
@@ -1049,6 +1050,7 @@ async def api_status() -> StatusResponse:
         program_count=result.program_count,
         client_count=len(client_ids),
         client_ids=client_ids,
+        agent_enabled=is_agent_enabled(),
         universities=[
             {
                 "name": u.name,

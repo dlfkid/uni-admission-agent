@@ -195,6 +195,10 @@ class AgentRunRequest(BaseModel):
         default=None,
         description="Optional runtime override: legacy or pydanticai",
     )
+    autonomous: bool = Field(
+        default=False,
+        description="When True, agent auto-crawls eligible candidates; when False, returns candidates for external review",
+    )
     policy_profile: Optional[PolicyProfilePayload] = Field(
         default=None,
         description="Optional per-request policy profile overrides from client",
@@ -413,6 +417,7 @@ class StatusResponse(BaseModel):
     program_count: int = 0
     client_count: int = Field(default=0, description="Number of currently connected browser clients")
     client_ids: List[str] = Field(default_factory=list, description="List of connected client identifiers")
+    agent_enabled: bool = Field(default=False, description="Whether agent runtime is enabled on server")
     universities: List[Dict[str, Any]] = Field(default_factory=list)
 
 

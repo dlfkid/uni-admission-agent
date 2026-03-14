@@ -83,6 +83,8 @@ import {
     tokenDisplay,
     urlDisplay,
     yearInput,
+    agentModeSection,
+    agentModeEnabledCheckbox,
 } from "./popup/dom";
 import { initConfigFlow } from "./popup/configFlow";
 import { initExportFlow } from "./popup/exportFlow";
@@ -118,12 +120,14 @@ const TAXONOMY_HINT_TOP_K_KEY = "crawl_taxonomy_hint_top_k";
 const TAXONOMY_OVERRIDE_ENABLED_KEY = "crawl_taxonomy_override_enabled";
 const BROWSER_AUTOMATION_ENABLED_KEY = "crawl_browser_automation_enabled";
 const BROWSER_AUTOMATION_CONCURRENCY_KEY = "crawl_browser_automation_concurrency";
+const AGENT_MODE_ENABLED_KEY = "crawl_agent_mode_enabled";
 const DETAIL_BATCH_SIZE = 10;
 
 // Slug autocomplete state
 let cachedUniversities: UniversityOption[] = [];
 let activeDropdownIndex = -1;
 let monitorFlow: ReturnType<typeof initMonitorFlow> | null = null;
+let serverAgentEnabled = false;  // Whether server has agent runtime enabled
 
 // Helper to disable/enable form
 function setFormEnabled(enabled: boolean) {
@@ -332,7 +336,20 @@ function restoreCachedPreferences() {
     const clampedConcurrency = clampAutomationConcurrency(cachedConcurrencyValue);
     automationConcurrencyInput.value = String(clampedConcurrency);
 
+    // Restore agent mode preference (will only be shown if server supports it)
+    const cachedAgentModeEnabled = localStorage.getItem(AGENT_MODE_ENABLED_KEY);
+    agentModeEnabledCheckbox.checked = cachedAgentModeEnabled === "true";
+
     updateTaxonomySettingsVisibility();
+}
+
+function updateAgentModeSectionVisibility(): void {
+    if (serverAgentEnabled) {
+        agentModeSection.classList.remove("hidden");
+    } else {
+        agentModeSection.classList.add("hidden");
+        agentModeEnabledCheckbox.checked = false;
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -400,6 +417,10 @@ automationConcurrencyInput.addEventListener("blur", () => {
     localStorage.setItem(BROWSER_AUTOMATION_CONCURRENCY_KEY, String(clamped));
 });
 
+agentModeEnabledCheckbox.addEventListener("change", () => {
+    localStorage.setItem(AGENT_MODE_ENABLED_KEY, String(agentModeEnabledCheckbox.checked));
+});
+
 /**
  * Update the displayed URL from the current active tab.
  * Called on init and whenever tab changes.
@@ -452,6 +473,20 @@ async function init() {
 
     // Initialize logs toggle state
     initLogsToggle();
+
+    // Check server status to see if agent mode is available
+    try {
+        const statusRes = await fetch(`${API_BASE}/status`);
+        if (statusRes.ok) {
+            const statusData = await statusRes.json();
+            serverAgentEnabled = Boolean(statusData.agent_enabled);
+            updateAgentModeSectionVisibility();
+        }
+    } catch (err) {
+        console.warn("Failed to check server agent status:", err);
+        serverAgentEnabled = false;
+        updateAgentModeSectionVisibility();
+    }
 
     // Load university slugs for autocomplete
     await loadUniversities();
@@ -931,6 +966,7 @@ sendBtn.addEventListener("click", async () => {
     const pageType = pageTypeSelect.value;
     const exportMd = exportMdCheckbox.checked;
     const exportPath = exportPathInput.value.trim();
+    const useAgentMode = serverAgentEnabled && agentModeEnabledCheckbox.checked;
 
     if (!slug || !year || !url || url.startsWith("(")) {
         appendPreflightLog("Input validation failed: invalid slug/year/url.");
@@ -953,6 +989,33 @@ sendBtn.addEventListener("click", async () => {
     }
 
     sendBtn.disabled = true;
+
+    // Agent mode: use /agent/run with autonomous=true
+    if (useAgentMode) {
+        appendPreflightLog("🤖 Agent mode enabled; submitting to /agent/run.");
+        sendBtn.textContent = "Agent running…";
+
+        try {
+            const taskId = await submitAgentRun({
+                url,
+                slug,
+                year,
+                pageType,
+            });
+            appendPreflightLog(`Agent task submitted: ${taskId}`);
+            monitorFlow?.clearBatchSummary();
+            monitorFlow?.startMonitoring(taskId);
+        } catch (err) {
+            appendPreflightLog(`Agent run failed: ${String(err)}`);
+            showStatus(String(err), "error");
+        } finally {
+            sendBtn.disabled = false;
+            sendBtn.textContent = "Start Crawl";
+        }
+        return;
+    }
+
+    // Normal mode: analyze page first
     sendBtn.textContent = "Reading page…";
     appendPreflightLog("Reading current tab HTML content…");
 
@@ -1105,6 +1168,58 @@ async function submitCrawl(opts: {
     const data = await res.json();
     if (!data.task_id) {
         throw new Error("Missing task_id from /crawl response");
+    }
+    return data.task_id as string;
+}
+
+/**
+ * Submit an agent orchestration job to /agent/run.
+ * Agent mode handles page analysis and candidate selection autonomously.
+ */
+async function submitAgentRun(opts: {
+    url: string;
+    slug: string;
+    year: number;
+    pageType: string;
+}): Promise<string> {
+    const taxonomyOptions = getTaxonomyOptions();
+    const payload = {
+        url: opts.url,
+        univ_slug: opts.slug,
+        year: opts.year,
+        page_type_hint: opts.pageType,
+        runtime: "pydanticai",
+        autonomous: true,  // Extension uses autonomous mode (server-side LLM drives all decisions)
+        policy_profile: {
+            taxonomy_keep_threshold: taxonomyOptions.lowThreshold,
+            taxonomy_auto_threshold: taxonomyOptions.highThreshold,
+            auto_run_max_candidates: taxonomyOptions.hintTopK * 10,
+        },
+    };
+
+    const res = await fetch(`${API_BASE}/agent/run`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+    });
+
+    setFormEnabled(false);
+
+    if (res.status === 409) {
+        const detail = await res.json().catch(() => ({}));
+        const message = detail.detail || "Agent runtime is disabled or a task is already running.";
+        showStatus(message, "error");
+        await init();
+        throw new Error(message);
+    }
+
+    if (!res.ok) {
+        throw new Error(`Server error: ${res.status}`);
+    }
+
+    const data = await res.json();
+    if (!data.task_id) {
+        throw new Error("Missing task_id from /agent/run response");
     }
     return data.task_id as string;
 }
