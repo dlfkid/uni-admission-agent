@@ -13,8 +13,10 @@ Functions:
 """
 
 import asyncio
+import importlib
 import logging
 import uuid
+from types import SimpleNamespace
 from typing import Any, Callable, Optional, List
 
 from pydantic import BaseModel, Field
@@ -46,6 +48,7 @@ from src.services.subject_taxonomy import get_subject_taxonomy_service
 from src.storage.db_manager import DatabaseManager
 from src.storage.exporter import ExcelExporter
 from src.storage.importer import ExcelImporter
+from src.agent_runtime.base import AgentRequest
 
 logger = logging.getLogger(__name__)
 
@@ -627,6 +630,52 @@ async def resume_crawl_job(
     )
 
 
+async def run_agent_crawl(
+    *,
+    url: str,
+    univ_slug: str,
+    year: int,
+    page_type_hint: str = "auto",
+    runtime_mode: Optional[str] = None,
+    policy_profile: Optional[dict[str, Any]] = None,
+    client_id: Optional[str] = None,
+    autonomous: bool = False,
+) -> dict[str, Any]:
+    """Run crawl orchestration via configured agent runtime."""
+    # Lazy import: runtime_factory → pydanticai_runtime → crawler forms a
+    # circular dependency chain.  Breaking it here (the less-used direction)
+    # keeps the hot path (direct crawler imports) free of lazy-import noise.
+    runtime_factory = importlib.import_module("src.agent_runtime.runtime_factory")
+    build_agent_runtime = getattr(runtime_factory, "build_agent_runtime")
+
+    runtime_config = None
+    if runtime_mode:
+        runtime_config = SimpleNamespace(runtime=runtime_mode)
+
+    runtime = build_agent_runtime(config=runtime_config, bridge=None, model_adapter=None)
+    request_payload: dict[str, Any] = {
+        "url": str(url or "").strip(),
+        "univ_slug": str(univ_slug or "").strip().lower(),
+        "year": int(year),
+        "page_type_hint": str(page_type_hint or "auto").strip().lower() or "auto",
+    }
+    if policy_profile:
+        request_payload["policy_profile"] = dict(policy_profile)
+
+    response = await runtime.run(
+        AgentRequest(
+            task="crawl",
+            payload=request_payload,
+            context={
+                "entrypoint": "api",
+                "client_id": str(client_id).strip() if client_id else None,
+                "autonomous": bool(autonomous),
+            },
+        )
+    )
+    return response.model_dump(mode="json")
+
+
 def ingest_program_records_external(
     *,
     univ_slug: str,
@@ -1032,7 +1081,7 @@ def _build_review_items(
         seen.add(program_id)
 
     if not ordered_summaries:
-        ordered_summaries = summaries
+        return []
 
     review_items: List[dict[str, Any]] = []
     for index, summary in enumerate(ordered_summaries, start=1):

@@ -26,6 +26,19 @@ class DetailPagePayload(BaseModel):
     )
 
 
+class PolicyProfilePayload(BaseModel):
+    """Client-side policy profile overrides for one crawl request."""
+
+    auto_run_max_candidates: Optional[int] = Field(default=None, ge=1, le=200)
+    taxonomy_auto_threshold: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    taxonomy_keep_threshold: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    prefer_browser_provider: Optional[str] = Field(default=None)
+    require_manual_review_when_low_confidence: Optional[bool] = Field(default=None)
+    llm_fallback_enabled: Optional[bool] = Field(default=None)
+    batch_size: Optional[int] = Field(default=None, ge=1, le=50)
+    detail_concurrency: Optional[int] = Field(default=None, ge=1, le=20)
+
+
 class CrawlRequest(BaseModel):
     """Body for ``POST /crawl``."""
 
@@ -146,6 +159,10 @@ class CrawlRequest(BaseModel):
         le=1.0,
         description="Minimum top-candidate score gap required to avoid fallback",
     )
+    policy_profile: Optional[PolicyProfilePayload] = Field(
+        default=None,
+        description="Optional per-request policy profile overrides from client",
+    )
 
     @model_validator(mode="after")
     def _validate_taxonomy_thresholds(self) -> "CrawlRequest":
@@ -162,6 +179,44 @@ class CrawlRequest(BaseModel):
         if normalized not in {"auto", "server", "client"}:
             raise ValueError("browser_provider must be one of: auto, server, client")
         return normalized
+
+
+class AgentRunRequest(BaseModel):
+    """Body for ``POST /agent/run``."""
+
+    url: str = Field(description="Starting URL to crawl via agent runtime")
+    univ_slug: str = Field(description="University slug (a-z0-9-)")
+    year: int = Field(description="Academic year (e.g. 2026)")
+    page_type_hint: str = Field(
+        default="auto",
+        description="Page type hint: auto/index/detail",
+    )
+    runtime: Optional[str] = Field(
+        default=None,
+        description="Optional runtime override: legacy or pydanticai",
+    )
+    autonomous: bool = Field(
+        default=False,
+        description="When True, agent auto-crawls eligible candidates; when False, returns candidates for external review",
+    )
+    policy_profile: Optional[PolicyProfilePayload] = Field(
+        default=None,
+        description="Optional per-request policy profile overrides from client",
+    )
+
+
+class AgentReviewConfirmRequest(BaseModel):
+    """Body for ``POST /agent/review/confirm``."""
+
+    task_id: str = Field(description="Existing agent task id with onhold review context")
+    selection_text: Optional[str] = Field(
+        default=None,
+        description="Optional free-form user selection text (e.g. 'continue 3,6,18')",
+    )
+    selected_indices: Optional[list[int]] = Field(
+        default=None,
+        description="Optional explicit onhold indices to continue",
+    )
 
 
 class AnalyzeRequest(BaseModel):
@@ -280,6 +335,25 @@ class CrawlResponse(BaseModel):
     message: str = Field(default="Task submitted")
 
 
+class AgentRunResponse(BaseModel):
+    """Response for ``POST /agent/run``."""
+
+    task_id: str = Field(description="Unique task identifier for agent task polling")
+    message: str = Field(default="Agent task submitted")
+
+
+class AgentReviewConfirmResponse(BaseModel):
+    """Response for ``POST /agent/review/confirm``."""
+
+    task_id: str = Field(description="Agent task identifier")
+    selected_indices: List[int] = Field(default_factory=list)
+    invalid_indices: List[int] = Field(default_factory=list)
+    invalid_tokens: List[str] = Field(default_factory=list)
+    selected_count: int = 0
+    discarded_count: int = 0
+    total_onhold: int = 0
+
+
 class TaskStatusResponse(BaseModel):
     """Response for ``GET /tasks/{task_id}``."""
 
@@ -341,6 +415,9 @@ class StatusResponse(BaseModel):
 
     university_count: int = 0
     program_count: int = 0
+    client_count: int = Field(default=0, description="Number of currently connected browser clients")
+    client_ids: List[str] = Field(default_factory=list, description="List of connected client identifiers")
+    agent_enabled: bool = Field(default=False, description="Whether agent runtime is enabled on server")
     universities: List[Dict[str, Any]] = Field(default_factory=list)
 
 

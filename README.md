@@ -132,6 +132,12 @@ The agent needs a database connection.
    # LLM Priority config (drag to reorder in Chrome extension)
    # Supported providers: deepseek, gemini, volcengine, custom
    LLM_PRIORITY_LIST=deepseek, gemini, volcengine, custom
+
+   # Agent runtime (opt-in, disabled by default)
+   AGENT_ENABLED=false
+   AGENT_RUNTIME=pydanticai
+   AGENT_ALLOW_INTERNAL_LLM=true
+   AGENT_ALLOW_EXTERNAL_LLM=true
    ```
 3. Set your `DATABASE_URL` and API keys in `.env`.
 
@@ -375,8 +381,14 @@ upgrade delivery path (`upgrade` → `db-migrate`).
 # Start the API + MCP server (default: 0.0.0.0:8910)
 ./adm-agent serve
 ./adm-agent serve --port 9000
+./adm-agent serve --agent
+./adm-agent serve --agent --dry-run
 
-# Stop a running server (from another terminal)
+# Start server as a background daemon (does not occupy the terminal)
+./adm-agent serve-install
+./adm-agent serve-install --agent --port 9000
+
+# Stop a running server (works for both serve and serve-install)
 ./adm-agent serve-stop
 ```
 
@@ -385,14 +397,31 @@ upgrade delivery path (`upgrade` → `db-migrate`).
 # Start the API + MCP server (default: 0.0.0.0:8910)
 .\adm-agent.exe serve
 .\adm-agent.exe serve --port 9000
+.\adm-agent.exe serve --agent
+.\adm-agent.exe serve --agent --dry-run
 
-# Stop a running server (from another terminal)
+# Start server as a background daemon
+.\adm-agent.exe serve-install
+.\adm-agent.exe serve-install --agent --port 9000
+
+# Stop a running server (works for both serve and serve-install)
 .\adm-agent.exe serve-stop
 ```
 
-`serve` writes a PID file to `~/.adm-agent/server.pid`. `serve-stop` reads that file 
-and sends a termination signal to the process, then removes the PID file. If the server 
+`serve` writes a PID file to `~/.adm-agent/server.pid`. `serve-stop` reads that file
+and sends a termination signal to the process, then removes the PID file. If the server
 is not running, `serve-stop` exits cleanly with an informational message.
+
+`serve-install` launches `serve` as a background daemon process and redirects output to
+`~/.adm-agent/server.log`. The daemon keeps running after the terminal is closed.
+`serve-stop` terminates both foreground and daemon server instances.
+
+Agent runtime is **disabled by default**. Enable explicitly with `--agent` or
+`AGENT_ENABLED=true`. Runtime mode can be selected via `AGENT_RUNTIME=legacy|pydanticai`
+(default `pydanticai`), and `pydanticai` mode automatically falls back to `legacy` on runtime errors.
+
+When running behind a reverse proxy (e.g. Cloudflare Tunnel), `serve` enables
+`proxy_headers=True` and `forwarded_allow_ips="*"` so the original client IP is preserved.
 
 ### REST API
 
@@ -435,6 +464,29 @@ curl -X POST http://localhost:8910/analyze \
 # Check task status
 curl http://localhost:8910/tasks/{task_id}
 
+# Run opt-in agent orchestration (requires AGENT_ENABLED=true)
+curl -X POST http://localhost:8910/agent/run \
+  -H "Content-Type: application/json" \
+  -d '{
+    "url": "https://example.com/courses",
+    "univ_slug": "hku",
+    "year": 2026,
+    "runtime": "pydanticai",
+    "policy_profile": {
+      "batch_size": 4,
+      "taxonomy_auto_threshold": 0.92
+    }
+  }'
+
+# Confirm low-confidence onhold selections for one finished agent task
+# (unselected indices are discarded by default)
+curl -X POST http://localhost:8910/agent/review/confirm \
+  -H "Content-Type: application/json" \
+  -d '{
+    "task_id": "<agent_task_id>",
+    "selection_text": "continue 3,6,18"
+  }'
+
 # List connected browser-automation clients
 curl http://localhost:8910/clients
 
@@ -468,6 +520,10 @@ Base toolset (always registered):
 - **`program_patch`** — Patch one persisted `program_id` from user feedback.
 - **`program_patch_batch`** — Batch patch multiple `program_id` items with partial-failure reporting.
 - **`help`** — Return CLI help text and command overview.
+
+Agent toolset (registered only when `AGENT_ENABLED=true`):
+- **`agent_run`** — Execute one agent orchestration request (`runtime=legacy|pydanticai`). Supports `autonomous=true` for fully autonomous mode (server-side LLM drives all decisions) or `autonomous=false` (default) for external-LLM-driven mode where the calling LLM controls orchestration. Accepts optional `client_id` to target a specific browser client.
+- **`agent_review_confirm`** — Confirm low-confidence onhold indices for an existing `agent_run` task.
 
 Internal-LLM toolset (registered only when server-side LLM is available):
 - **`analyze_internal_llm`**
@@ -504,6 +560,12 @@ Post-persist review loop:
 - Apply user corrections via `program_patch` / `program_patch_batch`.
 - Batch patch returns `updated_count`, `failed_items`, and `summary` (no all-or-nothing abort).
 
+Agent onhold batch-review loop:
+- `agent_run` auto-processes high-confidence candidates.
+- Low-confidence candidates are returned in `onhold_items`, sorted by `confidence` descending with dynamic indices (`1..N`).
+- Confirm via REST `POST /agent/review/confirm` or MCP `agent_review_confirm` using either `selection_text` or explicit `selected_indices`.
+- Unselected `onhold_items` are discarded by default.
+
 Recommended MCP interactive flow (single entrypoint):
 1. Call `runtime_status` to inspect available runtime path.
 2. Call `analyze` as the **only entrypoint**. Read:
@@ -528,14 +590,22 @@ uv run src/cmd/client_cli.py init
 uv run src/cmd/client_cli.py status
 uv run src/cmd/client_cli.py start --continuous
 uv run src/cmd/client_cli.py stop
+
+# Or run as a background daemon (does not occupy the terminal)
+uv run src/cmd/client_cli.py start-install
+uv run src/cmd/client_cli.py stop
+
 uv run src/cmd/client_cli.py version --verbose
 uv run src/cmd/client_cli.py upgrade --check
 ```
 
 For non-developer users, command-line launch is recommended (double-clicking executables may close immediately with no visible logs).
 
-`start --continuous` writes PID file: `~/.adm-agent/client.pid`  
+`start --continuous` writes PID file: `~/.adm-agent-client/client.pid`  
 `stop` reads that PID file and sends SIGTERM (or SIGKILL with `--force`).
+
+`start-install` launches `start --continuous` as a background daemon process and
+redirects output to `~/.adm-agent-client/client.log`. Use `stop` to terminate it.
 
 **Client bridge endpoint:**
 - WebSocket: `ws://<serve-host>:<serve-port>/clients/ws`
@@ -547,6 +617,7 @@ For non-developer users, command-line launch is recommended (double-clicking exe
 - Optional override: set env var `ADM_AGENT_CLIENT_FETCH_CMD` to a custom command template.
 - Template placeholders: `{url}`, `{page_type_hint}`
 - Command must output JSON to stdout (e.g. `{"html_content":"..."}` or `{"detail_pages_batch":[...]}`)
+- Client can carry local policy profile; when configured, RPC responses include `policy_profile`.
 
 Default fetch command:
 ```bash

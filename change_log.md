@@ -1,5 +1,60 @@
 # Change Log (Consolidated)
 
+## 2026-03-11
+
+### PydanticAI Agent Runtime Evolution (Opt-In)
+- Added explicit default-off agent switch:
+  - `is_agent_enabled()` runtime helper
+  - CLI: `serve --agent` and `serve --dry-run`
+  - env: `AGENT_ENABLED=true|false`
+- Added runtime abstraction and selection:
+  - `AgentRuntime` typed contract
+  - `LegacyRuntime` and `PydanticAIRuntime`
+  - runtime factory via `AGENT_RUNTIME=legacy|pydanticai`
+- Added automatic runtime fallback:
+  - `PydanticAIRuntime` falls back to `LegacyRuntime` on runtime exceptions
+
+### Agent Bridge + Skill Contract Layer
+- Added `src/agent_bridge` typed contracts and wrappers:
+  - `ServeToolBridge` (`analyze_page`)
+  - `ClientAutomationBridge` (`fetch_browser_payload`)
+- Added typed skill contracts and registry (`src/agent_runtime/skills`):
+  - required skill names registered (`analyze_page_skill`, `crawl_detail_batch_skill`, etc.)
+  - validated `input_model` / `output_model` execution path
+
+### Policy Profile + Provider Adapter
+- Added agent policy merge/normalization:
+  - precedence: `request > client > server`
+  - threshold clamp and warning reporting
+- Added model provider adapter for internal/external modes:
+  - explicit `AgentConfigError` for disabled modes
+  - factory integration helper in `src/agents/factory.py`
+
+### Agent API/MCP Entrypoints
+- Added REST endpoint: `POST /agent/run` (returns task id, gated by `AGENT_ENABLED`)
+- Added MCP tool: `agent_run` (registered only when `AGENT_ENABLED=true`)
+- Kept existing REST/MCP base tool behavior unchanged when agent runtime is disabled
+
+### Agent Onhold Batch Review
+- Added low-confidence onhold models and dynamic index selection parser:
+  - `src/agent_runtime/review_models.py`
+  - `src/agent_runtime/review_selection.py`
+- Upgraded `PydanticAIRuntime` orchestration:
+  - auto-process high-confidence candidates
+  - return `status=wait_user_selection` with confidence-desc `onhold_items`
+- Added confirmation service:
+  - `run_agent_review_confirmation(...)` processes selected indices only
+  - unselected low-confidence items are discarded by default
+- Added review confirmation entrypoints:
+  - REST: `POST /agent/review/confirm`
+  - MCP: `agent_review_confirm` (registered only when `AGENT_ENABLED=true`)
+
+### Client Policy Transport
+- Added `ClientPolicyProfile` and TOML persistence in client config
+- Added client runtime payload propagation:
+  - websocket RPC `rpc_result.payload.policy_profile`
+- Added `client fetch --json` payload enrichment with local policy profile
+
 ## 2026-03-07
 
 ### MCP Dual Toolset + Review Loop

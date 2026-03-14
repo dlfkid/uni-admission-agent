@@ -37,6 +37,7 @@ from src.core.paths import configure_playwright_path  # noqa: E402
 configure_playwright_path()
 
 from src.core.token_tracker import tracker
+from src.core.feature_flags import is_agent_enabled_env
 from src.services.crawler import (
     check_environment,
     crawl_url,
@@ -92,9 +93,12 @@ DATABASE & STATUS:
 LLM CONFIGURATION:
     llm-config Interactive wizard to configure LLM providers
     
+    
 SERVER OPERATIONS:
-    serve      Start API + MCP server (default: 0.0.0.0:8910)
-    serve-stop Stop running server instance
+    serve           Start API + MCP server (default: 0.0.0.0:8910)
+    serve-install   Start the server as a background daemon
+    serve-stop      Stop running server instance
+    runtime-status  Show server runtime status including connected clients
     
 SYSTEM MAINTENANCE:
     upgrade    Check for and install backend updates
@@ -510,6 +514,36 @@ def status(
     except Exception as e:
         logger.error("Failed to get status: %s", e)
         raise typer.Exit(code=1)
+@app.command(name="runtime-status")
+def runtime_status(
+    host: str = typer.Option("127.0.0.1", help="Server host"),
+    port: int = typer.Option(8910, help="Server port"),
+    verbose: bool = typer.Option(False, "--verbose", "-v"),
+) -> None:
+    """Show server runtime status (requires running server)."""
+    import requests
+
+    url = f"http://{host}:{port}/status"
+    try:
+        response = requests.get(url, timeout=5)
+        response.raise_for_status()
+        data = response.json()
+
+        typer.echo(f"\n🚀 Server Runtime Status ({host}:{port})")
+        typer.echo(f"  Connected Clients: {data.get('client_count', 0)}")
+        if data.get("client_ids"):
+            typer.echo(f"  Active Client IDs: {', '.join(data['client_ids'])}")
+        
+        typer.echo(f"\n📊 Database Stats:")
+        typer.echo(f"  Universities: {data.get('university_count', 0)}")
+        typer.echo(f"  Programs:     {data.get('program_count', 0)}")
+        
+    except requests.exceptions.ConnectionError:
+        typer.echo(f"❌ Could not connect to server at {url}. Is the server running?", err=True)
+        raise typer.Exit(code=1)
+    except Exception as e:
+        typer.echo(f"❌ Failed to get runtime status: {e}", err=True)
+        raise typer.Exit(code=1)
 
 
 @app.command(name="ingestion-jobs")
@@ -690,11 +724,31 @@ def taxonomy_export_cmd(
 def serve(
     host: str = typer.Option("0.0.0.0", help="Bind address"),
     port: int = typer.Option(8910, help="Port number"),
+    agent: bool = typer.Option(
+        False,
+        "--agent",
+        help="Enable agent runtime for this server process",
+    ),
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run",
+        help="Validate options and print mode without starting the server",
+    ),
     verbose: bool = typer.Option(False, "--verbose", "-v"),
 ) -> None:
     """Start the FastAPI + MCP server."""
     _setup_logging(verbose)
-    
+
+    if agent:
+        os.environ["AGENT_ENABLED"] = "true"
+
+    agent_enabled = is_agent_enabled_env()
+    typer.echo(f"Agent enabled: {agent_enabled}")
+
+    if dry_run:
+        typer.echo("Dry run mode: skipping browser/db checks and server startup.")
+        return
+
     # Pre-flight check: Ensure browser is available
     try:
         from playwright.sync_api import sync_playwright
@@ -729,12 +783,73 @@ def serve(
                 port=port,
                 reload=False,
                 log_level="debug" if verbose else "info",
+                proxy_headers=True,
+                forwarded_allow_ips="*",
             )
         finally:
             _remove_pid_file()
     except ImportError:
         typer.echo("❌ uvicorn not installed. Run: uv add uvicorn[standard]", err=True)
         raise typer.Exit(code=1)
+
+
+def _build_base_cmd() -> list[str]:
+    """Return the base argv to re-invoke this CLI (handles PyInstaller too)."""
+    if getattr(sys, "frozen", False):
+        return [sys.executable]
+    return [sys.executable, sys.argv[0]]
+
+
+_LOG_FILE = _PID_DIR / "server.log"
+
+
+@app.command(name="serve-install")
+def serve_install(
+    host: str = typer.Option("0.0.0.0", help="Bind address"),
+    port: int = typer.Option(8910, help="Port number"),
+    agent: bool = typer.Option(
+        False,
+        "--agent",
+        help="Enable agent runtime for this server process",
+    ),
+    verbose: bool = typer.Option(False, "--verbose", "-v"),
+) -> None:
+    """Start the server as a background daemon.
+
+    Launches ``serve`` in a detached process so it persists after the
+    terminal is closed.  Use ``serve-stop`` to terminate it.
+    """
+    # Refuse if server is already running
+    existing_pid = _read_pid_file()
+    if existing_pid is not None:
+        try:
+            os.kill(existing_pid, 0)
+            typer.echo(
+                f"⚠️  Server already running (PID {existing_pid}). "
+                "Stop it first with: serve-stop"
+            )
+            raise typer.Exit(code=1)
+        except (ProcessLookupError, OSError):
+            _remove_pid_file()
+
+    cmd = _build_base_cmd() + ["serve", "--host", host, "--port", str(port)]
+    if agent:
+        cmd.append("--agent")
+    if verbose:
+        cmd.append("--verbose")
+
+    _PID_DIR.mkdir(parents=True, exist_ok=True)
+    log_fh = open(_LOG_FILE, "a", encoding="utf-8")  # noqa: SIM115
+    proc = subprocess.Popen(
+        cmd,
+        stdout=log_fh,
+        stderr=log_fh,
+        start_new_session=True,
+    )
+
+    typer.echo(f"🚀 Server daemon started (PID {proc.pid})")
+    typer.echo(f"   Log: {_LOG_FILE}")
+    typer.echo("   Stop: uni-admission serve-stop")
 
 
 @app.command(name="serve-stop")

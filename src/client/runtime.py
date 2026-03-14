@@ -19,6 +19,9 @@ from src.client.native_browser import fetch_browser_payload
 logger = logging.getLogger(__name__)
 
 
+import urllib.request
+import urllib.error
+
 @dataclass
 class ClientConnectivity:
     """Connectivity probe result."""
@@ -30,12 +33,18 @@ class ClientConnectivity:
 
 def build_server_endpoint(config: ClientConfig) -> str:
     """Build human-readable server endpoint string."""
-    return f"{config.server_host}:{config.server_port}"
+    return config.server_url
 
 
 def build_ws_url(config: ClientConfig) -> str:
     """Build websocket URL for client bridge."""
-    return f"ws://{config.server_host}:{int(config.server_port)}/clients/ws"
+    url = config.server_url.rstrip("/")
+    if url.startswith("https://"):
+        return url.replace("https://", "wss://", 1) + "/clients/ws"
+    if url.startswith("http://"):
+        return url.replace("http://", "ws://", 1) + "/clients/ws"
+    # Fallback if no scheme
+    return f"ws://{url}/clients/ws"
 
 
 def render_fetch_command(template: str, *, url: str, page_type_hint: str) -> str:
@@ -50,16 +59,17 @@ async def probe_server(
     config: ClientConfig,
     timeout_seconds: float = 3.0,
 ) -> ClientConnectivity:
-    """Probe TCP reachability of configured serve endpoint."""
+    """Probe HTTP reachability of configured serve endpoint."""
     endpoint = build_server_endpoint(config)
+    url = endpoint.rstrip("/") + "/status"
+
+    def _probe() -> None:
+        req = urllib.request.Request(url, method="GET")
+        with urllib.request.urlopen(req, timeout=max(0.1, float(timeout_seconds))) as _:
+            pass
+
     try:
-        reader, writer = await asyncio.wait_for(
-            asyncio.open_connection(config.server_host, int(config.server_port)),
-            timeout=max(0.1, float(timeout_seconds)),
-        )
-        writer.close()
-        await writer.wait_closed()
-        del reader
+        await asyncio.to_thread(_probe)
         return ClientConnectivity(
             connected=True,
             message="reachable",
@@ -128,6 +138,16 @@ class ClientRuntime:
             message = _loads_json(raw)
             msg_type = str(message.get("type") or "").strip().lower()
             if msg_type == "rpc_request":
+                request_id = str(message.get("request_id") or "").strip()
+                action = str(message.get("action") or "").strip()
+                payload = message.get("payload") or {}
+                url = payload.get("url", "") if isinstance(payload, dict) else ""
+                logger.info(
+                    "[Client RPC] Received request: id=%s action=%s url=%s",
+                    request_id,
+                    action,
+                    url,
+                )
                 await self._handle_rpc_request(websocket, message)
 
     async def _heartbeat_loop(self, websocket: websockets.WebSocketClientProtocol) -> None:
@@ -174,9 +194,25 @@ class ClientRuntime:
             return
 
         try:
+            fetch_url = str(payload_dict.get("url") or "").strip()
+            fetch_hint = str(payload_dict.get("page_type_hint") or "auto")
+            logger.info("[Client RPC] Starting browser fetch: url=%s hint=%s", fetch_url, fetch_hint)
             response_payload = await self._fetch_browser_payload(
-                url=str(payload_dict.get("url") or "").strip(),
-                page_type_hint=str(payload_dict.get("page_type_hint") or "auto"),
+                url=fetch_url,
+                page_type_hint=fetch_hint,
+            )
+            response_payload = dict(response_payload or {})
+            if self.config.policy_profile is not None:
+                response_payload["policy_profile"] = self.config.policy_profile.model_dump(
+                    mode="json"
+                )
+            html_len = len(str(response_payload.get("html_content") or ""))
+            batch_count = len(response_payload.get("detail_pages_batch") or [])
+            logger.info(
+                "[Client RPC] Browser fetch completed: request_id=%s html=%d bytes, detail_batch=%d pages",
+                request_id,
+                html_len,
+                batch_count,
             )
             await self._send_json(
                 websocket,
@@ -187,6 +223,7 @@ class ClientRuntime:
                 },
             )
         except Exception as exc:
+            logger.error("[Client RPC] Browser fetch failed: request_id=%s error=%s", request_id, exc)
             await self._send_json(
                 websocket,
                 {

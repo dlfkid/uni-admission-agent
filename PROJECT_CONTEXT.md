@@ -17,8 +17,11 @@ Build a trusted, self-updating database of university admission requirements.
 - **Resilient Pydantic validation** with field validators for LLM response edge cases
 - **Chrome Extension** with interactive control, real-time monitoring, and database preview
 - **Serve ↔ Client browser automation bridge** (`/clients/ws`) for MCP/REST-triggered user-side automation
+- **Opt-in Agent Runtime layer** (`legacy` + `pydanticai`) with default-off safety gate
+- **Typed Agent Bridge contracts** (`src/agent_bridge`) decoupling runtime orchestration from core services
 - **Dual MCP toolsets**: base tools (external-LLM friendly) + conditional `_internal_llm` tools
 - **Runtime-aware MCP metadata**: provider resolution + client selection visibility
+- **Policy profile precedence and normalization** (`request > client > server`) with warning output
 - **Post-persist review-and-patch loop** with stable `program_id` correction path
 - **Stand-alone Executable** build for easy distribution
 
@@ -33,6 +36,7 @@ Build a trusted, self-updating database of university admission requirements.
 | **Data Validation** | `pydantic` (v2) with strict schema enforcement |
 | **Database** | `sqlmodel` (PostgreSQL default, SQLite fallback) |
 | **API / Control** | `fastapi`, `uvicorn`, `mcp` (Model Context Protocol) |
+| **Agent Runtime** | `pydantic` typed contracts + runtime factory (`legacy` / `pydanticai`) |
 | **Client Bridge** | FastAPI WebSocket + `websockets` runtime client |
 | **CLI** | `typer` |
 | **Build** | `pyinstaller` (Backend + Client), `npm` (Extension) |
@@ -168,6 +172,39 @@ Review-and-correction loop:
 - User corrections are applied via `program_patch` / `program_patch_batch`
 - Batch patch returns partial failures without aborting successful updates
 
+### 3.9 Opt-in Agent Runtime (PydanticAI Evolution)
+
+Agent orchestration is integrated as an optional runtime layer and does not replace
+existing crawl/analyze entrypoints.
+
+Enablement and runtime selection:
+- Default: disabled (`AGENT_ENABLED=false`)
+- CLI explicit enable: `serve --agent`
+- Runtime mode: `AGENT_RUNTIME=legacy|pydanticai` (default `legacy`)
+- Model mode gates:
+  - `AGENT_ALLOW_INTERNAL_LLM=true|false`
+  - `AGENT_ALLOW_EXTERNAL_LLM=true|false`
+
+Entrypoints:
+- REST: `POST /agent/run`
+- REST confirm: `POST /agent/review/confirm`
+- MCP: `agent_run` and `agent_review_confirm` tools (registered only when `AGENT_ENABLED=true`)
+
+Safety and fallback:
+- `PydanticAIRuntime` failure automatically falls back to `LegacyRuntime`
+- Base REST/MCP tools remain unchanged when agent mode is disabled
+
+Onhold batch-review behavior:
+- Index candidates are split by confidence policy (`auto-run` vs `onhold`).
+- Low-confidence candidates are persisted as `onhold_items` sorted by confidence descending and indexed per task (`1..N`).
+- Runtime returns `status=wait_user_selection` when onhold items exist.
+- Confirmation accepts dynamic index input (`selection_text` or `selected_indices`); unselected onhold items are discarded by default.
+
+Policy profile behavior:
+- Merge precedence: `request overrides > client profile > server defaults`
+- Invalid values are normalized with `warnings` in merge result
+- Client runtime can attach local `policy_profile` to browser RPC payloads
+
 ---
 
 ## 4. Build & Distribution System
@@ -198,6 +235,8 @@ Managed by `scripts/build_dist.py`:
 ```
 uni-admission-agent/
 ├── src/
+│   ├── agent_bridge/       # Typed bridge contracts for serve/client orchestration
+│   ├── agent_runtime/      # Agent runtime abstraction, skills, policy, provider adapter
 │   ├── agents/             # LLM logic (Router, Cleaner)
 │   ├── api/                # FastAPI + MCP Server
 │   ├── cmd/                # CLI Entry Points

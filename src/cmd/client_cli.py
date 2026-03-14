@@ -5,10 +5,12 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import platform
 from pathlib import Path
 import signal
+import subprocess
 import sys
 
 import typer
@@ -16,6 +18,7 @@ import typer
 from src.client.bootstrap_prompt import build_bootstrap_prompt
 from src.client.config import (
     ClientConfig,
+    ClientPolicyProfile,
     ensure_client_id,
     get_client_home,
     load_client_config,
@@ -95,15 +98,17 @@ def _print_upgrade_check(update_info: dict) -> None:
 @app.command()
 def init() -> None:
     """Initialize client config interactively."""
-    host = str(typer.prompt("Serve host", default="127.0.0.1")).strip()
-    port = int(typer.prompt("Serve port", default="8910"))
+    url_input = str(typer.prompt("Serve URL", default="http://127.0.0.1:8910")).strip()
+    if not url_input.startswith(("http://", "https://", "ws://", "wss://")):
+        url_input = f"http://{url_input}"
+        
     client_name = str(typer.prompt("Client name", default=_default_client_name())).strip()
     config = ClientConfig(
-        server_host=host or "127.0.0.1",
-        server_port=port,
+        server_url=url_input,
         client_name=client_name or _default_client_name(),
         client_id=ensure_client_id(None),
         workdir=str(Path.cwd()),
+        policy_profile=ClientPolicyProfile(),
     )
     path = save_client_config(config)
     typer.echo(f"Config saved: {path}")
@@ -120,7 +125,7 @@ def status() -> None:
 
     typer.echo(f"Client ID: {config.client_id}")
     typer.echo(f"Client Name: {config.client_name}")
-    typer.echo(f"Serve: {config.server_host}:{config.server_port}")
+    typer.echo(f"Serve URL: {config.server_url}")
     typer.echo(f"Workdir: {config.workdir}")
 
     connectivity = asyncio.run(ClientRuntime(config).start_once())
@@ -131,7 +136,7 @@ def status() -> None:
 @app.command()
 def start(
     once: bool = typer.Option(
-        True,
+        False,
         "--once/--continuous",
         help="Run one connectivity probe or continuous websocket runtime",
     ),
@@ -149,6 +154,7 @@ def start(
         typer.echo(f"{state}: {result.endpoint}")
         return
 
+    _configure_client_logging()
     typer.echo("Starting websocket runtime. Press Ctrl+C to stop.")
     _write_client_pid_file()
     try:
@@ -157,6 +163,77 @@ def start(
         typer.echo("Stopped.")
     finally:
         _remove_client_pid_file()
+
+
+def _build_client_base_cmd() -> list[str]:
+    """Return the base argv to re-invoke this CLI (handles PyInstaller too)."""
+    if getattr(sys, "frozen", False):
+        return [sys.executable]
+    return [sys.executable, sys.argv[0]]
+
+
+_CLIENT_LOG_FILE = get_client_home() / "client.log"
+
+
+def _configure_client_logging() -> None:
+    """Set up logging to both stderr and client.log file."""
+    root = logging.getLogger()
+    root.setLevel(logging.INFO)
+    fmt = logging.Formatter(
+        "%(asctime)s %(levelname)-7s %(name)s  %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
+    # file handler
+    _CLIENT_LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
+    fh = logging.FileHandler(_CLIENT_LOG_FILE, encoding="utf-8")
+    fh.setLevel(logging.INFO)
+    fh.setFormatter(fmt)
+    root.addHandler(fh)
+    # stderr handler (visible in foreground mode)
+    sh = logging.StreamHandler()
+    sh.setLevel(logging.INFO)
+    sh.setFormatter(fmt)
+    root.addHandler(sh)
+
+
+@app.command(name="start-install")
+def start_install() -> None:
+    """Start the client as a background daemon.
+
+    Launches ``start --continuous`` in a detached process so it persists
+    after the terminal is closed.  Use ``stop`` to terminate it.
+    """
+    config = load_client_config()
+    if not config:
+        typer.echo("Client is not initialized. Run: adm-agent-client init", err=True)
+        raise typer.Exit(code=1)
+
+    existing_pid = _read_client_pid_file()
+    if existing_pid is not None:
+        try:
+            os.kill(existing_pid, 0)
+            typer.echo(
+                f"⚠️  Client already running (PID {existing_pid}). "
+                "Stop it first with: adm-agent-client stop"
+            )
+            raise typer.Exit(code=1)
+        except (ProcessLookupError, OSError):
+            _remove_client_pid_file()
+
+    cmd = _build_client_base_cmd() + ["start", "--continuous"]
+
+    log_dir = get_client_home()
+    log_dir.mkdir(parents=True, exist_ok=True)
+    proc = subprocess.Popen(
+        cmd,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+
+    typer.echo(f"🚀 Client daemon started (PID {proc.pid})")
+    typer.echo(f"   Log: {_CLIENT_LOG_FILE}")
+    typer.echo("   Stop: adm-agent-client stop")
 
 
 @app.command()
@@ -259,25 +336,18 @@ def bootstrap(
         "--emit-prompt",
         help="Emit prompt text for copy/paste into your LLM tool",
     ),
-    host: str = typer.Option(
+    url: str = typer.Option(
         "",
-        "--host",
-        help="Override serve host in generated prompt",
-    ),
-    port: int = typer.Option(
-        0,
-        "--port",
-        help="Override serve port in generated prompt",
+        "--url",
+        help="Override serve URL in generated prompt",
     ),
 ) -> None:
     """Generate a setup prompt for external LLM tools."""
     config = load_client_config()
-    resolved_host = str(host or (config.server_host if config else "127.0.0.1")).strip()
-    resolved_port = int(port or (config.server_port if config else 8910))
+    resolved_url = str(url or (config.server_url if config else "http://127.0.0.1:8910")).strip()
     prompt = build_bootstrap_prompt(
         target=target,
-        host=resolved_host,
-        port=resolved_port,
+        server_url=resolved_url,
     )
     if emit_prompt:
         typer.echo(prompt)
@@ -307,6 +377,9 @@ def fetch(
         browser_path=str(browser_path or "").strip() or None,
         debug_port=int(debug_port),
     )
+    config = load_client_config()
+    if config and config.policy_profile is not None:
+        payload["policy_profile"] = config.policy_profile.model_dump(mode="json")
     if json_output:
         typer.echo(json.dumps(payload, ensure_ascii=False))
         return
