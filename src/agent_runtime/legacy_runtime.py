@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from src.agent_runtime.base import AgentRequest, AgentResponse
+
+logger = logging.getLogger(__name__)
 
 
 class LegacyRuntime:
@@ -21,6 +24,7 @@ class LegacyRuntime:
         self.model_adapter = model_adapter
 
     async def run(self, request: AgentRequest) -> AgentResponse:
+        logger.info("[Agent] Legacy runtime: executing fallback for task=%s", request.task)
         return AgentResponse(
             status="done",
             runtime_used=self.name,

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import platform
 from pathlib import Path
@@ -153,6 +154,7 @@ def start(
         typer.echo(f"{state}: {result.endpoint}")
         return
 
+    _configure_client_logging()
     typer.echo("Starting websocket runtime. Press Ctrl+C to stop.")
     _write_client_pid_file()
     try:
@@ -171,6 +173,27 @@ def _build_client_base_cmd() -> list[str]:
 
 
 _CLIENT_LOG_FILE = get_client_home() / "client.log"
+
+
+def _configure_client_logging() -> None:
+    """Set up logging to both stderr and client.log file."""
+    root = logging.getLogger()
+    root.setLevel(logging.INFO)
+    fmt = logging.Formatter(
+        "%(asctime)s %(levelname)-7s %(name)s  %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
+    # file handler
+    _CLIENT_LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
+    fh = logging.FileHandler(_CLIENT_LOG_FILE, encoding="utf-8")
+    fh.setLevel(logging.INFO)
+    fh.setFormatter(fmt)
+    root.addHandler(fh)
+    # stderr handler (visible in foreground mode)
+    sh = logging.StreamHandler()
+    sh.setLevel(logging.INFO)
+    sh.setFormatter(fmt)
+    root.addHandler(sh)
 
 
 @app.command(name="start-install")
@@ -201,11 +224,10 @@ def start_install() -> None:
 
     log_dir = get_client_home()
     log_dir.mkdir(parents=True, exist_ok=True)
-    log_fh = open(_CLIENT_LOG_FILE, "a", encoding="utf-8")  # noqa: SIM115
     proc = subprocess.Popen(
         cmd,
-        stdout=log_fh,
-        stderr=log_fh,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
         start_new_session=True,
     )
 

@@ -31,6 +31,7 @@ class _CrawlPlan:
     profile: PolicyProfile
     merged_policy: PolicyMergeResult
     trace: list[dict[str, Any]]
+    browser_provider_override: str | None = None
 
 
 class PydanticAIRuntime:
@@ -67,18 +68,50 @@ class PydanticAIRuntime:
 
     async def _run_agent(self, request: AgentRequest) -> AgentResponse:
         """Execute one request through orchestrated crawl + onhold review workflow."""
+        logger.info("[Agent] Starting agent orchestration for task: %s", request.task)
+
         if str(request.task or "").strip().lower() != "crawl":
+            logger.info("[Agent] Non-crawl task detected, skipping orchestration")
             return self._non_crawl_response(request)
 
         plan = self._plan_crawl_request(request)
+        logger.info(
+            "[Agent] Crawl plan created: url=%s, univ=%s, year=%s, page_type_hint=%s",
+            plan.url,
+            plan.univ_slug,
+            plan.year,
+            plan.page_type_hint,
+        )
+
         missing_fields = self._missing_required_fields(plan)
         if missing_fields:
+            logger.info("[Agent] Missing required fields: %s", missing_fields)
             return self._missing_fields_response(plan, missing_fields)
 
         detected_page_type, analysis_result = await self._detect_page_type(plan)
-        if detected_page_type != "index":
+        logger.info("[Agent] Page type detected: %s", detected_page_type)
+
+        has_analysis_links = bool(
+            analysis_result
+            and any(isinstance(item, dict) for item in (analysis_result.get("links") or []))
+        )
+
+        if detected_page_type == "index" and has_analysis_links:
+            logger.info("[Agent] Executing index flow with %d analyzed links", len(analysis_result.get("links", [])))
+            return await self._run_index_flow(plan, analysis_result)
+
+        if detected_page_type == "detail":
+            logger.info("[Agent] Executing detail flow for single page")
             return await self._run_detail_flow(plan, detected_page_type)
-        return await self._run_index_flow(plan, analysis_result)
+
+        # Analysis failed or returned no links — delegate to the full
+        # ingestion pipeline which has its own robust HTML fetching,
+        # page-type detection, and processing logic.
+        logger.info(
+            "[Agent] Analysis unavailable, delegating to pipeline flow (hint=%s)",
+            detected_page_type,
+        )
+        return await self._run_pipeline_flow(plan, detected_page_type)
 
     def _non_crawl_response(self, request: AgentRequest) -> AgentResponse:
         return AgentResponse(
@@ -172,10 +205,62 @@ class PydanticAIRuntime:
             if plan.page_type_hint == "auto":
                 detected_page_type = str(analysis_result.get("page_type") or "detail").strip().lower()
         except Exception as exc:  # pylint: disable=broad-except
-            logger.info("Agent pre-analysis unavailable, fallback to direct crawl path: %s", exc)
-            detected_page_type = "detail" if plan.page_type_hint == "auto" else plan.page_type_hint
+            logger.warning(
+                "[Agent] Pre-analysis failed: %s — falling back to URL heuristic",
+                exc,
+            )
+            # Mark client as failed so downstream flows skip the client
+            # browser and avoid a second 45-second timeout.
+            plan.browser_provider_override = "server"
+            if plan.page_type_hint == "auto":
+                detected_page_type = self._infer_page_type_from_url(plan.url)
+                logger.info("[Agent] URL heuristic result: %s", detected_page_type)
+            else:
+                detected_page_type = plan.page_type_hint
 
         return detected_page_type, analysis_result
+
+    # -- URL heuristic for fallback page-type detection -----------------------
+
+    _INDEX_URL_KEYWORDS: tuple[str, ...] = (
+        "programmes",
+        "programs",
+        "courses",
+        "find-your",
+        "find-a-",
+        "all-courses",
+        "all-programs",
+        "all-programmes",
+        "course-list",
+        "program-list",
+        "programme-list",
+        "our-courses",
+        "our-programmes",
+        "browse",
+        "catalog",
+        "catalogue",
+        "directory",
+        "listing",
+        "course-finder",
+        "programme-finder",
+        "program-finder",
+        "masters-courses",
+        "master-programs",
+    )
+
+    @classmethod
+    def _infer_page_type_from_url(cls, url: str) -> str:
+        """Heuristic page-type inference from URL path patterns.
+
+        Returns ``"index"`` if the URL strongly looks like a program listing,
+        ``"auto"`` otherwise (letting the pipeline decide).
+        """
+        url_lower = url.lower()
+        if any(kw in url_lower for kw in cls._INDEX_URL_KEYWORDS):
+            return "index"
+        # When uncertain, return "auto" so the pipeline can decide —
+        # never blindly default to "detail" for an unknown page.
+        return "auto"
 
     @staticmethod
     def _request_client_id(request: AgentRequest) -> str | None:
@@ -184,23 +269,89 @@ class PydanticAIRuntime:
         value = str(request.context.get("client_id") or "").strip()
         return value or None
 
+    @staticmethod
+    def _effective_browser_provider(plan: _CrawlPlan) -> str:
+        """Return browser provider, honouring any override from failed client attempts."""
+        return plan.browser_provider_override or plan.profile.prefer_browser_provider
+
     async def _run_detail_flow(self, plan: _CrawlPlan, detected_page_type: str) -> AgentResponse:
+        logger.info("[Agent] Detail flow: crawling %s", plan.url)
         plan.trace.append({"stage": "executing_detail_flow", "task": plan.request.task})
         crawl_result = await crawl_url(
             url=plan.url,
             univ_slug=plan.univ_slug,
             year=plan.year,
             page_type_hint="detail" if detected_page_type not in {"index", "detail"} else detected_page_type,
-            browser_provider=plan.profile.prefer_browser_provider,
+            browser_provider=self._effective_browser_provider(plan),
             strict_client=False,
             candidate_taxonomy_filter_enabled=True,
             candidate_taxonomy_filter_threshold=plan.profile.taxonomy_keep_threshold,
             candidate_taxonomy_filter_top_k=plan.profile.auto_run_max_candidates,
         )
+        logger.info(
+            "[Agent] Detail flow completed: imported=%d programs",
+            crawl_result.imported_count or 0,
+        )
         output = crawl_result.model_dump(mode="json")
         output.update(
             {
                 "detected_page_type": detected_page_type,
+                "auto_processed_count": output.get("imported_count") or 0,
+                "onhold_count": 0,
+                "onhold_items": [],
+                "discarded_count": 0,
+                "policy_warnings": plan.merged_policy.warnings,
+                "request_payload": self._request_payload(plan),
+            }
+        )
+        return AgentResponse(
+            status="done",
+            runtime_used=self.name,
+            trace=plan.trace,
+            output=output,
+        )
+
+    async def _run_pipeline_flow(self, plan: _CrawlPlan, page_type_hint: str) -> AgentResponse:
+        """Fallback flow delegating to the full ingestion pipeline.
+
+        Used when pre-analysis failed (no HTML, browser timeout, etc.)
+        so we have no link list for the agent's ranking logic.  The
+        pipeline has its own robust HTML fetching (with retries) and
+        page-type auto-detection, so it can recover where the
+        lightweight ``analyze_url_candidates`` could not.
+        """
+        effective_hint = page_type_hint if page_type_hint in {"index", "detail"} else "auto"
+        logger.info(
+            "[Agent] Pipeline flow: calling crawl_url with hint=%s for %s",
+            effective_hint,
+            plan.url,
+        )
+        plan.trace.append({
+            "stage": "pipeline_delegated_flow",
+            "page_type_hint": effective_hint,
+            "reason": "pre-analysis unavailable",
+        })
+
+        crawl_result = await crawl_url(
+            url=plan.url,
+            univ_slug=plan.univ_slug,
+            year=plan.year,
+            page_type_hint=effective_hint,
+            browser_provider=self._effective_browser_provider(plan),
+            strict_client=False,
+            candidate_taxonomy_filter_enabled=True,
+            candidate_taxonomy_filter_threshold=plan.profile.taxonomy_keep_threshold,
+            candidate_taxonomy_filter_top_k=plan.profile.auto_run_max_candidates,
+        )
+        logger.info(
+            "[Agent] Pipeline flow completed: imported=%d programs",
+            crawl_result.imported_count or 0,
+        )
+
+        output = crawl_result.model_dump(mode="json")
+        output.update(
+            {
+                "detected_page_type": effective_hint,
                 "auto_processed_count": output.get("imported_count") or 0,
                 "onhold_count": 0,
                 "onhold_items": [],
@@ -231,6 +382,7 @@ class PydanticAIRuntime:
     async def _run_index_flow(self, plan: _CrawlPlan, analysis_result: dict[str, Any]) -> AgentResponse:
         plan.trace.append({"stage": "executing_index_flow", "task": plan.request.task})
         links = [item for item in (analysis_result.get("links") or []) if isinstance(item, dict)]
+        logger.info("[Agent] Index flow: found %d candidate links", len(links))
 
         pipeline = IngestionPipeline()
         ranked_candidates = pipeline.rank_index_candidates(
@@ -239,13 +391,24 @@ class PydanticAIRuntime:
             auto_run_threshold=plan.profile.taxonomy_auto_threshold,
             top_k=plan.profile.auto_run_max_candidates,
         )
+        logger.info(
+            "[Agent] Candidate ranking complete: %d candidates (threshold=%.2f, auto_threshold=%.2f)",
+            len(ranked_candidates),
+            plan.profile.taxonomy_keep_threshold,
+            plan.profile.taxonomy_auto_threshold,
+        )
 
         autonomous = self._is_autonomous(plan.request)
+        logger.info("[Agent] Autonomous mode: %s", autonomous)
 
         if not autonomous:
             # External-LLM-driven mode: return all candidates for the
             # calling LLM to review and selectively crawl via
             # crawl / crawl_detail_batch.
+            logger.info(
+                "[Agent] Non-autonomous mode: returning %d candidates for external review",
+                len(ranked_candidates),
+            )
             plan.trace.append({"stage": "returning_candidates_for_review", "candidate_count": len(ranked_candidates)})
             return AgentResponse(
                 status="wait_user_selection",
@@ -273,7 +436,20 @@ class PydanticAIRuntime:
         # Autonomous mode: auto-crawl candidates above threshold
         auto_candidates = [item for item in ranked_candidates if bool(item.get("auto_run_eligible"))]
         onhold_items = build_onhold_items(self._build_onhold_rows(ranked_candidates))
+        logger.info(
+            "[Agent] Autonomous mode: %d auto-eligible candidates, %d onhold items",
+            len(auto_candidates),
+            len(onhold_items),
+        )
+
+        if auto_candidates:
+            logger.info("[Agent] Starting auto-crawl of %d candidates...", len(auto_candidates))
         auto_result_payload = await self._run_auto_candidates(plan, auto_candidates)
+        if auto_candidates:
+            logger.info(
+                "[Agent] Auto-crawl completed: imported=%d programs",
+                auto_result_payload.get("imported_count", 0),
+            )
 
         output = {
             "request_payload": self._request_payload(plan),
@@ -293,6 +469,7 @@ class PydanticAIRuntime:
         }
 
         if onhold_items:
+            logger.info("[Agent] Waiting for user selection on %d onhold items", len(onhold_items))
             plan.trace.append({"stage": "wait_user_selection", "onhold_count": len(onhold_items)})
             return AgentResponse(
                 status="wait_user_selection",
@@ -301,6 +478,7 @@ class PydanticAIRuntime:
                 output=output,
             )
 
+        logger.info("[Agent] Index flow completed successfully")
         plan.trace.append({"stage": "finalizing", "onhold_count": 0})
         return AgentResponse(
             status="done",
@@ -335,7 +513,7 @@ class PydanticAIRuntime:
             page_type_hint="index",
             selected_urls=selected_urls,
             selected_link_texts=selected_link_texts,
-            browser_provider=plan.profile.prefer_browser_provider,
+            browser_provider=self._effective_browser_provider(plan),
             strict_client=False,
             candidate_taxonomy_filter_enabled=False,
         )

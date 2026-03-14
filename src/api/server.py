@@ -327,6 +327,12 @@ async def _fetch_browser_payload_from_client(
         raise RuntimeError(f"Client websocket unavailable: {target_client_id}")
 
     request_id, _future = client_rpc_broker.create_pending(target_client_id)
+    logger.info(
+        "[RPC] Dispatching fetch_browser_payload to client=%s request_id=%s url=%s",
+        target_client_id,
+        request_id,
+        url,
+    )
     await websocket.send_json(
         {
             "type": "rpc_request",
@@ -339,6 +345,12 @@ async def _fetch_browser_payload_from_client(
         }
     )
     payload = await client_rpc_broker.wait_for_response(request_id)
+    logger.info(
+        "[RPC] Client %s responded to request_id=%s (payload keys: %s)",
+        target_client_id,
+        request_id,
+        list((payload or {}).keys()),
+    )
     return dict(payload or {})
 
 
@@ -625,6 +637,10 @@ async def api_agent_run(body: AgentRunRequest) -> AgentRunResponse:
         raise HTTPException(status_code=409, detail=str(e))
 
     async def _run_agent_job() -> None:
+        log_handler = TaskLogHandler(task_manager, task_id)
+        root_logger = logging.getLogger()
+        root_logger.addHandler(log_handler)
+
         task_manager.update_task(
             task_id,
             state=TaskState.RUNNING,
@@ -663,6 +679,8 @@ async def api_agent_run(body: AgentRunRequest) -> AgentRunResponse:
                 progress_percent=100.0,
                 progress_meta={"event": "agent_task_failed"},
             )
+        finally:
+            root_logger.removeHandler(log_handler)
 
     task_obj = asyncio.create_task(_run_agent_job())
     task_manager.register_task_object(task_id, task_obj)
@@ -901,6 +919,12 @@ async def ws_clients(websocket: WebSocket) -> None:
                 accepted = False
                 if request_id:
                     accepted = client_rpc_broker.resolve(request_id, payload_dict)
+                logger.info(
+                    "[RPC] Received rpc_result from client=%s request_id=%s accepted=%s",
+                    registered_client_id,
+                    request_id,
+                    accepted,
+                )
                 await websocket.send_json(
                     {
                         "type": "rpc_ack",
@@ -916,6 +940,12 @@ async def ws_clients(websocket: WebSocket) -> None:
                 accepted = False
                 if request_id:
                     accepted = client_rpc_broker.fail(request_id, error_msg)
+                logger.warning(
+                    "[RPC] Received rpc_error from client=%s request_id=%s error=%s",
+                    registered_client_id,
+                    request_id,
+                    error_msg,
+                )
                 await websocket.send_json(
                     {
                         "type": "rpc_ack",
