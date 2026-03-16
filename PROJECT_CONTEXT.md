@@ -180,7 +180,7 @@ existing crawl/analyze entrypoints.
 Enablement and runtime selection:
 - Default: disabled (`AGENT_ENABLED=false`)
 - CLI explicit enable: `serve --agent`
-- Runtime mode: `AGENT_RUNTIME=legacy|pydanticai` (default `legacy`)
+- Runtime mode: `AGENT_RUNTIME=legacy|pydanticai` (default `pydanticai`)
 - Model mode gates:
   - `AGENT_ALLOW_INTERNAL_LLM=true|false`
   - `AGENT_ALLOW_EXTERNAL_LLM=true|false`
@@ -343,7 +343,7 @@ DATABASE_URL=postgresql+psycopg2://user:pass@localhost:5432/uni_admission
 
 ## 8. Recent Updates & Bug Fixes
 
-### 8.0 Optimization Roadmap Status (2026-03-03)
+### 8.0 Optimization Roadmap Status (2026-03-15)
 
 - **Phase 1**: complete (data layer versioning + evidence chain)
 - **Phase 2**: complete (staged execution pipeline + resume + continue-depth unified path)

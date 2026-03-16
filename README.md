@@ -39,7 +39,7 @@ Entry Points                    Services Layer              Infrastructure
 - [Phase 3: Quality System Seed (golden samples + scoring + CI gate)](docs/changelog_phase3_quality_system.md)
 - [Consolidated Progress Log](change_log.md)
 
-## ✅ Current Optimization Status (2026-03-06)
+## ✅ Current Optimization Status (2026-03-15)
 - Phase 1 complete: versioned requirement data model and evidence chain are in place.
 - Phase 2 complete: crawl flow now runs through staged ingestion pipeline by default, including `--continue > 0` paths.
 - Phase 3 seed complete: golden sample collection, offline quality scoring, and CI regression gate are enabled.
@@ -677,6 +677,7 @@ The extension provides a UI to interact with the agent.
 - Configure settings (database URL, LLM keys) via the gear icon.
 - Enter a university slug (e.g., `hku`) and year, then start crawling.
 - Adjust per-task taxonomy overrides in popup (enable, low/high thresholds, top-k hints, override toggle).
+- **Agent Mode toggle**: When the server is started with `--agent`, an agent mode switch appears in the popup. Enable it to let the server-side LLM autonomously handle page analysis and candidate selection via `POST /agent/run` (`autonomous=true`). Preference is persisted across sessions.
 - **Preview Database** (👁 icon): Browse stored programs with filters by university and year.
 - **Export to Excel** (📥 icon): Download program data as XLSX files.
 
