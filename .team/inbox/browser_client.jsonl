@@ -1,0 +1,1 @@
+{"type": "message", "from": "browser_crawler", "content": "Please fetch HTML content from URL https://x with page type hint 'auto' using browser_automation_skill. Then analyze and extract program information from the page.", "timestamp": 1773858139.6877341}

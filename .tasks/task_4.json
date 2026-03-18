@@ -1,0 +1,9 @@
+{
+  "id": 4,
+  "subject": "Provide University Crawling Parameters",
+  "description": "To proceed with crawling, please provide: 1) Valid university admission URL (e.g., https://example.com/admissions), 2) University slug (e.g., 'mit'), 3) Academic year (e.g., 2024).",
+  "status": "pending",
+  "blockedBy": [],
+  "blocks": [],
+  "owner": ""
+}

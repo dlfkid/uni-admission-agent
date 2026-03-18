@@ -1,0 +1,16 @@
+{
+  "members": [
+    {
+      "name": "browser_crawler",
+      "role": "Crawl university admission pages using browser automation",
+      "status": "working",
+      "spawned_at": 1773858112.1498659
+    },
+    {
+      "name": "browser_client",
+      "role": "Browser Automation Client",
+      "status": "working",
+      "spawned_at": 1773858133.23124
+    }
+  ]
+}
