@@ -36,7 +36,7 @@ Build a trusted, self-updating database of university admission requirements.
 | **Data Validation** | `pydantic` (v2) with strict schema enforcement |
 | **Database** | `sqlmodel` (PostgreSQL default, SQLite fallback) |
 | **API / Control** | `fastapi`, `uvicorn`, `mcp` (Model Context Protocol) |
-| **Agent Runtime** | `pydantic` typed contracts + runtime factory (`legacy` / `pydanticai`) |
+| **Agent Runtime** | LLM-driven loop (s01–s12) + `pydantic` typed contracts + runtime factory (`legacy` / `pydanticai`) |
 | **Client Bridge** | FastAPI WebSocket + `websockets` runtime client |
 | **CLI** | `typer` |
 | **Build** | `pyinstaller` (Backend + Client), `npm` (Extension) |
@@ -194,6 +194,38 @@ Safety and fallback:
 - `PydanticAIRuntime` failure automatically falls back to `LegacyRuntime`
 - Base REST/MCP tools remain unchanged when agent mode is disabled
 
+#### Agent Capability Stack (s01–s12)
+
+The `pydanticai` runtime drives an LLM-controlled agent loop (`src/agent_runtime/loop.py`)
+with the following capability layers:
+
+| # | Capability | Module | Description |
+|:--|:-----------|:-------|:------------|
+| s01 | Agent Loop | `loop.py` | Core `while True` loop — LLM decides tool calls, exits when `stop_reason != "tool_use"` |
+| s02 | Tool Dispatch | `skills/registry.py` | SkillRegistry dispatch map with Pydantic-typed `SkillDef` inputs |
+| s03 | Todo Manager | `todo.py` | In-memory task tracker, exactly-one-in-progress rule, nag reminder every 3 iterations |
+| s04 | Subagents | `loop.py` | `task` tool spawns child `agent_loop()` with fresh context, no recursion |
+| s05 | Skill Loading | `skills/skill_loader.py` | Layer 1: short descriptions in system prompt; Layer 2: `load_skill` returns full SKILL.md |
+| s06 | Context Compact | `context_compact.py` | micro_compact (replace old results), auto_compact (LLM summary at >50k tokens), manual `compact` tool |
+| s07 | Task System | `task_manager.py` | File-persisted task DAG with `blockedBy`/`blocks` edges, auto-unblock on completion |
+| s08 | Background Tasks | `background.py` | `asyncio`-based background skill execution with notification queue drain |
+| s09 | Agent Teams | `team.py` | Persistent teammates with own agent loops, JSONL file-based `MessageBus` inboxes |
+| s10 | Team Protocols | `protocol.py` | Request-response FSM (pending→approved/rejected) with `request_id` correlation |
+| s11 | Autonomous Agents | `team.py` | WORK↔IDLE lifecycle, idle polling (inbox + unclaimed tasks), 60s idle timeout |
+| s12 | Worktree Isolation | `worktree.py` | Git worktree per task, `EventLog` (events.jsonl), index.json registry |
+
+Built-in tools (handled directly in `loop.py`, not through SkillRegistry):
+- `todo`, `load_skill`, `compact` — planning & knowledge
+- `task_create`, `task_update`, `task_list`, `task_get` — task DAG
+- `bg_run`, `bg_check` — background execution
+- `team_spawn`, `team_send`, `team_inbox` — team communication
+- `protocol_request`, `protocol_respond`, `protocol_status` — coordination protocols
+- `idle`, `claim_task` — autonomous lifecycle
+- `task` — subagent spawning
+- `worktree_create`, `worktree_run`, `worktree_list`, `worktree_keep`, `worktree_remove` — isolation
+
+LLM providers: DeepSeek, Custom, VolcEngine via `resolve_openai_client()` (OpenAI-compatible).
+
 Onhold batch-review behavior:
 - Index candidates are split by confidence policy (`auto-run` vs `onhold`).
 - Low-confidence candidates are persisted as `onhold_items` sorted by confidence descending and indexed per task (`1..N`).
@@ -236,7 +268,7 @@ Managed by `scripts/build_dist.py`:
 uni-admission-agent/
 ├── src/
 │   ├── agent_bridge/       # Typed bridge contracts for serve/client orchestration
-│   ├── agent_runtime/      # Agent runtime abstraction, skills, policy, provider adapter
+│   ├── agent_runtime/      # LLM-driven agent loop (s01–s12), skills, team, tasks, worktree
 │   ├── agents/             # LLM logic (Router, Cleaner)
 │   ├── api/                # FastAPI + MCP Server
 │   ├── cmd/                # CLI Entry Points
@@ -343,11 +375,12 @@ DATABASE_URL=postgresql+psycopg2://user:pass@localhost:5432/uni_admission
 
 ## 8. Recent Updates & Bug Fixes
 
-### 8.0 Optimization Roadmap Status (2026-03-15)
+### 8.0 Optimization Roadmap Status (2026-03-19)
 
 - **Phase 1**: complete (data layer versioning + evidence chain)
 - **Phase 2**: complete (staged execution pipeline + resume + continue-depth unified path)
 - **Phase 3**: complete for seed quality gates + taxonomy-guided name accuracy + PolyU benchmark coverage
+- **Agent Runtime (s01–s12)**: full capability stack — LLM-driven loop, task DAG, subagents, teams, protocols, background tasks, context compression, worktree isolation
 
 ### 8.1 Custom LLM Provider Integration (2026-02-28)
 
