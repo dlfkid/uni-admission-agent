@@ -7,7 +7,7 @@ from typing import Any
 
 from src.agent_runtime.base import AgentRequest, AgentResponse
 from src.agent_runtime.legacy_runtime import LegacyRuntime
-from src.agent_runtime.loop import agent_loop
+from src.agent_runtime.loop import agent_loop, SYSTEM_PROMPT
 from src.agent_runtime.skills.registry import build_skill_registry
 
 logger = logging.getLogger(__name__)
@@ -59,9 +59,19 @@ class PydanticAIRuntime:
         user_message = self._build_user_message(request)
         registry = build_skill_registry()
 
+        # Build system prompt with dry-run instruction if needed
+        system_prompt = SYSTEM_PROMPT
+        if request.context.get("dry_run"):
+            system_prompt += (
+                "\n\nIMPORTANT: dry_run mode is active. "
+                "When calling persist_programs_skill, set dry_run=true "
+                "in the payload. Do NOT attempt database writes."
+            )
+
         result = await agent_loop(
             user_message=user_message,
             registry=registry,
+            system_prompt=system_prompt,
         )
 
         logger.info(

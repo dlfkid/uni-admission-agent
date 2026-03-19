@@ -203,6 +203,10 @@ class AgentRunRequest(BaseModel):
         default=None,
         description="Optional per-request policy profile overrides from client",
     )
+    dry_run: bool = Field(
+        default=False,
+        description="Skip DB persistence; return parsed results only",
+    )
 
 
 class AgentReviewConfirmRequest(BaseModel):

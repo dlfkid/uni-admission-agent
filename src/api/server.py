@@ -656,6 +656,7 @@ async def api_agent_run(body: AgentRunRequest) -> AgentRunResponse:
                 page_type_hint=body.page_type_hint,
                 runtime_mode=body.runtime,
                 autonomous=body.autonomous,
+                dry_run=body.dry_run,
                 policy_profile=(
                     body.policy_profile.model_dump(exclude_none=True)
                     if body.policy_profile
