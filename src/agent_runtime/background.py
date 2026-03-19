@@ -11,6 +11,7 @@ import asyncio
 import json
 import logging
 import time
+from collections.abc import Awaitable
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -26,7 +27,7 @@ class BackgroundManager:
 
     def run(
         self,
-        coro: Any,
+        coro: Awaitable[Any],
         *,
         skill_name: str,
         args_preview: str = "",
@@ -50,7 +51,7 @@ class BackgroundManager:
         logger.info("[Background] Started %s: %s", task_id, skill_name)
         return task_id
 
-    async def _execute(self, task_id: str, coro: Any) -> None:
+    async def _execute(self, task_id: str, coro: Awaitable[Any]) -> None:
         """Run the coroutine and enqueue notification on completion."""
         try:
             result = await coro

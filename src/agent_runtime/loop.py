@@ -20,11 +20,14 @@ import asyncio
 import json
 import logging
 import os
-from typing import Any
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any
 
 from src.agent_runtime.background import BackgroundManager
 from src.agent_runtime.protocol import ProtocolManager
-from src.agent_runtime.team import MessageBus, TeammateManager
+
+if TYPE_CHECKING:
+    from src.agent_runtime.team import MessageBus, TeammateManager
 from src.agent_runtime.context_compact import (
     auto_compact,
     micro_compact,
@@ -785,6 +788,8 @@ async def agent_loop(
     todo = TodoManager()
     tasks = TaskManager()
     bg = BackgroundManager()
+    from src.agent_runtime.team import MessageBus, TeammateManager
+
     bus = _message_bus or MessageBus()
     team = TeammateManager(bus=bus)
     protocols = ProtocolManager()
@@ -983,40 +988,57 @@ def _handle_todo_call(fn_args_raw: str, todo: TodoManager) -> str:
         return json.dumps({"error": str(exc)})
 
 
+def _task_create(fn_args: dict[str, Any], tasks: TaskManager) -> str:
+    result = tasks.create(
+        subject=fn_args.get("subject", ""),
+        description=fn_args.get("description", ""),
+        blocked_by=fn_args.get("blocked_by"),
+    )
+    return json.dumps(result, ensure_ascii=False)
+
+
+def _task_update(fn_args: dict[str, Any], tasks: TaskManager) -> str:
+    result = tasks.update(
+        task_id=fn_args["task_id"],
+        status=fn_args.get("status"),
+        add_blocked_by=fn_args.get("add_blocked_by"),
+        add_blocks=fn_args.get("add_blocks"),
+    )
+    if result is None:
+        return json.dumps({"error": f"Task {fn_args['task_id']} not found"})
+    return json.dumps(result, ensure_ascii=False)
+
+
+def _task_list(_fn_args: dict[str, Any], tasks: TaskManager) -> str:
+    all_tasks = tasks.list_all()
+    return tasks.render() if all_tasks else "(no tasks)"
+
+
+def _task_get(fn_args: dict[str, Any], tasks: TaskManager) -> str:
+    result = tasks.get(fn_args["task_id"])
+    if result is None:
+        return json.dumps({"error": f"Task {fn_args['task_id']} not found"})
+    return json.dumps(result, ensure_ascii=False)
+
+
+_TASK_DISPATCH: dict[str, Callable[..., str]] = {
+    "task_create": _task_create,
+    "task_update": _task_update,
+    "task_list": _task_list,
+    "task_get": _task_get,
+}
+
+
 def _handle_task_graph_call(
     fn_name: str, fn_args_raw: str, tasks: TaskManager
 ) -> str:
     """Dispatch task_create/update/list/get calls (s07)."""
     try:
         fn_args = json.loads(fn_args_raw)
-
-        if fn_name == "task_create":
-            result = tasks.create(
-                subject=fn_args.get("subject", ""),
-                description=fn_args.get("description", ""),
-                blocked_by=fn_args.get("blocked_by"),
-            )
-            return json.dumps(result, ensure_ascii=False)
-        elif fn_name == "task_update":
-            result = tasks.update(
-                task_id=fn_args["task_id"],
-                status=fn_args.get("status"),
-                add_blocked_by=fn_args.get("add_blocked_by"),
-                add_blocks=fn_args.get("add_blocks"),
-            )
-            if result is None:
-                return json.dumps({"error": f"Task {fn_args['task_id']} not found"})
-            return json.dumps(result, ensure_ascii=False)
-        elif fn_name == "task_list":
-            all_tasks = tasks.list_all()
-            return tasks.render() if all_tasks else "(no tasks)"
-        elif fn_name == "task_get":
-            result = tasks.get(fn_args["task_id"])
-            if result is None:
-                return json.dumps({"error": f"Task {fn_args['task_id']} not found"})
-            return json.dumps(result, ensure_ascii=False)
-        else:
+        handler = _TASK_DISPATCH.get(fn_name)
+        if handler is None:
             return json.dumps({"error": f"Unknown task tool: {fn_name}"})
+        return handler(fn_args, tasks)
     except Exception as exc:
         logger.warning("[AgentLoop] %s failed: %s", fn_name, exc)
         return json.dumps({"error": str(exc)})
@@ -1255,41 +1277,56 @@ def _handle_team_inbox(
         return json.dumps({"error": str(exc)})
 
 
+def _wt_create(fn_args: dict[str, Any], wt: WorktreeManager) -> str:
+    result = wt.create(name=fn_args.get("name", ""), task_id=fn_args.get("task_id"))
+    return json.dumps(result, ensure_ascii=False)
+
+
+def _wt_run(fn_args: dict[str, Any], wt: WorktreeManager) -> str:
+    result = wt.run_in(
+        name=fn_args.get("name", ""),
+        command=fn_args.get("command", ""),
+        timeout=fn_args.get("timeout", 300),
+    )
+    return json.dumps(result, ensure_ascii=False)
+
+
+def _wt_list(_fn_args: dict[str, Any], wt: WorktreeManager) -> str:
+    return wt.render() if wt.list_all() else "(no worktrees)"
+
+
+def _wt_keep(fn_args: dict[str, Any], wt: WorktreeManager) -> str:
+    return json.dumps(wt.keep(name=fn_args.get("name", "")), ensure_ascii=False)
+
+
+def _wt_remove(fn_args: dict[str, Any], wt: WorktreeManager) -> str:
+    result = wt.remove(
+        name=fn_args.get("name", ""),
+        complete_task=fn_args.get("complete_task", False),
+        force=fn_args.get("force", False),
+    )
+    return json.dumps(result, ensure_ascii=False)
+
+
+_WT_DISPATCH: dict[str, Callable[..., str]] = {
+    "worktree_create": _wt_create,
+    "worktree_run": _wt_run,
+    "worktree_list": _wt_list,
+    "worktree_keep": _wt_keep,
+    "worktree_remove": _wt_remove,
+}
+
+
 def _handle_worktree_call(
     fn_name: str, fn_args_raw: str, worktrees: WorktreeManager
 ) -> str:
     """Dispatch worktree_create/run/list/keep/remove calls (s12)."""
     try:
         fn_args = json.loads(fn_args_raw)
-
-        if fn_name == "worktree_create":
-            result = worktrees.create(
-                name=fn_args.get("name", ""),
-                task_id=fn_args.get("task_id"),
-            )
-            return json.dumps(result, ensure_ascii=False)
-        elif fn_name == "worktree_run":
-            result = worktrees.run_in(
-                name=fn_args.get("name", ""),
-                command=fn_args.get("command", ""),
-                timeout=fn_args.get("timeout", 300),
-            )
-            return json.dumps(result, ensure_ascii=False)
-        elif fn_name == "worktree_list":
-            wt_list = worktrees.list_all()
-            return worktrees.render() if wt_list else "(no worktrees)"
-        elif fn_name == "worktree_keep":
-            result = worktrees.keep(name=fn_args.get("name", ""))
-            return json.dumps(result, ensure_ascii=False)
-        elif fn_name == "worktree_remove":
-            result = worktrees.remove(
-                name=fn_args.get("name", ""),
-                complete_task=fn_args.get("complete_task", False),
-                force=fn_args.get("force", False),
-            )
-            return json.dumps(result, ensure_ascii=False)
-        else:
+        handler = _WT_DISPATCH.get(fn_name)
+        if handler is None:
             return json.dumps({"error": f"Unknown worktree tool: {fn_name}"})
+        return handler(fn_args, worktrees)
     except Exception as exc:
         logger.warning("[AgentLoop] %s failed: %s", fn_name, exc)
         return json.dumps({"error": str(exc)})

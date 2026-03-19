@@ -11,6 +11,18 @@
       "role": "Browser Automation Client",
       "status": "working",
       "spawned_at": 1773858133.23124
+    },
+    {
+      "name": "browser_automation_teammate",
+      "role": "Crawl HTML content from https://x",
+      "status": "working",
+      "spawned_at": 1773887651.153331
+    },
+    {
+      "name": "browser-client-1",
+      "role": "Browser automation client for HTML crawling",
+      "status": "working",
+      "spawned_at": 1773887692.857833
     }
   ]
 }
