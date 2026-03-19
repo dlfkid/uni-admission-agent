@@ -1,0 +1,9 @@
+{
+  "id": 3,
+  "subject": "Gather university crawling parameters",
+  "description": "Collect valid admission URL, university slug, and academic year from user input to proceed with crawling",
+  "status": "pending",
+  "blockedBy": [],
+  "blocks": [],
+  "owner": ""
+}

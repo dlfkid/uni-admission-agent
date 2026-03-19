@@ -1,0 +1,9 @@
+{
+  "id": 5,
+  "subject": "Collect crawl parameters",
+  "description": "University slug, academic year, and admission URL are required to proceed with the crawl workflow. Await user input for these details.",
+  "status": "pending",
+  "blockedBy": [],
+  "blocks": [],
+  "owner": ""
+}

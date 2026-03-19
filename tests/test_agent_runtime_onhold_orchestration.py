@@ -2,68 +2,23 @@ import pytest
 
 from src.agent_runtime.base import AgentRequest
 from src.agent_runtime.pydanticai_runtime import PydanticAIRuntime
-from src.services.crawler import CrawlResult
 
 
 @pytest.mark.asyncio
-async def test_runtime_returns_wait_user_selection_with_onhold_items(monkeypatch):
-    async def _fake_analyze_url_candidates(**_kwargs):
+async def test_runtime_delegates_to_agent_loop(monkeypatch):
+    """The runtime now delegates to the LLM-driven agent loop."""
+
+    async def _fake_agent_loop(*, user_message, registry, **_kwargs):
+        del registry
         return {
-            "page_type": "index",
-            "links": [
-                {"url": "https://x/p1", "text": "P1"},
-                {"url": "https://x/p2", "text": "P2"},
-                {"url": "https://x/p3", "text": "P3"},
-            ],
+            "response": f"Processed: {user_message[:30]}",
+            "trace": [{"stage": "agent_done", "iteration": 2}],
+            "iterations": 2,
         }
 
-    class _DummyPipeline:
-        def rank_index_candidates(
-            self,
-            links,
-            *,
-            keep_threshold,
-            auto_run_threshold,
-            top_k,
-        ):
-            del links, keep_threshold, auto_run_threshold, top_k
-            return [
-                {
-                    "url": "https://x/p1",
-                    "text": "P1",
-                    "taxonomy_score": 0.97,
-                    "program_name_inferred": "Program One",
-                    "auto_run_eligible": True,
-                },
-                {
-                    "url": "https://x/p2",
-                    "text": "P2",
-                    "taxonomy_score": 0.81,
-                    "program_name_inferred": "Program Two",
-                    "auto_run_eligible": False,
-                },
-                {
-                    "url": "https://x/p3",
-                    "text": "P3",
-                    "taxonomy_score": 0.63,
-                    "program_name_inferred": "Program Three",
-                    "auto_run_eligible": False,
-                },
-            ]
-
-    async def _fake_crawl_url(**_kwargs):
-        del _kwargs
-        return CrawlResult(
-            imported_count=1,
-            univ_slug="uom",
-            year=2026,
-            review_items=[{"program_id": 1, "name_en": "Program One"}],
-            review_token="token-1",
-        )
-
-    monkeypatch.setattr("src.agent_runtime.pydanticai_runtime.analyze_url_candidates", _fake_analyze_url_candidates)
-    monkeypatch.setattr("src.agent_runtime.pydanticai_runtime.IngestionPipeline", _DummyPipeline)
-    monkeypatch.setattr("src.agent_runtime.pydanticai_runtime.crawl_url", _fake_crawl_url)
+    monkeypatch.setattr(
+        "src.agent_runtime.pydanticai_runtime.agent_loop", _fake_agent_loop
+    )
 
     runtime = PydanticAIRuntime()
     result = await runtime.run(
@@ -74,58 +29,47 @@ async def test_runtime_returns_wait_user_selection_with_onhold_items(monkeypatch
                 "univ_slug": "uom",
                 "year": 2026,
                 "page_type_hint": "index",
-                "policy_profile": {
-                    "taxonomy_keep_threshold": 0.6,
-                    "taxonomy_auto_threshold": 0.9,
-                },
             },
             context={"autonomous": True},
         )
     )
 
-    assert result.status == "wait_user_selection"
-    assert result.output["auto_processed_count"] == 1
-    assert result.output["onhold_count"] == 2
-    assert result.output["onhold_items"][0]["confidence"] >= result.output["onhold_items"][1]["confidence"]
-    assert [item["index"] for item in result.output["onhold_items"]] == [1, 2]
+    assert result.status == "done"
+    assert result.runtime_used == "pydanticai"
+    assert result.output["iterations"] == 2
+    assert "Processed:" in result.output["agent_response"]
 
 
 @pytest.mark.asyncio
-async def test_runtime_done_when_no_onhold_candidates(monkeypatch):
-    async def _fake_analyze_url_candidates(**_kwargs):
-        return {
-            "page_type": "index",
-            "links": [{"url": "https://x/p1", "text": "P1"}],
-        }
+async def test_runtime_builds_correct_user_message(monkeypatch):
+    """Verify the user message includes URL, slug, year, and hint."""
+    captured_messages: list[str] = []
 
-    class _DummyPipeline:
-        def rank_index_candidates(self, links, *, keep_threshold, auto_run_threshold, top_k):
-            del links, keep_threshold, auto_run_threshold, top_k
-            return [
-                {
-                    "url": "https://x/p1",
-                    "text": "P1",
-                    "taxonomy_score": 0.97,
-                    "auto_run_eligible": True,
-                }
-            ]
+    async def _capture_loop(*, user_message, registry, **_kwargs):
+        del registry
+        captured_messages.append(user_message)
+        return {"response": "ok", "trace": [], "iterations": 1}
 
-    async def _fake_crawl_url(**_kwargs):
-        del _kwargs
-        return CrawlResult(imported_count=1, univ_slug="uom", year=2026)
-
-    monkeypatch.setattr("src.agent_runtime.pydanticai_runtime.analyze_url_candidates", _fake_analyze_url_candidates)
-    monkeypatch.setattr("src.agent_runtime.pydanticai_runtime.IngestionPipeline", _DummyPipeline)
-    monkeypatch.setattr("src.agent_runtime.pydanticai_runtime.crawl_url", _fake_crawl_url)
+    monkeypatch.setattr(
+        "src.agent_runtime.pydanticai_runtime.agent_loop", _capture_loop
+    )
 
     runtime = PydanticAIRuntime()
-    result = await runtime.run(
+    await runtime.run(
         AgentRequest(
             task="crawl",
-            payload={"url": "https://x/index", "univ_slug": "uom", "year": 2026},
-            context={"autonomous": True},
+            payload={
+                "url": "https://example.com/programs",
+                "univ_slug": "ucl",
+                "year": 2026,
+                "page_type_hint": "auto",
+            },
         )
     )
 
-    assert result.status == "done"
-    assert result.output["onhold_count"] == 0
+    assert len(captured_messages) == 1
+    msg = captured_messages[0]
+    assert "https://example.com/programs" in msg
+    assert "ucl" in msg
+    assert "2026" in msg
+    assert "auto" in msg

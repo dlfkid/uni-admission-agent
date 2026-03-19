@@ -39,12 +39,13 @@ Entry Points                    Services Layer              Infrastructure
 - [Phase 3: Quality System Seed (golden samples + scoring + CI gate)](docs/changelog_phase3_quality_system.md)
 - [Consolidated Progress Log](change_log.md)
 
-## ✅ Current Optimization Status (2026-03-15)
+## ✅ Current Optimization Status (2026-03-19)
 - Phase 1 complete: versioned requirement data model and evidence chain are in place.
 - Phase 2 complete: crawl flow now runs through staged ingestion pipeline by default, including `--continue > 0` paths.
 - Phase 3 seed complete: golden sample collection, offline quality scoring, and CI regression gate are enabled.
 - Taxonomy-guided name accuracy is enabled for crawl requests (hint injection + optional high-confidence override).
 - Latest benchmark includes 4 cases (UCL/Manchester/Leeds/PolyU) and passes global threshold `0.60`.
+- **Agent Runtime (s01–s12)**: Full LLM-driven agent loop with tool dispatch, task DAG, subagents, team coordination, background execution, context compression, and git worktree isolation.
 
 ## Production Usage (No Code Required)
 
@@ -419,6 +420,25 @@ is not running, `serve-stop` exits cleanly with an informational message.
 Agent runtime is **disabled by default**. Enable explicitly with `--agent` or
 `AGENT_ENABLED=true`. Runtime mode can be selected via `AGENT_RUNTIME=legacy|pydanticai`
 (default `pydanticai`), and `pydanticai` mode automatically falls back to `legacy` on runtime errors.
+
+#### Agent Capabilities (s01–s12)
+
+When `pydanticai` runtime is active, the agent loop provides a full capability stack:
+
+| Capability | Description |
+|:-----------|:------------|
+| **s01 Agent Loop** | Core `while True` loop — LLM decides tool calls, exits on final answer |
+| **s02 Tool Dispatch** | Multi-tool dispatch via `SkillRegistry` with Pydantic-typed inputs |
+| **s03 Todo Manager** | In-memory task tracking with exactly-one-in-progress rule and nag reminders |
+| **s04 Subagents** | `task` tool spawns child agent loops with isolated context |
+| **s05 Skill Loading** | Two-layer knowledge: short descriptions in system prompt + on-demand `load_skill` |
+| **s06 Context Compact** | Three-layer compression: micro-compact, auto-compact (>50k tokens), manual `compact` tool |
+| **s07 Task System** | File-persisted task DAG with `blockedBy`/`blocks` dependency edges |
+| **s08 Background Tasks** | Async skill execution with notification queue injection |
+| **s09 Agent Teams** | Persistent teammates with JSONL mailbox communication |
+| **s10 Team Protocols** | Request-response FSM for structured coordination between teammates |
+| **s11 Autonomous Agents** | WORK/IDLE lifecycle with inbox polling, task claiming, idle timeout |
+| **s12 Worktree Isolation** | Git worktree per task with lifecycle event logging |
 
 When running behind a reverse proxy (e.g. Cloudflare Tunnel), `serve` enables
 `proxy_headers=True` and `forwarded_allow_ips="*"` so the original client IP is preserved.
