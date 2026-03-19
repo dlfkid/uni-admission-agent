@@ -1,0 +1,9 @@
+{
+  "id": 1,
+  "subject": "Ensure browser automation client is available for page fetching",
+  "description": "Resolve the issue where the browser automation client is unavailable, preventing page fetching.",
+  "status": "pending",
+  "blockedBy": [],
+  "blocks": [],
+  "owner": ""
+}

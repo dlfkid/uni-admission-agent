@@ -16,7 +16,6 @@ interface LinkSelectionFlowDeps {
     showStatus: ShowStatusFn;
     switchView: (view: "input" | "link-selection" | "monitor") => void;
     setFormEnabled: (enabled: boolean) => void;
-    getCurrentUrl: () => string;
     getSlug: () => string;
     getYear: () => number;
     getExportMd: () => boolean;
@@ -34,13 +33,12 @@ interface LinkSelectionFlowDeps {
 }
 
 export function initLinkSelectionFlow(deps: LinkSelectionFlowDeps): {
-    showLinkSelection: (links: LinkCandidate[], totalFound: number) => void;
+    showLinkSelection: (links: LinkCandidate[], totalFound: number, indexUrl: string) => void;
 } {
     const {
         showStatus,
         switchView,
         setFormEnabled,
-        getCurrentUrl,
         getSlug,
         getYear,
         getExportMd,
@@ -58,9 +56,11 @@ export function initLinkSelectionFlow(deps: LinkSelectionFlowDeps): {
     } = deps;
 
     let candidateLinks: LinkCandidate[] = [];
+    let capturedIndexUrl = "";
 
-    function renderLinkSelection(links: LinkCandidate[], totalFound: number) {
+    function renderLinkSelection(links: LinkCandidate[], totalFound: number, indexUrl: string) {
         void totalFound;
+        capturedIndexUrl = indexUrl;
         candidateLinks = links;
         linkListEl.innerHTML = "";
         selectAllLinksCheckbox.checked = true;
@@ -160,7 +160,7 @@ export function initLinkSelectionFlow(deps: LinkSelectionFlowDeps): {
 
         try {
             await runIndexBatches({
-                url: getCurrentUrl(),
+                url: capturedIndexUrl,
                 slug: getSlug(),
                 year: getYear(),
                 exportMd: getExportMd(),
@@ -191,6 +191,6 @@ export function initLinkSelectionFlow(deps: LinkSelectionFlowDeps): {
     });
 
     return {
-        showLinkSelection: renderLinkSelection,
+        showLinkSelection: (links, totalFound, indexUrl) => renderLinkSelection(links, totalFound, indexUrl),
     };
 }
