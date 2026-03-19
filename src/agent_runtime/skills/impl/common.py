@@ -39,6 +39,7 @@ def persist_programs_skill_handler(payload: PersistProgramsSkillInput) -> dict:
         univ_slug=payload.univ_slug,
         year=payload.year,
         programs=payload.programs,
+        dry_run=payload.dry_run,
     )
 
 
