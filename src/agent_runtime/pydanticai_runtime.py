@@ -7,7 +7,7 @@ from typing import Any
 
 from src.agent_runtime.base import AgentRequest, AgentResponse
 from src.agent_runtime.legacy_runtime import LegacyRuntime
-from src.agent_runtime.loop import agent_loop, SYSTEM_PROMPT
+from src.agent_runtime.loop import agent_loop, AgentPageTimeout, PAGE_TIMEOUT, SYSTEM_PROMPT
 from src.agent_runtime.skills.registry import build_skill_registry
 
 logger = logging.getLogger(__name__)

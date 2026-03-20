@@ -43,6 +43,12 @@ logger = logging.getLogger(__name__)
 
 MAX_ITERATIONS = 25
 NAG_INTERVAL = 3  # inject reminder after this many iterations without a todo update
+LLM_CALL_TIMEOUT = 480    # 8 minutes — single LLM API call
+PAGE_TIMEOUT = 900         # 15 minutes — entire agent_loop for one page
+
+
+class AgentPageTimeout(Exception):
+    """Raised when agent_loop exceeds PAGE_TIMEOUT."""
 
 _SKILL_LOADER = SkillLoader()
 
@@ -827,6 +833,7 @@ async def agent_loop(
     ]
     trace: list[dict[str, Any]] = []
     iterations_since_todo = 0
+    consecutive_timeouts = 0
 
     for iteration in range(1, max_iterations + 1):
         logger.info("[AgentLoop] Iteration %d — calling LLM", iteration)
@@ -852,14 +859,47 @@ async def agent_loop(
         # -- s03 nag reminder: inject into last tool result when overdue --
         _maybe_inject_nag(messages, iterations_since_todo, todo)
 
-        response = await client.chat.completions.create(
-            model=model,
-            messages=messages,
-            tools=tools or None,
-            max_tokens=32768,
-        )
+        try:
+            response = await asyncio.wait_for(
+                client.chat.completions.create(
+                    model=model,
+                    messages=messages,
+                    tools=tools or None,
+                    max_tokens=32768,
+                ),
+                timeout=LLM_CALL_TIMEOUT,
+            )
+        except asyncio.TimeoutError:
+            consecutive_timeouts += 1
+            logger.warning(
+                "[AgentLoop] LLM call timed out after %ds at iteration %d "
+                "(%d consecutive)",
+                LLM_CALL_TIMEOUT, iteration, consecutive_timeouts,
+            )
+            if consecutive_timeouts >= 2:
+                logger.error(
+                    "[AgentLoop] %d consecutive LLM timeouts — aborting loop",
+                    consecutive_timeouts,
+                )
+                return {
+                    "response": "",
+                    "trace": trace,
+                    "iterations": iteration,
+                    "todos": todo.items,
+                    "error": "consecutive LLM timeouts",
+                }
+            messages.append({
+                "role": "system",
+                "content": (
+                    "Your last LLM call timed out after 8 minutes. "
+                    "The context may be too large. Try a simpler approach "
+                    "or call compact to reduce context."
+                ),
+            })
+            continue
 
         choice = response.choices[0]
+        consecutive_timeouts = 0  # reset on successful call
         assistant_msg = choice.message
 
         # Detect output truncation (token limit hit)
