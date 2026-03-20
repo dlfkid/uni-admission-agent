@@ -2,8 +2,9 @@
 """E2E Agent Smoke Test.
 
 Exercises the full agent runtime (pydanticai mode) against a randomly
-selected golden-sample university. Runs detail + index page crawls in
-dry-run mode and outputs results for human quality judgment.
+selected golden-sample university. Starts a real uvicorn server + browser
+client, then runs detail + index page crawls in dry-run mode and outputs
+results for human quality judgment.
 
 Usage:
     uv run python scripts/e2e_agent_smoke.py
@@ -12,9 +13,11 @@ Usage:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import os
 import random
+import socket
 import sys
 import time
 from datetime import datetime, timezone
@@ -30,6 +33,7 @@ GOLDEN_CASES_DIR = PROJECT_ROOT / "golden_samples" / "cases"
 E2E_RESULTS_DIR = PROJECT_ROOT / "e2e_results"
 POLL_INTERVAL = 3  # seconds
 TIMEOUT = 8 * 60  # 8 minutes per test
+CLIENT_READY_TIMEOUT = 30  # seconds to wait for client registration
 
 
 # ---------------------------------------------------------------------------
@@ -236,6 +240,81 @@ async def run_single_test(
 
 
 # ---------------------------------------------------------------------------
+# Server + Client lifecycle
+# ---------------------------------------------------------------------------
+
+def find_free_port() -> int:
+    """Find an available TCP port."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+async def start_server(port: int) -> asyncio.Task[None]:
+    """Start uvicorn server as a background asyncio task."""
+    import uvicorn
+    from src.api.server import app
+
+    config = uvicorn.Config(
+        app,
+        host="127.0.0.1",
+        port=port,
+        log_level="warning",
+    )
+    server = uvicorn.Server(config)
+    task = asyncio.create_task(server.serve())
+    # Wait for server to start accepting connections
+    for _ in range(50):
+        await asyncio.sleep(0.2)
+        try:
+            with socket.create_connection(("127.0.0.1", port), timeout=0.5):
+                break
+        except OSError:
+            continue
+    else:
+        raise RuntimeError(f"Server did not start on port {port}")
+    print(f"  Server started on http://127.0.0.1:{port}")
+    return task
+
+
+async def start_client(server_url: str) -> asyncio.Task[None]:
+    """Start client runtime as a background asyncio task."""
+    from src.client.config import ClientConfig, ensure_client_id
+    from src.client.runtime import ClientRuntime
+
+    config = ClientConfig(
+        server_url=server_url,
+        client_name="e2e-smoke-client",
+        client_id=ensure_client_id(None),
+        workdir=str(PROJECT_ROOT),
+    )
+    runtime = ClientRuntime(config)
+    task = asyncio.create_task(runtime.run_forever())
+    print(f"  Client connecting to {server_url}")
+    return task
+
+
+async def wait_for_client(base_url: str) -> None:
+    """Poll GET /clients until at least one client is registered."""
+    import httpx
+
+    deadline = time.monotonic() + CLIENT_READY_TIMEOUT
+    async with httpx.AsyncClient(base_url=base_url) as client:
+        while time.monotonic() < deadline:
+            try:
+                resp = await client.get("/clients")
+                if resp.status_code == 200:
+                    clients = resp.json()
+                    if clients:
+                        print(f"  Client registered: {clients[0].get('client_name', '?')}")
+                        return
+            except Exception:
+                pass
+            await asyncio.sleep(0.5)
+    raise RuntimeError("Client did not register within timeout")
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -245,44 +324,56 @@ async def main() -> None:
 
     case_id = metadata["case_id"]
     univ_name = metadata["name"]
-    # Derive slug from case_id (e.g. "ucl_undergrad_anthropology" -> "ucl")
-    # or fall back to lowercased name
     univ_slug = case_id.split("_")[0] if "_" in case_id else univ_name.lower().replace(" ", "-")
     index_url = metadata["index_url"]
     detail_url = metadata["detail_url"]
     year = datetime.now(tz=timezone.utc).year
 
-    # Import app after env is loaded
-    from httpx import ASGITransport, AsyncClient
-    from src.api.server import app
+    # Start real server + client
+    port = find_free_port()
+    base_url = f"http://127.0.0.1:{port}"
 
-    transport = ASGITransport(app=app)  # type: ignore[arg-type]
+    print("\n--- Starting server + client ---")
+    server_task = await start_server(port)
+    client_task = await start_client(base_url)
+    await wait_for_client(base_url)
+    print("--- Ready ---\n")
 
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
-        total_start = time.monotonic()
+    import httpx
 
-        # Test 1: Detail page
-        detail_result = await run_single_test(
-            client,
-            label="Detail",
-            url=detail_url,
-            univ_slug=univ_slug,
-            year=year,
-            page_type_hint="detail",
-        )
+    try:
+        async with httpx.AsyncClient(base_url=base_url, timeout=30.0) as client:
+            total_start = time.monotonic()
 
-        # Test 2: Index page (max 3 candidates)
-        index_result = await run_single_test(
-            client,
-            label="Index",
-            url=index_url,
-            univ_slug=univ_slug,
-            year=year,
-            page_type_hint="index",
-            policy_profile={"auto_run_max_candidates": 3},
-        )
+            # Test 1: Detail page
+            detail_result = await run_single_test(
+                client,
+                label="Detail",
+                url=detail_url,
+                univ_slug=univ_slug,
+                year=year,
+                page_type_hint="detail",
+            )
 
-        total_duration = time.monotonic() - total_start
+            # Test 2: Index page (max 3 candidates)
+            index_result = await run_single_test(
+                client,
+                label="Index",
+                url=index_url,
+                univ_slug=univ_slug,
+                year=year,
+                page_type_hint="index",
+                policy_profile={"auto_run_max_candidates": 3},
+            )
+
+            total_duration = time.monotonic() - total_start
+    finally:
+        client_task.cancel()
+        server_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await client_task
+        with contextlib.suppress(asyncio.CancelledError):
+            await server_task
 
     # Save JSON results
     E2E_RESULTS_DIR.mkdir(parents=True, exist_ok=True)
@@ -300,7 +391,6 @@ async def main() -> None:
             k: v for k, v in index_result.items() if k != "raw_result"
         },
     }
-    # Add auto_run_max_candidates to index test
     archive["index_test"]["auto_run_max_candidates"] = 3
 
     result_path.write_text(
@@ -324,7 +414,6 @@ async def main() -> None:
     print(f"  Results saved: {result_path.relative_to(PROJECT_ROOT)}")
     print(f"{'=' * 50}")
 
-    # Exit code: 0 if both tests succeeded, 1 otherwise
     if detail_status != "DONE" or index_status != "DONE":
         sys.exit(1)
 
