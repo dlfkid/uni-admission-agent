@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import logging
+
 from src.agent_bridge.client_automation_bridge import ClientAutomationBridge
 from src.agent_bridge.contracts import BrowserFetchInput
+
+logger = logging.getLogger(__name__)
 from src.agent_runtime.skills.contracts import (
     BrowserAutomationSkillInput,
     PersistProgramsSkillInput,
@@ -75,11 +79,32 @@ def query_db_skill_handler(payload: QueryDbSkillInput) -> dict:
     }
 
 
+def _html_to_markdown(html: str, url: str) -> str:
+    """Convert raw HTML to markdown for LLM-friendly context."""
+    try:
+        from crawl4ai.markdown_generation_strategy import DefaultMarkdownGenerator
+
+        md_obj = DefaultMarkdownGenerator().generate_markdown(
+            input_html=html, base_url=url,
+        )
+        if md_obj and hasattr(md_obj, "raw_markdown"):
+            result = str(md_obj.raw_markdown or "").strip()
+            if result:
+                return result
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.warning("HTML→markdown conversion failed, returning raw: %s", exc)
+    return html
+
+
 def browser_automation_skill_handler(
     payload: BrowserAutomationSkillInput,
     bridge: ClientAutomationBridge,
 ) -> dict:
-    """Fetch browser payload from connected client runtime."""
+    """Fetch browser payload from connected client runtime.
+
+    HTML is converted to markdown before returning to keep the agent
+    conversation context small enough for LLM API limits.
+    """
     output = bridge.fetch_browser_payload(
         BrowserFetchInput(
             url=payload.url,
@@ -87,4 +112,11 @@ def browser_automation_skill_handler(
             client_id=payload.client_id,
         )
     )
-    return output.model_dump(mode="json")
+    result = output.model_dump(mode="json")
+
+    # Convert raw HTML to markdown to avoid context bloat
+    html = result.get("html_content") or ""
+    if html:
+        result["html_content"] = _html_to_markdown(html, payload.url)
+
+    return result
