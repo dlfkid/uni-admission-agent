@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any
 
@@ -42,6 +43,8 @@ class PydanticAIRuntime:
     async def run(self, request: AgentRequest) -> AgentResponse:
         try:
             return await self._run_agent(request)
+        except AgentPageTimeout:
+            raise  # Do NOT fall back — timeouts are not runtime failures
         except Exception as exc:  # pylint: disable=broad-except
             logger.warning("pydanticai runtime failed, falling back: %s", exc)
             return await self.fallback_runtime.run(request)
@@ -73,12 +76,20 @@ class PydanticAIRuntime:
                 "persist_programs_skill with dry_run=true."
             )
 
-        result = await agent_loop(
-            user_message=user_message,
-            registry=registry,
-            system_prompt=system_prompt,
-            page_type_hint=hint,
-        )
+        try:
+            result = await asyncio.wait_for(
+                agent_loop(
+                    user_message=user_message,
+                    registry=registry,
+                    system_prompt=system_prompt,
+                    page_type_hint=hint,
+                ),
+                timeout=PAGE_TIMEOUT,
+            )
+        except asyncio.TimeoutError:
+            raise AgentPageTimeout(
+                f"agent_loop exceeded {PAGE_TIMEOUT}s for task={request.task}"
+            ) from None
 
         logger.info(
             "[Agent] Loop completed in %d iteration(s)",
