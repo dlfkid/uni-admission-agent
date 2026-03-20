@@ -664,7 +664,10 @@ def _skill_to_openai_tool(skill: SkillDef) -> dict[str, Any]:
 
 
 def build_openai_tools(
-    registry: SkillRegistry, *, include_task: bool = True
+    registry: SkillRegistry,
+    *,
+    include_task: bool = True,
+    page_type_hint: str | None = None,
 ) -> list[dict[str, Any]]:
     """Build OpenAI tool definitions from all registered skills + built-ins.
 
@@ -672,21 +675,36 @@ def build_openai_tools(
         include_task: When *True* (default, parent agent) the ``task`` tool is
             included so the LLM can spawn subagents.  Set to *False* for
             subagent loops to prevent recursive spawning.
+        page_type_hint: Controls which tool categories are included.
+            ``"detail"`` — core skills + knowledge + todo + compact + task graph
+            + background only.  ``"index"`` — adds subagent + team.
+            ``None`` — all tools (backward compatible).
     """
+    # Always-included tools
     tools: list[dict[str, Any]] = [
         _TODO_TOOL, _LOAD_SKILL_TOOL, _COMPACT_TOOL,
         *_TASK_GRAPH_TOOLS,
         _BG_RUN_TOOL, _BG_CHECK_TOOL,
-        *_TEAM_TOOLS,
-        *_PROTOCOL_TOOLS,
-        *_AUTONOMY_TOOLS,
-        *_WORKTREE_TOOLS,
     ]
-    if include_task:
-        tools.append(_TASK_TOOL)
+
+    # Collaboration tools gated by page_type_hint
+    if page_type_hint != "detail":
+        # index and None both get team tools
+        tools.extend(_TEAM_TOOLS)
+        if include_task:
+            tools.append(_TASK_TOOL)
+
+    if page_type_hint is None:
+        # Only unrestricted mode gets protocol/worktree/autonomy
+        tools.extend(_PROTOCOL_TOOLS)
+        tools.extend(_AUTONOMY_TOOLS)
+        tools.extend(_WORKTREE_TOOLS)
+
+    # Skill tools (always included)
     for name in registry:
         skill = registry._skills[name]  # noqa: SLF001
         tools.append(_skill_to_openai_tool(skill))
+
     return tools
 
 
