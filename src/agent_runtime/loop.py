@@ -832,11 +832,19 @@ async def agent_loop(
             model=model,
             messages=messages,
             tools=tools or None,
-            max_tokens=4096,
+            max_tokens=32768,
         )
 
         choice = response.choices[0]
         assistant_msg = choice.message
+
+        # Detect output truncation (token limit hit)
+        if getattr(choice, "finish_reason", None) == "length":
+            logger.warning(
+                "[AgentLoop] LLM output truncated (finish_reason=length) "
+                "at iteration %d — tool call arguments may be incomplete",
+                iteration,
+            )
 
         # Append the raw assistant message to the conversation
         messages.append(_serialize_assistant_message(assistant_msg))
@@ -1404,6 +1412,16 @@ async def _handle_skill_call(
     """Execute a SkillRegistry tool in a thread."""
     try:
         fn_args = json.loads(fn_args_raw)
+    except json.JSONDecodeError as exc:
+        logger.warning("[AgentLoop] Tool %s JSON parse failed: %s", fn_name, exc)
+        return json.dumps({
+            "error": (
+                f"Invalid JSON in tool arguments: {exc}. "
+                "Your output was likely truncated. "
+                "Simplify the payload or split into smaller calls."
+            )
+        })
+    try:
         result = await asyncio.to_thread(registry.execute, fn_name, fn_args)
         return json.dumps(result, ensure_ascii=False, default=str)
     except Exception as exc:
