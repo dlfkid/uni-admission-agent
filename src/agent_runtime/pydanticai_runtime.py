@@ -58,6 +58,7 @@ class PydanticAIRuntime:
 
         user_message = self._build_user_message(request)
         registry = build_skill_registry()
+        hint = (request.payload or {}).get("page_type_hint")
 
         # Build system prompt with dry-run instruction if needed
         system_prompt = SYSTEM_PROMPT
@@ -76,6 +77,7 @@ class PydanticAIRuntime:
             user_message=user_message,
             registry=registry,
             system_prompt=system_prompt,
+            page_type_hint=hint,
         )
 
         logger.info(

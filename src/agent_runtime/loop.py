@@ -788,6 +788,7 @@ async def agent_loop(
     _is_subagent: bool = False,
     _teammate_name: str | None = None,
     _message_bus: MessageBus | None = None,
+    page_type_hint: str | None = None,
 ) -> dict[str, Any]:
     """Run the LLM-driven agent loop.
 
@@ -803,7 +804,11 @@ async def agent_loop(
         ``{"response": str, "trace": list, "iterations": int, "todos": list}``
     """
     client, model = resolve_openai_client()
-    tools = build_openai_tools(registry, include_task=not _is_subagent)
+    tools = build_openai_tools(
+        registry,
+        include_task=not _is_subagent,
+        page_type_hint=page_type_hint,
+    )
     todo = TodoManager()
     tasks = TaskManager()
     bg = BackgroundManager()
@@ -921,7 +926,7 @@ async def agent_loop(
             elif fn_name == "bg_check":
                 result_str = _handle_bg_check(fn_args_raw, bg)
             elif fn_name == "team_spawn":
-                result_str = _handle_team_spawn(fn_args_raw, team, registry)
+                result_str = _handle_team_spawn(fn_args_raw, team, registry, page_type_hint)
             elif fn_name == "team_send":
                 result_str = _handle_team_send(fn_args_raw, agent_name, bus)
             elif fn_name == "team_inbox":
@@ -1253,7 +1258,10 @@ def _handle_protocol_status(
 
 
 def _handle_team_spawn(
-    fn_args_raw: str, team: TeammateManager, registry: SkillRegistry
+    fn_args_raw: str,
+    team: TeammateManager,
+    registry: SkillRegistry,
+    page_type_hint: str | None = None,
 ) -> str:
     """Spawn a new teammate (s09)."""
     try:
@@ -1263,6 +1271,7 @@ def _handle_team_spawn(
             role=fn_args.get("role", ""),
             prompt=fn_args.get("prompt", ""),
             registry=registry,
+            page_type_hint="detail" if page_type_hint in ("index", "detail") else page_type_hint,
         )
     except Exception as exc:
         logger.warning("[AgentLoop] team_spawn failed: %s", exc)
