@@ -218,3 +218,8 @@ __marimo__/
 
 # E2E smoke test results
 e2e_results/
+
+# Agent runtime artifacts
+.tasks/
+.team/
+.transcripts/
