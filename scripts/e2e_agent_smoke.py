@@ -32,7 +32,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 GOLDEN_CASES_DIR = PROJECT_ROOT / "golden_samples" / "cases"
 E2E_RESULTS_DIR = PROJECT_ROOT / "e2e_results"
 POLL_INTERVAL = 3  # seconds
-TIMEOUT = 8 * 60  # 8 minutes per test
+TIMEOUT = 900  # 15 minutes per test (matches PAGE_TIMEOUT)
 CLIENT_READY_TIMEOUT = 30  # seconds to wait for client registration
 
 
@@ -195,7 +195,12 @@ async def run_single_test(
     while True:
         elapsed = time.monotonic() - start
         if elapsed > TIMEOUT:
-            print(f"  TIMEOUT after {elapsed:.0f}s")
+            print(f"  TIMEOUT after {elapsed:.0f}s — cancelling task")
+            try:
+                await client.post(f"/tasks/{task_id}/cancel")
+                await asyncio.sleep(2)
+            except Exception:
+                pass  # Best-effort cancel
             return {"status": "TIMEOUT", "duration_sec": elapsed, "programs": []}
 
         await asyncio.sleep(POLL_INTERVAL)
