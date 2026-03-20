@@ -28,7 +28,7 @@ from src.agent_runtime.skills.contracts import (
 from src.agent_runtime.skills.impl import (
     analyze_page_skill_handler,
     browser_automation_skill_handler,
-    crawl_detail_batch_skill_handler,
+    legacy_crawl_batch_skill_handler,
     persist_programs_skill_handler,
     query_db_skill_handler,
     review_patch_skill_handler,
@@ -111,10 +111,10 @@ def build_skill_registry(
             handler=select_detail_candidates_skill_handler,
         ),
         SkillDef(
-            name="crawl_detail_batch_skill",
+            name="legacy_crawl_batch_skill",
             input_model=CrawlDetailBatchSkillInput,
             output_model=CrawlDetailBatchSkillOutput,
-            handler=crawl_detail_batch_skill_handler,
+            handler=legacy_crawl_batch_skill_handler,
         ),
         SkillDef(
             name="persist_programs_skill",

@@ -7,7 +7,7 @@ from src.agent_runtime.skills.registry import build_skill_registry
 def test_required_skills_registered():
     registry = build_skill_registry()
     assert "analyze_page_skill" in registry
-    assert "crawl_detail_batch_skill" in registry
+    assert "legacy_crawl_batch_skill" in registry
 
 
 def test_skill_input_validation_errors_on_bad_payload():

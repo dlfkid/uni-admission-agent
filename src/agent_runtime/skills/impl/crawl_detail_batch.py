@@ -9,7 +9,7 @@ from src.agent_runtime.skills.contracts import CrawlDetailBatchSkillInput
 from src.services.crawler import crawl_selected_detail_urls_via_client
 
 
-async def crawl_detail_batch_skill_handler_async(payload: CrawlDetailBatchSkillInput) -> dict:
+async def legacy_crawl_batch_skill_handler_async(payload: CrawlDetailBatchSkillInput) -> dict:
     """Run client-driven detail batch crawl."""
     return await crawl_selected_detail_urls_via_client(
         index_url=payload.index_url,
@@ -23,9 +23,9 @@ async def crawl_detail_batch_skill_handler_async(payload: CrawlDetailBatchSkillI
     )
 
 
-def crawl_detail_batch_skill_handler(payload: CrawlDetailBatchSkillInput) -> dict:
+def legacy_crawl_batch_skill_handler(payload: CrawlDetailBatchSkillInput) -> dict:
     """Sync wrapper for detail-batch crawl execution."""
     return run_sync(
-        partial(crawl_detail_batch_skill_handler_async, payload),
-        label="crawl_detail_batch_skill_handler()",
+        partial(legacy_crawl_batch_skill_handler_async, payload),
+        label="legacy_crawl_batch_skill_handler()",
     )

@@ -65,7 +65,11 @@ class PydanticAIRuntime:
             system_prompt += (
                 "\n\nIMPORTANT: dry_run mode is active. "
                 "When calling persist_programs_skill, set dry_run=true "
-                "in the payload. Do NOT attempt database writes."
+                "in the payload. Do NOT attempt database writes. "
+                "Do NOT use legacy_crawl_batch_skill — it bypasses dry-run "
+                "and writes directly to the database. Instead use "
+                "browser_automation_skill to fetch HTML, then "
+                "persist_programs_skill with dry_run=true."
             )
 
         result = await agent_loop(

@@ -81,10 +81,11 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
         "Select the top-k detail page URLs from a list of analyzed link candidates. "
         "Input: links array from analyze_page_skill output."
     ),
-    "crawl_detail_batch_skill": (
-        "Crawl a batch of detail page URLs to extract and persist program information. "
-        "Use after selecting candidates from an index page, or directly for a single "
-        "detail page URL. Requires index_url, selected_urls, univ_slug, and year."
+    "legacy_crawl_batch_skill": (
+        "Legacy pipeline: crawl a batch of detail page URLs using the traditional "
+        "ingestion pipeline (fetch + LLM parse + DB persist in one shot). "
+        "NOT dry-run compatible. Prefer browser_automation_skill + persist_programs_skill "
+        "for agent-driven crawls. Requires index_url, selected_urls, univ_slug, and year."
     ),
     "persist_programs_skill": (
         "Persist caller-structured program records to the database. "
