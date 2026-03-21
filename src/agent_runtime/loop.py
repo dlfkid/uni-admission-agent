@@ -69,6 +69,13 @@ completed when done. Only one task may be in_progress at a time.
 Use `load_skill` to load detailed guides when you need them:
 {skill_list}
 
+## persist_programs_skill — IMPORTANT
+When calling persist_programs_skill, keep the payload SMALL to avoid JSON errors:
+- Send ONE program per call (do NOT batch multiple programs).
+- Use ONLY these fields: name_en, source_url, faculty, study_mode, duration.
+- OMIT description, tuition_fees, requirements, and other large text fields.
+- Example: {{"univ_slug":"ucl","year":2026,"programs":[{{"name_en":"Anthropology BSc","source_url":"https://..."}}]}}
+
 When finished, respond with a brief summary of what was accomplished \
 (page type detected, how many programs imported, any errors).
 """
@@ -1503,6 +1510,18 @@ async def _handle_skill_call(
         fn_args = json.loads(fn_args_raw)
     except json.JSONDecodeError as exc:
         logger.warning("[AgentLoop] Tool %s JSON parse failed: %s", fn_name, exc)
+        if fn_name == "persist_programs_skill":
+            return json.dumps({
+                "error": (
+                    f"Invalid JSON in tool arguments: {exc}. "
+                    "Your tool call was too large and got truncated. "
+                    "You MUST split into ONE program per call. "
+                    "Use ONLY required fields: name_en, source_url. "
+                    "Omit description, tuition_fees, and other large fields — "
+                    "they can be added later. Example: "
+                    '{"univ_slug":"x","year":2026,"programs":[{"name_en":"Program Name","source_url":"https://..."}]}'
+                )
+            })
         return json.dumps({
             "error": (
                 f"Invalid JSON in tool arguments: {exc}. "
