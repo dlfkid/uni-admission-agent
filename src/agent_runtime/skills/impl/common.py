@@ -119,4 +119,18 @@ def browser_automation_skill_handler(
     if html:
         result["html_content"] = _html_to_markdown(html, payload.url)
 
+    # For index pages with selected_urls, strip the full HTML to avoid
+    # blowing context (150K+ markdown → auto_compact → lose everything).
+    # The agent only needs the URL list to proceed.
+    selected = result.get("selected_urls") or []
+    if selected:
+        md = result.get("html_content") or ""
+        # Keep a small excerpt (first 2000 chars) for page context
+        result["html_content"] = (
+            f"[Index page with {len(selected)} detail URLs. "
+            f"Full HTML omitted to save context. Use selected_urls below.]\n\n"
+            + md[:2000]
+            + ("\n...(truncated)" if len(md) > 2000 else "")
+        )
+
     return result

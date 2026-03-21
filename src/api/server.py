@@ -301,7 +301,7 @@ app.add_middleware(
 task_manager = TaskManager()
 client_registry = ClientRegistry()
 client_sockets: Dict[str, WebSocket] = {}
-client_rpc_broker = ClientRpcBroker(timeout_seconds=45.0)
+client_rpc_broker = ClientRpcBroker(timeout_seconds=120.0)
 
 
 def _has_available_client(preferred_client_id: Optional[str]) -> bool:
