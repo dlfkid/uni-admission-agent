@@ -73,9 +73,13 @@ Use `load_skill` to load detailed guides when you need them:
 When page_type_hint is "index", follow this workflow:
 1. Call browser_automation_skill with page_type_hint="index" to fetch the index page.
    The result will include `selected_urls` — a list of detail page URLs automatically detected.
-2. For EACH URL in `selected_urls`, call browser_automation_skill with page_type_hint="detail".
-3. Extract program info from each detail page and call persist_programs_skill for each program.
-Do NOT re-fetch the index page if you already have selected_urls. Go straight to fetching detail pages.
+2. Process detail pages ONE AT A TIME to keep context manageable:
+   a. Call browser_automation_skill with page_type_hint="detail" for ONE URL.
+   b. Extract program info from the HTML returned.
+   c. Call persist_programs_skill to save the program.
+   d. Repeat for the next URL.
+IMPORTANT: Do NOT fetch multiple detail pages at once — process them sequentially.
+Do NOT re-fetch the index page if you already have selected_urls.
 
 ## Detail Page Workflow
 When page_type_hint is "detail", fetch the single URL with browser_automation_skill, \
