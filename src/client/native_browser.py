@@ -54,7 +54,10 @@ def select_detail_links(
         if item.url.rstrip("/") == base.rstrip("/"):
             continue
         text = item.url.lower()
-        if any(token in text for token in ("/programme", "/program", "/course", "/master", "/msc", "/ma-")):
+        if any(token in text for token in (
+            "/programme", "/program", "/course", "/master", "/msc", "/ma-",
+            "/degree", "/undergraduate", "/postgraduate",
+        )):
             rows.append(item)
     return rows[:limit]
 

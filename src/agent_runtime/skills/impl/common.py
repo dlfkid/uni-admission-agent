@@ -132,5 +132,18 @@ def browser_automation_skill_handler(
             + md[:2000]
             + ("\n...(truncated)" if len(md) > 2000 else "")
         )
+    elif payload.page_type_hint == "index":
+        # Index page but client heuristics found no detail links.
+        # Trim HTML to a manageable size so the agent can use
+        # analyze_page_skill without blowing the context window.
+        md = result.get("html_content") or ""
+        MAX_INDEX_HTML = 15_000
+        if len(md) > MAX_INDEX_HTML:
+            result["html_content"] = (
+                f"[Index page HTML trimmed to {MAX_INDEX_HTML} chars. "
+                f"Use analyze_page_skill with url and this html_content to extract detail links.]\n\n"
+                + md[:MAX_INDEX_HTML]
+                + "\n...(truncated)"
+            )
 
     return result
