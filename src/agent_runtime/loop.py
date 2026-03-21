@@ -832,6 +832,7 @@ async def agent_loop(
         {"role": "user", "content": user_message},
     ]
     trace: list[dict[str, Any]] = []
+    collected_programs: list[dict[str, Any]] = []
     iterations_since_todo = 0
     consecutive_timeouts = 0
 
@@ -886,6 +887,7 @@ async def agent_loop(
                     "trace": trace,
                     "iterations": iteration,
                     "todos": todo.items,
+                    "collected_programs": collected_programs,
                     "error": "consecutive LLM timeouts",
                 }
             messages.append({
@@ -931,6 +933,7 @@ async def agent_loop(
                 "trace": trace,
                 "iterations": iteration,
                 "todos": todo.items,
+                "collected_programs": collected_programs,
             }
 
         # Track whether a todo update happened this iteration
@@ -964,7 +967,7 @@ async def agent_loop(
             elif fn_name == "bg_run":
                 result_str = _handle_bg_run(fn_args_raw, bg, registry)
             elif fn_name == "bg_check":
-                result_str = _handle_bg_check(fn_args_raw, bg)
+                result_str = await _handle_bg_check(fn_args_raw, bg)
             elif fn_name == "team_spawn":
                 result_str = _handle_team_spawn(fn_args_raw, team, registry, page_type_hint)
             elif fn_name == "team_send":
@@ -1001,6 +1004,16 @@ async def agent_loop(
                     fn_name, fn_args_raw, registry
                 )
 
+            # Accumulate parsed programs from persist_programs_skill
+            if fn_name == "persist_programs_skill":
+                try:
+                    skill_result = json.loads(result_str)
+                    for prog in skill_result.get("parsed_programs", []):
+                        if isinstance(prog, dict):
+                            collected_programs.append(prog)
+                except (json.JSONDecodeError, TypeError):
+                    pass
+
             trace.append(
                 {
                     "stage": "tool_call",
@@ -1027,6 +1040,7 @@ async def agent_loop(
                 "trace": trace,
                 "iterations": iteration,
                 "todos": todo.items,
+                "collected_programs": collected_programs,
             }
 
         # Update nag counter
@@ -1041,6 +1055,7 @@ async def agent_loop(
         "trace": trace,
         "iterations": max_iterations,
         "todos": todo.items,
+        "collected_programs": collected_programs,
     }
 
 
@@ -1143,13 +1158,19 @@ def _handle_bg_run(
         return json.dumps({"error": str(exc)})
 
 
-def _handle_bg_check(fn_args_raw: str, bg: BackgroundManager) -> str:
-    """Check background task status (s08)."""
+async def _handle_bg_check(fn_args_raw: str, bg: BackgroundManager) -> str:
+    """Wait for a background task to complete and return its result (s08).
+
+    Blocks up to ``timeout`` seconds (default 300) so the agent loop
+    does not burn iterations polling.
+    """
     try:
         fn_args = json.loads(fn_args_raw)
         task_id = fn_args.get("task_id")
+        timeout = float(fn_args.get("timeout", 300))
         if task_id:
-            return json.dumps(bg.check(task_id), ensure_ascii=False)
+            result = await bg.wait(task_id, timeout=timeout)
+            return json.dumps(result, ensure_ascii=False)
         return json.dumps(bg.list_all(), ensure_ascii=False)
     except Exception as exc:
         logger.warning("[AgentLoop] bg_check failed: %s", exc)

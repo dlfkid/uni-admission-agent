@@ -104,6 +104,7 @@ class PydanticAIRuntime:
                 "task": request.task,
                 "agent_response": result.get("response", ""),
                 "iterations": result.get("iterations", 0),
+                "parsed_programs": result.get("collected_programs", []),
                 **dict(request.payload or {}),
             },
         )
