@@ -69,6 +69,18 @@ completed when done. Only one task may be in_progress at a time.
 Use `load_skill` to load detailed guides when you need them:
 {skill_list}
 
+## Index Page Workflow
+When page_type_hint is "index", follow this workflow:
+1. Call browser_automation_skill with page_type_hint="index" to fetch the index page.
+   The result will include `selected_urls` — a list of detail page URLs automatically detected.
+2. For EACH URL in `selected_urls`, call browser_automation_skill with page_type_hint="detail".
+3. Extract program info from each detail page and call persist_programs_skill for each program.
+Do NOT re-fetch the index page if you already have selected_urls. Go straight to fetching detail pages.
+
+## Detail Page Workflow
+When page_type_hint is "detail", fetch the single URL with browser_automation_skill, \
+extract program info from the HTML, and call persist_programs_skill.
+
 ## persist_programs_skill — IMPORTANT
 When calling persist_programs_skill, keep the payload SMALL to avoid JSON errors:
 - Send ONE program per call (do NOT batch multiple programs).
@@ -112,7 +124,9 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
     ),
     "browser_automation_skill": (
         "Fetch page HTML content via a connected browser client. "
-        "Use this when you need HTML content for analysis."
+        "For index pages (page_type_hint='index'), returns selected_urls — "
+        "a list of detected detail page URLs. "
+        "For detail pages (page_type_hint='detail'), returns the page HTML."
     ),
 }
 
