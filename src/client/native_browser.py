@@ -42,7 +42,7 @@ def select_detail_links(
     host = (parsed.netloc or "").lower()
     path = parsed.path or ""
 
-    if "polyu.edu.hk" in host and "/study/pg/taught-postgraduate/find-your-programmes-tpg" in path:
+    if "polyu.edu.hk" in host and "/study/pg/" in path:
         rows = [item for item in anchors if "/study/pg/tpg/" in item.url]
         return rows[:limit]
 

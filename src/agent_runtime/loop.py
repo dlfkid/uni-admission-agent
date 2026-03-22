@@ -69,17 +69,21 @@ completed when done. Only one task may be in_progress at a time.
 Use `load_skill` to load detailed guides when you need them:
 {skill_list}
 
-## Index Page Workflow
-When page_type_hint is "index", follow this workflow:
+## Index Page Workflow (STRICT — follow exactly)
+When page_type_hint is "index":
 1. Call browser_automation_skill with page_type_hint="index" to fetch the index page.
-   The result will include `selected_urls` — a list of detail page URLs automatically detected.
-2. Process detail pages ONE AT A TIME to keep context manageable:
-   a. Call browser_automation_skill with page_type_hint="detail" for ONE URL.
-   b. Extract program info from the HTML returned.
-   c. Call persist_programs_skill to save the program.
-   d. Repeat for the next URL.
-IMPORTANT: Do NOT fetch multiple detail pages at once — process them sequentially.
-Do NOT re-fetch the index page if you already have selected_urls.
+   The result includes `selected_urls` — detail page URLs automatically detected.
+2. For EACH URL in selected_urls, do these 3 steps in order:
+   a. Call browser_automation_skill with page_type_hint="detail" for that ONE URL.
+   b. Extract program info (name_en, source_url, faculty, study_mode, duration).
+   c. Call persist_programs_skill IMMEDIATELY to save the program.
+3. After processing all URLs, respond with a summary.
+
+CRITICAL RULES:
+- Fetch only ONE detail page per iteration. Extra fetches will be blocked.
+- You MUST call persist_programs_skill after EACH detail page before moving on.
+- Do NOT finish until you have called persist_programs_skill at least once.
+- Do NOT re-fetch the index page if you already have selected_urls.
 
 ## Detail Page Workflow
 When page_type_hint is "detail", fetch the single URL with browser_automation_skill, \
@@ -942,6 +946,29 @@ async def agent_loop(
 
         # If no tool calls → the agent decided it is done
         if not assistant_msg.tool_calls:
+            # Guard: if this is an index crawl and no programs were persisted,
+            # nudge the agent to keep going instead of finishing empty-handed.
+            if (
+                page_type_hint == "index"
+                and not collected_programs
+                and iteration < max_iterations - 1
+            ):
+                logger.warning(
+                    "[AgentLoop] Agent tried to finish at iteration %d "
+                    "with 0 programs on index page — nudging to continue",
+                    iteration,
+                )
+                messages.append({
+                    "role": "user",
+                    "content": (
+                        "You have not extracted any programs yet. "
+                        "You MUST fetch at least one detail page URL, "
+                        "extract the program info, and call persist_programs_skill "
+                        "before finishing. Continue working."
+                    ),
+                })
+                continue
+
             final_text = assistant_msg.content or ""
             logger.info(
                 "[AgentLoop] Agent finished after %d iteration(s)", iteration
@@ -964,6 +991,7 @@ async def agent_loop(
         # Track whether a todo update happened this iteration
         todo_updated_this_iteration = False
         idle_requested = False
+        browser_fetch_done_this_iteration = False
 
         # Execute every tool call the model requested
         for tool_call in assistant_msg.tool_calls:
@@ -975,6 +1003,28 @@ async def agent_loop(
                 fn_name,
                 fn_args_raw[:200],
             )
+
+            # Rate-limit: only one browser_automation_skill call per iteration
+            # to prevent context blowup from parallel detail page fetches.
+            if fn_name == "browser_automation_skill" and browser_fetch_done_this_iteration:
+                result_str = (
+                    "SKIPPED: Only one browser fetch per iteration. "
+                    "Process the current page first (extract info, "
+                    "call persist_programs_skill), then fetch the next URL."
+                )
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": tool_call.id,
+                    "content": result_str,
+                })
+                trace.append({
+                    "stage": "tool_call",
+                    "iteration": iteration,
+                    "tool": fn_name,
+                    "args_preview": fn_args_raw[:500],
+                    "result_preview": result_str,
+                })
+                continue
 
             # -- Built-in tool dispatch --
             if fn_name == "todo":
@@ -1028,6 +1078,10 @@ async def agent_loop(
                 result_str = await _handle_skill_call(
                     fn_name, fn_args_raw, registry
                 )
+
+            # Track browser fetch for rate-limiting
+            if fn_name == "browser_automation_skill":
+                browser_fetch_done_this_iteration = True
 
             # Accumulate parsed programs from persist_programs_skill
             if fn_name == "persist_programs_skill":
