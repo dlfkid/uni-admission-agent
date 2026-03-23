@@ -80,20 +80,36 @@ def query_db_skill_handler(payload: QueryDbSkillInput) -> dict:
 
 
 def _html_to_markdown(html: str, url: str) -> str:
-    """Convert raw HTML to markdown for LLM-friendly context."""
-    try:
-        from crawl4ai.markdown_generation_strategy import DefaultMarkdownGenerator
+    """Convert raw HTML to lightweight text for LLM-friendly context.
 
-        md_obj = DefaultMarkdownGenerator().generate_markdown(
-            input_html=html, base_url=url,
-        )
-        if md_obj and hasattr(md_obj, "raw_markdown"):
-            result = str(md_obj.raw_markdown or "").strip()
-            if result:
-                return result
-    except Exception as exc:  # pylint: disable=broad-except
-        logger.warning("HTML→markdown conversion failed, returning raw: %s", exc)
-    return html
+    Uses a fast stdlib-based approach instead of crawl4ai which takes
+    1-2 minutes on large (100-200K) HTML pages.
+    """
+    import re
+    from html import unescape
+
+    if not html:
+        return html
+
+    text = html
+    # Remove script/style/noscript blocks
+    text = re.sub(r"<(script|style|noscript)[^>]*>.*?</\1>", "", text, flags=re.DOTALL | re.IGNORECASE)
+    # Remove HTML comments
+    text = re.sub(r"<!--.*?-->", "", text, flags=re.DOTALL)
+    # Convert <br>, <hr> to newlines
+    text = re.sub(r"<br\s*/?>", "\n", text, flags=re.IGNORECASE)
+    text = re.sub(r"<hr\s*/?>", "\n---\n", text, flags=re.IGNORECASE)
+    # Convert block-level closing tags to newlines
+    text = re.sub(r"</(?:p|div|tr|li|h[1-6]|section|article|header|footer|nav|main)>", "\n", text, flags=re.IGNORECASE)
+    # Strip remaining tags
+    text = re.sub(r"<[^>]+>", " ", text)
+    # Decode HTML entities
+    text = unescape(text)
+    # Collapse whitespace
+    text = re.sub(r"[ \t]+", " ", text)
+    text = re.sub(r"\n[ \t]+", "\n", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
 
 
 def browser_automation_skill_handler(

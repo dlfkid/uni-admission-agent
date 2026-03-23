@@ -23,6 +23,24 @@
       "role": "Browser automation client for HTML crawling",
       "status": "working",
       "spawned_at": 1773887692.857833
+    },
+    {
+      "name": "browser_manager",
+      "role": "Browser Client Manager for Crawler Agent",
+      "status": "working",
+      "spawned_at": 1773942449.717812
+    },
+    {
+      "name": "browser_automation_agent",
+      "role": "Crawler Specialist",
+      "status": "working",
+      "spawned_at": 1773997033.164105
+    },
+    {
+      "name": "browser_client_setup",
+      "role": "Configure browser automation client",
+      "status": "working",
+      "spawned_at": 1774053769.4927921
     }
   ]
 }
