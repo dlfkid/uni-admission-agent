@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import logging
+
 from src.agent_bridge.client_automation_bridge import ClientAutomationBridge
 from src.agent_bridge.contracts import BrowserFetchInput
+
+logger = logging.getLogger(__name__)
 from src.agent_runtime.skills.contracts import (
     BrowserAutomationSkillInput,
     PersistProgramsSkillInput,
@@ -39,6 +43,7 @@ def persist_programs_skill_handler(payload: PersistProgramsSkillInput) -> dict:
         univ_slug=payload.univ_slug,
         year=payload.year,
         programs=payload.programs,
+        dry_run=payload.dry_run,
     )
 
 
@@ -74,11 +79,48 @@ def query_db_skill_handler(payload: QueryDbSkillInput) -> dict:
     }
 
 
+def _html_to_markdown(html: str, url: str) -> str:
+    """Convert raw HTML to lightweight text for LLM-friendly context.
+
+    Uses a fast stdlib-based approach instead of crawl4ai which takes
+    1-2 minutes on large (100-200K) HTML pages.
+    """
+    import re
+    from html import unescape
+
+    if not html:
+        return html
+
+    text = html
+    # Remove script/style/noscript blocks
+    text = re.sub(r"<(script|style|noscript)[^>]*>.*?</\1>", "", text, flags=re.DOTALL | re.IGNORECASE)
+    # Remove HTML comments
+    text = re.sub(r"<!--.*?-->", "", text, flags=re.DOTALL)
+    # Convert <br>, <hr> to newlines
+    text = re.sub(r"<br\s*/?>", "\n", text, flags=re.IGNORECASE)
+    text = re.sub(r"<hr\s*/?>", "\n---\n", text, flags=re.IGNORECASE)
+    # Convert block-level closing tags to newlines
+    text = re.sub(r"</(?:p|div|tr|li|h[1-6]|section|article|header|footer|nav|main)>", "\n", text, flags=re.IGNORECASE)
+    # Strip remaining tags
+    text = re.sub(r"<[^>]+>", " ", text)
+    # Decode HTML entities
+    text = unescape(text)
+    # Collapse whitespace
+    text = re.sub(r"[ \t]+", " ", text)
+    text = re.sub(r"\n[ \t]+", "\n", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
+
+
 def browser_automation_skill_handler(
     payload: BrowserAutomationSkillInput,
     bridge: ClientAutomationBridge,
 ) -> dict:
-    """Fetch browser payload from connected client runtime."""
+    """Fetch browser payload from connected client runtime.
+
+    HTML is converted to markdown before returning to keep the agent
+    conversation context small enough for LLM API limits.
+    """
     output = bridge.fetch_browser_payload(
         BrowserFetchInput(
             url=payload.url,
@@ -86,4 +128,38 @@ def browser_automation_skill_handler(
             client_id=payload.client_id,
         )
     )
-    return output.model_dump(mode="json")
+    result = output.model_dump(mode="json")
+
+    # Convert raw HTML to markdown to avoid context bloat
+    html = result.get("html_content") or ""
+    if html:
+        result["html_content"] = _html_to_markdown(html, payload.url)
+
+    # For index pages with selected_urls, strip the full HTML to avoid
+    # blowing context (150K+ markdown → auto_compact → lose everything).
+    # The agent only needs the URL list to proceed.
+    selected = result.get("selected_urls") or []
+    if selected:
+        md = result.get("html_content") or ""
+        # Keep a small excerpt (first 2000 chars) for page context
+        result["html_content"] = (
+            f"[Index page with {len(selected)} detail URLs. "
+            f"Full HTML omitted to save context. Use selected_urls below.]\n\n"
+            + md[:2000]
+            + ("\n...(truncated)" if len(md) > 2000 else "")
+        )
+    elif payload.page_type_hint == "index":
+        # Index page but client heuristics found no detail links.
+        # Trim HTML to a manageable size so the agent can use
+        # analyze_page_skill without blowing the context window.
+        md = result.get("html_content") or ""
+        MAX_INDEX_HTML = 15_000
+        if len(md) > MAX_INDEX_HTML:
+            result["html_content"] = (
+                f"[Index page HTML trimmed to {MAX_INDEX_HTML} chars. "
+                f"Use analyze_page_skill with url and this html_content to extract detail links.]\n\n"
+                + md[:MAX_INDEX_HTML]
+                + "\n...(truncated)"
+            )
+
+    return result

@@ -65,6 +65,7 @@ class PersistProgramsSkillInput(BaseModel):
     univ_slug: str = Field(min_length=1)
     year: int = Field(gt=0)
     programs: list[dict[str, Any]] = Field(default_factory=list)
+    dry_run: bool = Field(default=False)
 
 
 class PersistProgramsSkillOutput(BaseModel):
@@ -74,6 +75,8 @@ class PersistProgramsSkillOutput(BaseModel):
     updated_count: int = 0
     total_submitted: int = 0
     failed_items: list[dict[str, Any]] = Field(default_factory=list)
+    dry_run: bool = False
+    parsed_programs: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class ReviewPatchSkillInput(BaseModel):

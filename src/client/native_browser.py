@@ -42,7 +42,7 @@ def select_detail_links(
     host = (parsed.netloc or "").lower()
     path = parsed.path or ""
 
-    if "polyu.edu.hk" in host and "/study/pg/taught-postgraduate/find-your-programmes-tpg" in path:
+    if "polyu.edu.hk" in host and "/study/pg/" in path:
         rows = [item for item in anchors if "/study/pg/tpg/" in item.url]
         return rows[:limit]
 
@@ -54,7 +54,10 @@ def select_detail_links(
         if item.url.rstrip("/") == base.rstrip("/"):
             continue
         text = item.url.lower()
-        if any(token in text for token in ("/programme", "/program", "/course", "/master", "/msc", "/ma-")):
+        if any(token in text for token in (
+            "/programme", "/program", "/course", "/master", "/msc", "/ma-",
+            "/degree", "/undergraduate", "/postgraduate",
+        )):
             rows.append(item)
     return rows[:limit]
 
@@ -156,25 +159,22 @@ async def _fetch_payload_async(
         return {"html_content": index_html}
 
     selected = select_detail_links(index_url=url, anchors=anchors, limit=detail_limit)
-    detail_pages_batch: list[dict[str, Any]] = []
     selected_link_texts: dict[str, str] = {}
+    selected_urls: list[str] = []
 
     for item in selected:
-        detail_html, _ = await _fetch_page_html_and_anchors(url=item.url, debug_port=debug_port)
-        detail_pages_batch.append(
-            {
-                "url": item.url,
-                "html_content": detail_html,
-                "selected_anchor_text": item.text or None,
-            }
-        )
+        selected_urls.append(item.url)
         if item.text:
             selected_link_texts[item.url] = item.text
 
+    # NOTE: We intentionally do NOT pre-fetch detail pages here.
+    # Pre-fetching 4-8 pages sequentially takes 2+ minutes and causes
+    # RPC timeouts.  The agent fetches detail pages individually instead.
+
     payload: dict[str, Any] = {
         "html_content": index_html,
-        "detail_pages_batch": detail_pages_batch,
-        "selected_urls": [item["url"] for item in detail_pages_batch],
+        "detail_pages_batch": [],
+        "selected_urls": selected_urls,
     }
     if selected_link_texts:
         payload["selected_link_texts"] = selected_link_texts

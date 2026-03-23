@@ -640,6 +640,7 @@ async def run_agent_crawl(
     policy_profile: Optional[dict[str, Any]] = None,
     client_id: Optional[str] = None,
     autonomous: bool = False,
+    dry_run: bool = False,
 ) -> dict[str, Any]:
     """Run crawl orchestration via configured agent runtime."""
     # Lazy import: runtime_factory → pydanticai_runtime → crawler forms a
@@ -670,6 +671,7 @@ async def run_agent_crawl(
                 "entrypoint": "api",
                 "client_id": str(client_id).strip() if client_id else None,
                 "autonomous": bool(autonomous),
+                "dry_run": bool(dry_run),
             },
         )
     )
@@ -681,6 +683,7 @@ def ingest_program_records_external(
     univ_slug: str,
     year: int,
     programs: list[Any],
+    dry_run: bool = False,
 ) -> dict[str, Any]:
     """Persist caller-provided structured program records without internal LLM calls."""
     normalized_univ_slug = str(univ_slug or "").strip().lower()
@@ -706,13 +709,16 @@ def ingest_program_records_external(
             "univ_slug": normalized_univ_slug,
             "year": normalized_year,
             "summary": "No program records supplied.",
+            "dry_run": dry_run,
+            "parsed_programs": [],
         }
 
-    db = DatabaseManager()
+    db = None if dry_run else DatabaseManager()
     imported_count = 0
     updated_count = 0
     failed_items: list[dict[str, Any]] = []
     persisted_program_ids: list[int] = []
+    parsed_programs: list[dict[str, Any]] = []
 
     for idx, raw_item in enumerate(submitted_items):
         if not isinstance(raw_item, dict):
@@ -735,6 +741,10 @@ def ingest_program_records_external(
                     "message": "name_en is required for external ingest.",
                 }
             )
+            continue
+
+        if dry_run:
+            parsed_programs.append(payload)
             continue
 
         try:
@@ -760,20 +770,23 @@ def ingest_program_records_external(
         else:
             updated_count += 1
 
-    try:
-        review_items = _build_review_items(
-            univ_slug=normalized_univ_slug,
-            year=normalized_year,
-            persisted_program_ids=persisted_program_ids,
-        )
-    except Exception as exc:  # pylint: disable=broad-except
-        logger.warning(
-            "Failed building review items for external ingest (univ=%s year=%s): %s",
-            normalized_univ_slug,
-            normalized_year,
-            exc,
-        )
+    if dry_run:
         review_items = []
+    else:
+        try:
+            review_items = _build_review_items(
+                univ_slug=normalized_univ_slug,
+                year=normalized_year,
+                persisted_program_ids=persisted_program_ids,
+            )
+        except Exception as exc:  # pylint: disable=broad-except
+            logger.warning(
+                "Failed building review items for external ingest (univ=%s year=%s): %s",
+                normalized_univ_slug,
+                normalized_year,
+                exc,
+            )
+            review_items = []
 
     upserted_count = imported_count + updated_count
     summary = (
@@ -791,6 +804,8 @@ def ingest_program_records_external(
         "univ_slug": normalized_univ_slug,
         "year": normalized_year,
         "summary": summary,
+        "dry_run": dry_run,
+        "parsed_programs": parsed_programs,
     }
 
 

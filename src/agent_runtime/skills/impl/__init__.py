@@ -9,15 +9,15 @@ from src.agent_runtime.skills.impl.common import (
     select_detail_candidates_skill_handler,
 )
 from src.agent_runtime.skills.impl.crawl_detail_batch import (
-    crawl_detail_batch_skill_handler,
-    crawl_detail_batch_skill_handler_async,
+    legacy_crawl_batch_skill_handler,
+    legacy_crawl_batch_skill_handler_async,
 )
 
 __all__ = [
     "analyze_page_skill_handler",
     "select_detail_candidates_skill_handler",
-    "crawl_detail_batch_skill_handler",
-    "crawl_detail_batch_skill_handler_async",
+    "legacy_crawl_batch_skill_handler",
+    "legacy_crawl_batch_skill_handler_async",
     "persist_programs_skill_handler",
     "review_patch_skill_handler",
     "query_db_skill_handler",

@@ -43,6 +43,12 @@ logger = logging.getLogger(__name__)
 
 MAX_ITERATIONS = 25
 NAG_INTERVAL = 3  # inject reminder after this many iterations without a todo update
+LLM_CALL_TIMEOUT = 480    # 8 minutes — single LLM API call
+PAGE_TIMEOUT = 900         # 15 minutes — entire agent_loop for one page
+
+
+class AgentPageTimeout(Exception):
+    """Raised when agent_loop exceeds PAGE_TIMEOUT."""
 
 _SKILL_LOADER = SkillLoader()
 
@@ -63,6 +69,33 @@ completed when done. Only one task may be in_progress at a time.
 Use `load_skill` to load detailed guides when you need them:
 {skill_list}
 
+## Index Page Workflow (STRICT — follow exactly)
+When page_type_hint is "index":
+1. Call browser_automation_skill with page_type_hint="index" to fetch the index page.
+   The result includes `selected_urls` — detail page URLs automatically detected.
+2. For EACH URL in selected_urls, do these 3 steps in order:
+   a. Call browser_automation_skill with page_type_hint="detail" for that ONE URL.
+   b. Extract program info (name_en, source_url, faculty, study_mode, duration).
+   c. Call persist_programs_skill IMMEDIATELY to save the program.
+3. After processing all URLs, respond with a summary.
+
+CRITICAL RULES:
+- Fetch only ONE detail page per iteration. Extra fetches will be blocked.
+- You MUST call persist_programs_skill after EACH detail page before moving on.
+- Do NOT finish until you have called persist_programs_skill at least once.
+- Do NOT re-fetch the index page if you already have selected_urls.
+
+## Detail Page Workflow
+When page_type_hint is "detail", fetch the single URL with browser_automation_skill, \
+extract program info from the HTML, and call persist_programs_skill.
+
+## persist_programs_skill — IMPORTANT
+When calling persist_programs_skill, keep the payload SMALL to avoid JSON errors:
+- Send ONE program per call (do NOT batch multiple programs).
+- Use ONLY these fields: name_en, source_url, faculty, study_mode, duration.
+- OMIT description, tuition_fees, requirements, and other large text fields.
+- Example: {{"univ_slug":"ucl","year":2026,"programs":[{{"name_en":"Anthropology BSc","source_url":"https://..."}}]}}
+
 When finished, respond with a brief summary of what was accomplished \
 (page type detected, how many programs imported, any errors).
 """
@@ -81,10 +114,11 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
         "Select the top-k detail page URLs from a list of analyzed link candidates. "
         "Input: links array from analyze_page_skill output."
     ),
-    "crawl_detail_batch_skill": (
-        "Crawl a batch of detail page URLs to extract and persist program information. "
-        "Use after selecting candidates from an index page, or directly for a single "
-        "detail page URL. Requires index_url, selected_urls, univ_slug, and year."
+    "legacy_crawl_batch_skill": (
+        "Legacy pipeline: crawl a batch of detail page URLs using the traditional "
+        "ingestion pipeline (fetch + LLM parse + DB persist in one shot). "
+        "NOT dry-run compatible. Prefer browser_automation_skill + persist_programs_skill "
+        "for agent-driven crawls. Requires index_url, selected_urls, univ_slug, and year."
     ),
     "persist_programs_skill": (
         "Persist caller-structured program records to the database. "
@@ -98,7 +132,9 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
     ),
     "browser_automation_skill": (
         "Fetch page HTML content via a connected browser client. "
-        "Use this when you need HTML content for analysis."
+        "For index pages (page_type_hint='index'), returns selected_urls — "
+        "a list of detected detail page URLs. "
+        "For detail pages (page_type_hint='detail'), returns the page HTML."
     ),
 }
 
@@ -663,7 +699,10 @@ def _skill_to_openai_tool(skill: SkillDef) -> dict[str, Any]:
 
 
 def build_openai_tools(
-    registry: SkillRegistry, *, include_task: bool = True
+    registry: SkillRegistry,
+    *,
+    include_task: bool = True,
+    page_type_hint: str | None = None,
 ) -> list[dict[str, Any]]:
     """Build OpenAI tool definitions from all registered skills + built-ins.
 
@@ -671,21 +710,36 @@ def build_openai_tools(
         include_task: When *True* (default, parent agent) the ``task`` tool is
             included so the LLM can spawn subagents.  Set to *False* for
             subagent loops to prevent recursive spawning.
+        page_type_hint: Controls which tool categories are included.
+            ``"detail"`` — core skills + knowledge + todo + compact + task graph
+            + background only.  ``"index"`` — adds subagent + team.
+            ``None`` — all tools (backward compatible).
     """
+    # Always-included tools
     tools: list[dict[str, Any]] = [
         _TODO_TOOL, _LOAD_SKILL_TOOL, _COMPACT_TOOL,
         *_TASK_GRAPH_TOOLS,
         _BG_RUN_TOOL, _BG_CHECK_TOOL,
-        *_TEAM_TOOLS,
-        *_PROTOCOL_TOOLS,
-        *_AUTONOMY_TOOLS,
-        *_WORKTREE_TOOLS,
     ]
-    if include_task:
-        tools.append(_TASK_TOOL)
+
+    # Collaboration tools gated by page_type_hint
+    if page_type_hint != "detail":
+        # index and None both get team tools
+        tools.extend(_TEAM_TOOLS)
+        if include_task:
+            tools.append(_TASK_TOOL)
+
+    if page_type_hint is None:
+        # Only unrestricted mode gets protocol/worktree/autonomy
+        tools.extend(_PROTOCOL_TOOLS)
+        tools.extend(_AUTONOMY_TOOLS)
+        tools.extend(_WORKTREE_TOOLS)
+
+    # Skill tools (always included)
     for name in registry:
         skill = registry._skills[name]  # noqa: SLF001
         tools.append(_skill_to_openai_tool(skill))
+
     return tools
 
 
@@ -769,6 +823,7 @@ async def agent_loop(
     _is_subagent: bool = False,
     _teammate_name: str | None = None,
     _message_bus: MessageBus | None = None,
+    page_type_hint: str | None = None,
 ) -> dict[str, Any]:
     """Run the LLM-driven agent loop.
 
@@ -784,7 +839,11 @@ async def agent_loop(
         ``{"response": str, "trace": list, "iterations": int, "todos": list}``
     """
     client, model = resolve_openai_client()
-    tools = build_openai_tools(registry, include_task=not _is_subagent)
+    tools = build_openai_tools(
+        registry,
+        include_task=not _is_subagent,
+        page_type_hint=page_type_hint,
+    )
     todo = TodoManager()
     tasks = TaskManager()
     bg = BackgroundManager()
@@ -802,7 +861,9 @@ async def agent_loop(
         {"role": "user", "content": user_message},
     ]
     trace: list[dict[str, Any]] = []
+    collected_programs: list[dict[str, Any]] = []
     iterations_since_todo = 0
+    consecutive_timeouts = 0
 
     for iteration in range(1, max_iterations + 1):
         logger.info("[AgentLoop] Iteration %d — calling LLM", iteration)
@@ -828,21 +889,86 @@ async def agent_loop(
         # -- s03 nag reminder: inject into last tool result when overdue --
         _maybe_inject_nag(messages, iterations_since_todo, todo)
 
-        response = await client.chat.completions.create(
-            model=model,
-            messages=messages,
-            tools=tools or None,
-            max_tokens=4096,
-        )
+        try:
+            response = await asyncio.wait_for(
+                client.chat.completions.create(
+                    model=model,
+                    messages=messages,
+                    tools=tools or None,
+                    max_tokens=32768,
+                ),
+                timeout=LLM_CALL_TIMEOUT,
+            )
+        except asyncio.TimeoutError:
+            consecutive_timeouts += 1
+            logger.warning(
+                "[AgentLoop] LLM call timed out after %ds at iteration %d "
+                "(%d consecutive)",
+                LLM_CALL_TIMEOUT, iteration, consecutive_timeouts,
+            )
+            if consecutive_timeouts >= 2:
+                logger.error(
+                    "[AgentLoop] %d consecutive LLM timeouts — aborting loop",
+                    consecutive_timeouts,
+                )
+                return {
+                    "response": "",
+                    "trace": trace,
+                    "iterations": iteration,
+                    "todos": todo.items,
+                    "collected_programs": collected_programs,
+                    "error": "consecutive LLM timeouts",
+                }
+            messages.append({
+                "role": "system",
+                "content": (
+                    "Your last LLM call timed out after 8 minutes. "
+                    "The context may be too large. Try a simpler approach "
+                    "or call compact to reduce context."
+                ),
+            })
+            continue
 
         choice = response.choices[0]
+        consecutive_timeouts = 0  # reset on successful call
         assistant_msg = choice.message
+
+        # Detect output truncation (token limit hit)
+        if getattr(choice, "finish_reason", None) == "length":
+            logger.warning(
+                "[AgentLoop] LLM output truncated (finish_reason=length) "
+                "at iteration %d — tool call arguments may be incomplete",
+                iteration,
+            )
 
         # Append the raw assistant message to the conversation
         messages.append(_serialize_assistant_message(assistant_msg))
 
         # If no tool calls → the agent decided it is done
         if not assistant_msg.tool_calls:
+            # Guard: if this is an index crawl and no programs were persisted,
+            # nudge the agent to keep going instead of finishing empty-handed.
+            if (
+                page_type_hint == "index"
+                and not collected_programs
+                and iteration < max_iterations - 1
+            ):
+                logger.warning(
+                    "[AgentLoop] Agent tried to finish at iteration %d "
+                    "with 0 programs on index page — nudging to continue",
+                    iteration,
+                )
+                messages.append({
+                    "role": "user",
+                    "content": (
+                        "You have not extracted any programs yet. "
+                        "You MUST fetch at least one detail page URL, "
+                        "extract the program info, and call persist_programs_skill "
+                        "before finishing. Continue working."
+                    ),
+                })
+                continue
+
             final_text = assistant_msg.content or ""
             logger.info(
                 "[AgentLoop] Agent finished after %d iteration(s)", iteration
@@ -859,11 +985,13 @@ async def agent_loop(
                 "trace": trace,
                 "iterations": iteration,
                 "todos": todo.items,
+                "collected_programs": collected_programs,
             }
 
         # Track whether a todo update happened this iteration
         todo_updated_this_iteration = False
         idle_requested = False
+        browser_fetch_done_this_iteration = False
 
         # Execute every tool call the model requested
         for tool_call in assistant_msg.tool_calls:
@@ -875,6 +1003,28 @@ async def agent_loop(
                 fn_name,
                 fn_args_raw[:200],
             )
+
+            # Rate-limit: only one browser_automation_skill call per iteration
+            # to prevent context blowup from parallel detail page fetches.
+            if fn_name == "browser_automation_skill" and browser_fetch_done_this_iteration:
+                result_str = (
+                    "SKIPPED: Only one browser fetch per iteration. "
+                    "Process the current page first (extract info, "
+                    "call persist_programs_skill), then fetch the next URL."
+                )
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": tool_call.id,
+                    "content": result_str,
+                })
+                trace.append({
+                    "stage": "tool_call",
+                    "iteration": iteration,
+                    "tool": fn_name,
+                    "args_preview": fn_args_raw[:500],
+                    "result_preview": result_str,
+                })
+                continue
 
             # -- Built-in tool dispatch --
             if fn_name == "todo":
@@ -892,9 +1042,9 @@ async def agent_loop(
             elif fn_name == "bg_run":
                 result_str = _handle_bg_run(fn_args_raw, bg, registry)
             elif fn_name == "bg_check":
-                result_str = _handle_bg_check(fn_args_raw, bg)
+                result_str = await _handle_bg_check(fn_args_raw, bg)
             elif fn_name == "team_spawn":
-                result_str = _handle_team_spawn(fn_args_raw, team, registry)
+                result_str = _handle_team_spawn(fn_args_raw, team, registry, page_type_hint)
             elif fn_name == "team_send":
                 result_str = _handle_team_send(fn_args_raw, agent_name, bus)
             elif fn_name == "team_inbox":
@@ -929,6 +1079,20 @@ async def agent_loop(
                     fn_name, fn_args_raw, registry
                 )
 
+            # Track browser fetch for rate-limiting
+            if fn_name == "browser_automation_skill":
+                browser_fetch_done_this_iteration = True
+
+            # Accumulate parsed programs from persist_programs_skill
+            if fn_name == "persist_programs_skill":
+                try:
+                    skill_result = json.loads(result_str)
+                    for prog in skill_result.get("parsed_programs", []):
+                        if isinstance(prog, dict):
+                            collected_programs.append(prog)
+                except (json.JSONDecodeError, TypeError):
+                    pass
+
             trace.append(
                 {
                     "stage": "tool_call",
@@ -955,6 +1119,7 @@ async def agent_loop(
                 "trace": trace,
                 "iterations": iteration,
                 "todos": todo.items,
+                "collected_programs": collected_programs,
             }
 
         # Update nag counter
@@ -969,6 +1134,7 @@ async def agent_loop(
         "trace": trace,
         "iterations": max_iterations,
         "todos": todo.items,
+        "collected_programs": collected_programs,
     }
 
 
@@ -1071,13 +1237,19 @@ def _handle_bg_run(
         return json.dumps({"error": str(exc)})
 
 
-def _handle_bg_check(fn_args_raw: str, bg: BackgroundManager) -> str:
-    """Check background task status (s08)."""
+async def _handle_bg_check(fn_args_raw: str, bg: BackgroundManager) -> str:
+    """Wait for a background task to complete and return its result (s08).
+
+    Blocks up to ``timeout`` seconds (default 300) so the agent loop
+    does not burn iterations polling.
+    """
     try:
         fn_args = json.loads(fn_args_raw)
         task_id = fn_args.get("task_id")
+        timeout = float(fn_args.get("timeout", 300))
         if task_id:
-            return json.dumps(bg.check(task_id), ensure_ascii=False)
+            result = await bg.wait(task_id, timeout=timeout)
+            return json.dumps(result, ensure_ascii=False)
         return json.dumps(bg.list_all(), ensure_ascii=False)
     except Exception as exc:
         logger.warning("[AgentLoop] bg_check failed: %s", exc)
@@ -1226,7 +1398,10 @@ def _handle_protocol_status(
 
 
 def _handle_team_spawn(
-    fn_args_raw: str, team: TeammateManager, registry: SkillRegistry
+    fn_args_raw: str,
+    team: TeammateManager,
+    registry: SkillRegistry,
+    page_type_hint: str | None = None,
 ) -> str:
     """Spawn a new teammate (s09)."""
     try:
@@ -1236,6 +1411,7 @@ def _handle_team_spawn(
             role=fn_args.get("role", ""),
             prompt=fn_args.get("prompt", ""),
             registry=registry,
+            page_type_hint="detail" if page_type_hint in ("index", "detail") else page_type_hint,
         )
     except Exception as exc:
         logger.warning("[AgentLoop] team_spawn failed: %s", exc)
@@ -1404,6 +1580,28 @@ async def _handle_skill_call(
     """Execute a SkillRegistry tool in a thread."""
     try:
         fn_args = json.loads(fn_args_raw)
+    except json.JSONDecodeError as exc:
+        logger.warning("[AgentLoop] Tool %s JSON parse failed: %s", fn_name, exc)
+        if fn_name == "persist_programs_skill":
+            return json.dumps({
+                "error": (
+                    f"Invalid JSON in tool arguments: {exc}. "
+                    "Your tool call was too large and got truncated. "
+                    "You MUST split into ONE program per call. "
+                    "Use ONLY required fields: name_en, source_url. "
+                    "Omit description, tuition_fees, and other large fields — "
+                    "they can be added later. Example: "
+                    '{"univ_slug":"x","year":2026,"programs":[{"name_en":"Program Name","source_url":"https://..."}]}'
+                )
+            })
+        return json.dumps({
+            "error": (
+                f"Invalid JSON in tool arguments: {exc}. "
+                "Your output was likely truncated. "
+                "Simplify the payload or split into smaller calls."
+            )
+        })
+    try:
         result = await asyncio.to_thread(registry.execute, fn_name, fn_args)
         return json.dumps(result, ensure_ascii=False, default=str)
     except Exception as exc:

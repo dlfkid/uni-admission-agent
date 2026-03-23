@@ -56,20 +56,21 @@ class BackgroundManager:
         try:
             result = await coro
             result_str = json.dumps(result, ensure_ascii=False, default=str)
-            result_preview = result_str[:500]
+            # Keep up to 50 000 chars so browser HTML / markdown results survive
+            result_kept = result_str[:50_000]
         except Exception as exc:
             logger.warning("[Background] %s failed: %s", task_id, exc)
-            result_preview = f"Error: {exc}"
+            result_kept = f"Error: {exc}"
 
         entry = self._tasks.get(task_id)
         if entry:
             entry["status"] = "completed"
-            entry["result_preview"] = result_preview
+            entry["result"] = result_kept
 
         self._notifications.append({
             "task_id": task_id,
             "skill": self._tasks[task_id]["skill"] if task_id in self._tasks else "unknown",
-            "result": result_preview,
+            "result": result_kept,
         })
         logger.info("[Background] Completed %s", task_id)
 
@@ -82,7 +83,7 @@ class BackgroundManager:
         return notifs
 
     def check(self, task_id: str) -> dict[str, Any]:
-        """Check the status of a specific background task."""
+        """Check the status of a specific background task (non-blocking)."""
         entry = self._tasks.get(task_id)
         if not entry:
             return {"error": f"Unknown background task: {task_id}"}
@@ -90,7 +91,38 @@ class BackgroundManager:
             "id": entry["id"],
             "skill": entry["skill"],
             "status": entry["status"],
-            "result_preview": entry.get("result_preview"),
+            "result": entry.get("result"),
+        }
+
+    async def wait(self, task_id: str, timeout: float = 300) -> dict[str, Any]:
+        """Block until a background task completes or timeout (seconds)."""
+        entry = self._tasks.get(task_id)
+        if not entry:
+            return {"error": f"Unknown background task: {task_id}"}
+        if entry["status"] == "completed":
+            return {
+                "id": entry["id"],
+                "skill": entry["skill"],
+                "status": "completed",
+                "result": entry.get("result"),
+            }
+        async_task = entry.get("async_task")
+        if async_task is None:
+            return {"error": f"No async task for {task_id}"}
+        try:
+            await asyncio.wait_for(asyncio.shield(async_task), timeout=timeout)
+        except asyncio.TimeoutError:
+            return {
+                "id": entry["id"],
+                "skill": entry["skill"],
+                "status": "timeout",
+                "result": None,
+            }
+        return {
+            "id": entry["id"],
+            "skill": entry["skill"],
+            "status": entry.get("status", "completed"),
+            "result": entry.get("result"),
         }
 
     def list_all(self) -> list[dict[str, Any]]:
@@ -101,7 +133,7 @@ class BackgroundManager:
                 "skill": e["skill"],
                 "status": e["status"],
                 "args_preview": e["args_preview"],
-                "result_preview": e.get("result_preview"),
+                "result": e.get("result"),
             }
             for e in self._tasks.values()
         ]

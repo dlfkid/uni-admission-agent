@@ -69,7 +69,61 @@ def micro_compact(messages: list[dict[str, Any]]) -> None:
     for idx, tool_name in tool_indices[:-KEEP_RECENT_TOOL_RESULTS]:
         content = messages[idx].get("content", "")
         if isinstance(content, str) and len(content) > 200:
-            messages[idx]["content"] = f"[Previous: used {tool_name}]"
+            summary = _summarize_tool_result(tool_name, content)
+            messages[idx]["content"] = summary
+
+
+def _summarize_tool_result(tool_name: str, content: str) -> str:
+    """Create a compact placeholder that preserves key data from tool results.
+
+    For browser_automation_skill and analyze_page_skill, the selected_urls
+    list is critical for the agent to continue working after compaction.
+    """
+    placeholder = f"[Previous: used {tool_name}]"
+
+    if tool_name not in ("browser_automation_skill", "analyze_page_skill"):
+        # For persist_programs_skill, keep the summary line
+        if tool_name == "persist_programs_skill":
+            try:
+                data = json.loads(content)
+                imported = data.get("imported_count", 0)
+                updated = data.get("updated_count", 0)
+                total = data.get("total_submitted", 0)
+                dry = data.get("dry_run", False)
+                parsed = data.get("parsed_programs", [])
+                placeholder += (
+                    f" imported={imported} updated={updated}"
+                    f" total_submitted={total} dry_run={dry}"
+                    f" parsed_programs_count={len(parsed)}"
+                )
+            except (json.JSONDecodeError, TypeError):
+                pass
+        return placeholder
+
+    # For browser results, preserve selected_urls which the agent needs
+    try:
+        data = json.loads(content)
+    except (json.JSONDecodeError, TypeError):
+        return placeholder
+
+    parts = [placeholder]
+
+    # Preserve selected_urls (critical for index→detail workflow)
+    selected = data.get("selected_urls")
+    if selected and isinstance(selected, list):
+        parts.append(f"selected_urls: {json.dumps(selected, ensure_ascii=False)}")
+
+    # Preserve page_type if present
+    page_type = data.get("page_type") or data.get("page_type_hint")
+    if page_type:
+        parts.append(f"page_type: {page_type}")
+
+    # Preserve link count from analyze results
+    link_count = data.get("detail_link_count") or data.get("link_count")
+    if link_count is not None:
+        parts.append(f"link_count: {link_count}")
+
+    return "\n".join(parts)
 
 
 def _find_tool_name(
@@ -116,8 +170,11 @@ async def auto_compact(
                     "Summarize the following agent conversation for continuity. "
                     "Include: what task was requested, what tools were called and "
                     "their key results, current progress (what's done vs remaining), "
-                    "and any important state (URLs, slugs, counts). Be concise but "
-                    "complete — this summary replaces the full history.\n\n"
+                    "and any important state (URLs, slugs, counts). "
+                    "CRITICAL: preserve ALL discovered URLs (selected_urls, detail "
+                    "page URLs, index URLs) verbatim — these are needed for the "
+                    "next steps. Be concise but complete — this summary replaces "
+                    "the full history.\n\n"
                     f"{truncated}"
                 ),
             }

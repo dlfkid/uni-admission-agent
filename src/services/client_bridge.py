@@ -112,6 +112,7 @@ class ClientRpcBroker:
         self.timeout_seconds = max(0.1, float(timeout_seconds))
         self._lock = threading.RLock()
         self._pending: dict[str, asyncio.Future] = {}
+        self._pending_loop: dict[str, asyncio.AbstractEventLoop] = {}
         self._pending_client: dict[str, str] = {}
 
     def create_pending(self, client_id: str) -> tuple[str, asyncio.Future]:
@@ -121,6 +122,7 @@ class ClientRpcBroker:
         request_id = uuid.uuid4().hex
         with self._lock:
             self._pending[request_id] = future
+            self._pending_loop[request_id] = loop
             self._pending_client[request_id] = str(client_id or "").strip()
         return request_id, future
 
@@ -137,6 +139,7 @@ class ClientRpcBroker:
         except asyncio.TimeoutError as exc:
             with self._lock:
                 self._pending.pop(request_id, None)
+                self._pending_loop.pop(request_id, None)
                 self._pending_client.pop(request_id, None)
             if not future.done():
                 future.cancel()
@@ -145,24 +148,44 @@ class ClientRpcBroker:
             if future.done():
                 with self._lock:
                     self._pending.pop(request_id, None)
+                    self._pending_loop.pop(request_id, None)
                     self._pending_client.pop(request_id, None)
 
     def resolve(self, request_id: str, payload: dict[str, Any]) -> bool:
-        """Resolve one pending request."""
+        """Resolve one pending request (thread-safe across event loops)."""
         with self._lock:
             future = self._pending.get(request_id)
+            loop = self._pending_loop.get(request_id)
         if not future or future.done():
             return False
-        future.set_result(dict(payload or {}))
+        result = dict(payload or {})
+        # Use call_soon_threadsafe to resolve futures that may live in a
+        # different event loop (e.g. when the skill handler runs in a thread
+        # with its own asyncio.run() loop).
+        if loop is not None and loop.is_running():
+            try:
+                loop.call_soon_threadsafe(future.set_result, result)
+                return True
+            except RuntimeError:
+                pass
+        future.set_result(result)
         return True
 
     def fail(self, request_id: str, message: str) -> bool:
-        """Fail one pending request."""
+        """Fail one pending request (thread-safe across event loops)."""
         with self._lock:
             future = self._pending.get(request_id)
+            loop = self._pending_loop.get(request_id)
         if not future or future.done():
             return False
-        future.set_exception(ClientUnavailableError(str(message or "client rpc failed")))
+        exc = ClientUnavailableError(str(message or "client rpc failed"))
+        if loop is not None and loop.is_running():
+            try:
+                loop.call_soon_threadsafe(future.set_exception, exc)
+                return True
+            except RuntimeError:
+                pass
+        future.set_exception(exc)
         return True
 
     def fail_all_for_client(self, client_id: str, message: str) -> int:

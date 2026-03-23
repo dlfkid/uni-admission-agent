@@ -301,7 +301,7 @@ app.add_middleware(
 task_manager = TaskManager()
 client_registry = ClientRegistry()
 client_sockets: Dict[str, WebSocket] = {}
-client_rpc_broker = ClientRpcBroker(timeout_seconds=45.0)
+client_rpc_broker = ClientRpcBroker(timeout_seconds=120.0)
 
 
 def _has_available_client(preferred_client_id: Optional[str]) -> bool:
@@ -656,6 +656,7 @@ async def api_agent_run(body: AgentRunRequest) -> AgentRunResponse:
                 page_type_hint=body.page_type_hint,
                 runtime_mode=body.runtime,
                 autonomous=body.autonomous,
+                dry_run=body.dry_run,
                 policy_profile=(
                     body.policy_profile.model_dump(exclude_none=True)
                     if body.policy_profile

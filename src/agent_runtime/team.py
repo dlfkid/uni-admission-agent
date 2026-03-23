@@ -122,6 +122,7 @@ class TeammateManager:
         role: str,
         prompt: str,
         registry: Any,
+        page_type_hint: str | None = None,
     ) -> str:
         """Spawn a new teammate with its own agent loop."""
         # Check for duplicates
@@ -143,7 +144,7 @@ class TeammateManager:
 
         # Launch async task
         async_task = asyncio.ensure_future(
-            self._teammate_loop(name, role, prompt, registry)
+            self._teammate_loop(name, role, prompt, registry, page_type_hint)
         )
         self._async_tasks[name] = async_task
         logger.info("[Team] Spawned teammate '%s' (role: %s)", name, role)
@@ -173,6 +174,7 @@ class TeammateManager:
         role: str,
         prompt: str,
         registry: Any,
+        page_type_hint: str | None = None,
     ) -> None:
         """Run a persistent WORK ↔ IDLE agent loop for a teammate (s11).
 
@@ -208,6 +210,7 @@ class TeammateManager:
                     _is_subagent=True,
                     _teammate_name=name,
                     _message_bus=self.bus,
+                    page_type_hint=page_type_hint,
                 )
                 summary = result.get("response", "(no summary)")
                 self.bus.send(name, "lead", f"[WORK DONE] {summary}")

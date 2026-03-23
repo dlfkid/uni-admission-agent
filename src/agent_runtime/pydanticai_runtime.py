@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any
 
 from src.agent_runtime.base import AgentRequest, AgentResponse
 from src.agent_runtime.legacy_runtime import LegacyRuntime
-from src.agent_runtime.loop import agent_loop
+from src.agent_runtime.loop import agent_loop, AgentPageTimeout, PAGE_TIMEOUT, SYSTEM_PROMPT
 from src.agent_runtime.skills.registry import build_skill_registry
 
 logger = logging.getLogger(__name__)
@@ -42,6 +43,8 @@ class PydanticAIRuntime:
     async def run(self, request: AgentRequest) -> AgentResponse:
         try:
             return await self._run_agent(request)
+        except AgentPageTimeout:
+            raise  # Do NOT fall back — timeouts are not runtime failures
         except Exception as exc:  # pylint: disable=broad-except
             logger.warning("pydanticai runtime failed, falling back: %s", exc)
             return await self.fallback_runtime.run(request)
@@ -58,11 +61,35 @@ class PydanticAIRuntime:
 
         user_message = self._build_user_message(request)
         registry = build_skill_registry()
+        hint = (request.payload or {}).get("page_type_hint")
 
-        result = await agent_loop(
-            user_message=user_message,
-            registry=registry,
-        )
+        # Build system prompt with dry-run instruction if needed
+        system_prompt = SYSTEM_PROMPT
+        if request.context.get("dry_run"):
+            system_prompt += (
+                "\n\nIMPORTANT: dry_run mode is active. "
+                "When calling persist_programs_skill, set dry_run=true "
+                "in the payload. Do NOT attempt database writes. "
+                "Do NOT use legacy_crawl_batch_skill — it bypasses dry-run "
+                "and writes directly to the database. Instead use "
+                "browser_automation_skill to fetch HTML, then "
+                "persist_programs_skill with dry_run=true."
+            )
+
+        try:
+            result = await asyncio.wait_for(
+                agent_loop(
+                    user_message=user_message,
+                    registry=registry,
+                    system_prompt=system_prompt,
+                    page_type_hint=hint,
+                ),
+                timeout=PAGE_TIMEOUT,
+            )
+        except asyncio.TimeoutError:
+            raise AgentPageTimeout(
+                f"agent_loop exceeded {PAGE_TIMEOUT}s for task={request.task}"
+            ) from None
 
         logger.info(
             "[Agent] Loop completed in %d iteration(s)",
@@ -77,6 +104,7 @@ class PydanticAIRuntime:
                 "task": request.task,
                 "agent_response": result.get("response", ""),
                 "iterations": result.get("iterations", 0),
+                "parsed_programs": result.get("collected_programs", []),
                 **dict(request.payload or {}),
             },
         )
