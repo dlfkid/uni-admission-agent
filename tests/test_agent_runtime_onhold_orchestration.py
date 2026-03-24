@@ -1,7 +1,11 @@
+from types import SimpleNamespace
+
 import pytest
 
 from src.agent_runtime.base import AgentRequest
+from src.agent_runtime.loop import agent_loop
 from src.agent_runtime.pydanticai_runtime import PydanticAIRuntime
+from src.agent_runtime.skills.registry import SkillRegistry
 
 
 @pytest.mark.asyncio
@@ -73,3 +77,66 @@ async def test_runtime_builds_correct_user_message(monkeypatch):
     assert "ucl" in msg
     assert "2026" in msg
     assert "auto" in msg
+
+
+@pytest.mark.asyncio
+async def test_agent_loop_emits_tool_call_started_and_finished(monkeypatch, tmp_path):
+    emitted: list[dict[str, object]] = []
+    monkeypatch.chdir(tmp_path)
+
+    responses = [
+        SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    message=SimpleNamespace(
+                        content=None,
+                        tool_calls=[
+                            SimpleNamespace(
+                                id="call-1",
+                                function=SimpleNamespace(
+                                    name="todo",
+                                    arguments=(
+                                        '{"items":[{"content":"inspect page","status":"completed"}]}'
+                                    ),
+                                ),
+                            )
+                        ],
+                    ),
+                    finish_reason="tool_calls",
+                )
+            ]
+        ),
+        SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    message=SimpleNamespace(content="done", tool_calls=[]),
+                    finish_reason="stop",
+                )
+            ]
+        ),
+    ]
+
+    class FakeCompletions:
+        async def create(self, **_kwargs):
+            return responses.pop(0)
+
+    fake_client = SimpleNamespace(
+        chat=SimpleNamespace(completions=FakeCompletions())
+    )
+
+    monkeypatch.setattr(
+        "src.agent_runtime.loop.resolve_openai_client",
+        lambda: (fake_client, "fake-model"),
+    )
+
+    result = await agent_loop(
+        user_message="crawl this page",
+        registry=SkillRegistry([]),
+        max_iterations=2,
+        event_sink=emitted.append,
+    )
+
+    event_types = [event["type"] for event in emitted]
+    assert "tool_call_started" in event_types
+    assert "tool_call_finished" in event_types
+    assert result["response"] == "done"

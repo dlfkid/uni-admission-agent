@@ -1027,6 +1027,13 @@ async def agent_loop(
                 fn_name,
                 fn_args_raw[:200],
             )
+            _emit_loop_event(
+                event_sink,
+                "tool_call_started",
+                iteration=iteration,
+                tool=fn_name,
+                tool_call_id=tool_call.id,
+            )
 
             # Rate-limit: only one browser_automation_skill call per iteration
             # to prevent context blowup from parallel detail page fetches.
@@ -1048,6 +1055,13 @@ async def agent_loop(
                     "args_preview": fn_args_raw[:500],
                     "result_preview": result_str,
                 })
+                _emit_loop_event(
+                    event_sink,
+                    "tool_call_finished",
+                    iteration=iteration,
+                    tool=fn_name,
+                    tool_call_id=tool_call.id,
+                )
                 continue
 
             # -- Built-in tool dispatch --
@@ -1125,6 +1139,13 @@ async def agent_loop(
                     "args_preview": fn_args_raw[:500],
                     "result_preview": result_str[:500],
                 }
+            )
+            _emit_loop_event(
+                event_sink,
+                "tool_call_finished",
+                iteration=iteration,
+                tool=fn_name,
+                tool_call_id=tool_call.id,
             )
 
             messages.append(
