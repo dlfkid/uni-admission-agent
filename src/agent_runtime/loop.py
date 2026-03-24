@@ -66,6 +66,23 @@ def _emit_loop_event(
     event_sink(event)
 
 
+def _emit_loop_done(
+    event_sink: EventSink | None,
+    *,
+    iteration: int,
+    reason: str,
+    response_preview: str = "",
+) -> None:
+    """Emit a terminal loop event for any completion path."""
+    _emit_loop_event(
+        event_sink,
+        "agent_done",
+        iteration=iteration,
+        reason=reason,
+        response_preview=response_preview[:300],
+    )
+
+
 def _build_system_prompt() -> str:
     """Build the system prompt with a lightweight skill directory (s05 Layer 1)."""
     skill_list = _SKILL_LOADER.get_descriptions()
@@ -930,6 +947,11 @@ async def agent_loop(
                     "[AgentLoop] %d consecutive LLM timeouts — aborting loop",
                     consecutive_timeouts,
                 )
+                _emit_loop_done(
+                    event_sink,
+                    iteration=iteration,
+                    reason="consecutive_timeouts",
+                )
                 return {
                     "response": "",
                     "trace": trace,
@@ -1004,10 +1026,10 @@ async def agent_loop(
                     "response_preview": final_text[:300],
                 }
             )
-            _emit_loop_event(
+            _emit_loop_done(
                 event_sink,
-                "agent_done",
                 iteration=iteration,
+                reason="completed",
                 response_preview=final_text[:300],
             )
             return {
@@ -1165,6 +1187,12 @@ async def agent_loop(
         # s11: if idle was requested, stop the loop so teammate enters idle phase
         if idle_requested:
             logger.info("[AgentLoop] Idle requested — stopping loop")
+            _emit_loop_done(
+                event_sink,
+                iteration=iteration,
+                reason="idle_requested",
+                response_preview="Entered idle mode.",
+            )
             return {
                 "response": "Entered idle mode.",
                 "trace": trace,
@@ -1180,6 +1208,12 @@ async def agent_loop(
             iterations_since_todo += 1
 
     logger.warning("[AgentLoop] Hit max iterations (%d)", max_iterations)
+    _emit_loop_done(
+        event_sink,
+        iteration=max_iterations,
+        reason="max_iterations",
+        response_preview="Agent reached maximum iteration limit.",
+    )
     return {
         "response": "Agent reached maximum iteration limit.",
         "trace": trace,

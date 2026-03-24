@@ -140,3 +140,56 @@ async def test_agent_loop_emits_tool_call_started_and_finished(monkeypatch, tmp_
     assert "tool_call_started" in event_types
     assert "tool_call_finished" in event_types
     assert result["response"] == "done"
+
+
+@pytest.mark.asyncio
+async def test_agent_loop_emits_agent_done_when_max_iterations_hit(monkeypatch, tmp_path):
+    emitted: list[dict[str, object]] = []
+    monkeypatch.chdir(tmp_path)
+
+    responses = [
+        SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    message=SimpleNamespace(
+                        content=None,
+                        tool_calls=[
+                            SimpleNamespace(
+                                id="call-1",
+                                function=SimpleNamespace(
+                                    name="todo",
+                                    arguments=(
+                                        '{"items":[{"content":"inspect page","status":"completed"}]}'
+                                    ),
+                                ),
+                            )
+                        ],
+                    ),
+                    finish_reason="tool_calls",
+                )
+            ]
+        )
+    ]
+
+    class FakeCompletions:
+        async def create(self, **_kwargs):
+            return responses.pop(0)
+
+    fake_client = SimpleNamespace(
+        chat=SimpleNamespace(completions=FakeCompletions())
+    )
+
+    monkeypatch.setattr(
+        "src.agent_runtime.loop.resolve_openai_client",
+        lambda: (fake_client, "fake-model"),
+    )
+
+    await agent_loop(
+        user_message="crawl this page",
+        registry=SkillRegistry([]),
+        max_iterations=1,
+        event_sink=emitted.append,
+    )
+
+    event_types = [event["type"] for event in emitted]
+    assert "agent_done" in event_types
