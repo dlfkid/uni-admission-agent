@@ -1004,6 +1004,12 @@ async def agent_loop(
                     "response_preview": final_text[:300],
                 }
             )
+            _emit_loop_event(
+                event_sink,
+                "agent_done",
+                iteration=iteration,
+                response_preview=final_text[:300],
+            )
             return {
                 "response": final_text,
                 "trace": trace,

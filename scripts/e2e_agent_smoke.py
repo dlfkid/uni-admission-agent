@@ -152,6 +152,75 @@ def extract_programs(task_result: dict[str, Any]) -> list[dict[str, Any]]:
     return parsed  # Return empty if nothing found
 
 
+def evaluate_streaming_acceptance(*, events: list[dict[str, Any]]) -> dict[str, Any]:
+    """Evaluate whether streaming behavior met the smoke-test acceptance bar."""
+    event_types = [str(event.get("type") or "") for event in list(events or [])]
+    required_lifecycle = [
+        "llm_call_started",
+        "tool_call_finished",
+        "agent_done",
+    ]
+    missing_lifecycle = [
+        event_type for event_type in required_lifecycle if event_type not in event_types
+    ]
+    summary_delta_seen = "summary_delta" in event_types
+    summary_fallback_seen = any(
+        event.get("type") == "summary_finished" and event.get("streamed") is False
+        for event in list(events or [])
+    )
+    return {
+        "event_types": event_types,
+        "missing_lifecycle": missing_lifecycle,
+        "summary_delta_seen": summary_delta_seen,
+        "summary_fallback_seen": summary_fallback_seen,
+        "lifecycle_ok": not missing_lifecycle,
+        "summary_ok": summary_delta_seen or summary_fallback_seen,
+    }
+
+
+def assert_streaming_acceptance(*, events: list[dict[str, Any]]) -> dict[str, Any]:
+    """Raise when the smoke run failed the streaming acceptance criteria."""
+    verdict = evaluate_streaming_acceptance(events=events)
+    if not verdict["lifecycle_ok"]:
+        raise AssertionError(
+            "Missing lifecycle streaming events: "
+            + ", ".join(verdict["missing_lifecycle"])
+        )
+    if not verdict["summary_ok"]:
+        raise AssertionError(
+            "Missing streamed/fallback final summary event."
+        )
+    return verdict
+
+
+async def collect_task_events(client: Any, task_id: str) -> list[dict[str, Any]]:
+    """Collect task lifecycle events from the SSE endpoint until it closes."""
+    events: list[dict[str, Any]] = []
+    async with client.stream("GET", f"/tasks/{task_id}/events", timeout=None) as response:
+        response.raise_for_status()
+        async for line in response.aiter_lines():
+            if not line.startswith("data: "):
+                continue
+            payload = line[6:].strip()
+            if not payload:
+                continue
+            events.append(json.loads(payload))
+    return events
+
+
+async def finalize_events_task(
+    events_task: "asyncio.Task[list[dict[str, Any]]]",
+) -> list[dict[str, Any]]:
+    """Resolve the SSE collector task without hanging the smoke test."""
+    try:
+        return await asyncio.wait_for(events_task, timeout=5.0)
+    except asyncio.TimeoutError:
+        events_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await events_task
+        return []
+
+
 async def run_single_test(
     client: Any,
     *,
@@ -189,6 +258,7 @@ async def run_single_test(
 
     task_id = resp.json()["task_id"]
     print(f"  Task ID: {task_id}")
+    events_task = asyncio.create_task(collect_task_events(client, task_id))
 
     # Poll
     start = time.monotonic()
@@ -201,7 +271,13 @@ async def run_single_test(
                 await asyncio.sleep(2)
             except Exception:
                 pass  # Best-effort cancel
-            return {"status": "TIMEOUT", "duration_sec": elapsed, "programs": []}
+            events = await finalize_events_task(events_task)
+            return {
+                "status": "TIMEOUT",
+                "duration_sec": elapsed,
+                "programs": [],
+                "events": events,
+            }
 
         await asyncio.sleep(POLL_INTERVAL)
 
@@ -222,25 +298,36 @@ async def run_single_test(
             print(f"\n  Status: DONE | Duration: {duration:.1f}s")
             result = data.get("result") or {}
             programs = extract_programs(result)
+            events = await finalize_events_task(events_task)
+            acceptance = assert_streaming_acceptance(events=events)
             print(f"  Programs extracted: {len(programs)}")
             print(render_programs_table(programs))
+            print(
+                "  Streaming acceptance: PASS "
+                f"(summary_delta={acceptance['summary_delta_seen']}, "
+                f"summary_fallback={acceptance['summary_fallback_seen']})"
+            )
             return {
                 "status": "DONE",
                 "duration_sec": round(duration, 1),
                 "url": url,
                 "programs": programs,
                 "raw_result": result,
+                "events": events,
+                "streaming_acceptance": acceptance,
             }
 
         if state == "FAILED":
             duration = time.monotonic() - start
             error = data.get("error") or "unknown"
+            events = await finalize_events_task(events_task)
             print(f"\n  FAILED after {duration:.1f}s: {error}")
             return {
                 "status": "FAILED",
                 "duration_sec": round(duration, 1),
                 "error": error,
                 "programs": [],
+                "events": events,
             }
 
 
