@@ -96,8 +96,9 @@ class RouterAgent:
 
     async def stream_text(self, prompt: str):
         """Expose optional text streaming entrypoint for summary helpers."""
-        if False:
-            yield str(prompt or "")
+        del prompt
+        for chunk in ():
+            yield chunk
         raise NotImplementedError(
             "RouterAgent does not provide token streaming for text summaries yet"
         )

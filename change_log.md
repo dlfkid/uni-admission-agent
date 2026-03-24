@@ -1,5 +1,11 @@
 # Change Log (Consolidated)
 
+## 2026-03-25
+
+### Agent Streaming Output
+- Added agent SSE lifecycle events and streamed final summary output boundaries.
+- Added smoke-test acceptance gate for lifecycle streaming and final summary behavior.
+
 ## 2026-03-11
 
 ### PydanticAI Agent Runtime Evolution (Opt-In)
