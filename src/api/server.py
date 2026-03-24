@@ -15,6 +15,7 @@ Or directly:
 
 import asyncio
 import copy
+import json
 import logging
 import os
 import shutil
@@ -25,8 +26,9 @@ from typing import List, Optional, Dict, Any
 from io import StringIO
 
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, HTTPException, Query, Body, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Query, Body, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from dotenv import find_dotenv, dotenv_values
 
 from src.api.schemas import (
@@ -849,6 +851,38 @@ async def api_task_status(task_id: str) -> TaskStatusResponse:
     if info is None:
         raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
     return TaskStatusResponse(**info.to_dict())
+
+
+@app.get("/tasks/{task_id}/events")
+async def api_task_events(task_id: str, request: Request) -> StreamingResponse:
+    """Stream stored task events over SSE for agent progress UIs."""
+    info = task_manager.get_task(task_id)
+    if info is None:
+        raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
+
+    async def event_stream():
+        event_index = 0
+        try:
+            while True:
+                current = task_manager.get_task(task_id)
+                if current is None:
+                    break
+
+                while event_index < len(current.events):
+                    event = current.events[event_index]
+                    event_index += 1
+                    yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+
+                if current.state in (TaskState.DONE, TaskState.FAILED):
+                    break
+                if await request.is_disconnected():
+                    break
+
+                await asyncio.sleep(0.05)
+        except asyncio.CancelledError:
+            return
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
 
 
 @app.get("/clients", response_model=List[ClientInfoResponse])
