@@ -641,6 +641,7 @@ async def run_agent_crawl(
     client_id: Optional[str] = None,
     autonomous: bool = False,
     dry_run: bool = False,
+    event_sink: Any = None,
 ) -> dict[str, Any]:
     """Run crawl orchestration via configured agent runtime."""
     # Lazy import: runtime_factory → pydanticai_runtime → crawler forms a
@@ -672,6 +673,7 @@ async def run_agent_crawl(
                 "client_id": str(client_id).strip() if client_id else None,
                 "autonomous": bool(autonomous),
                 "dry_run": bool(dry_run),
+                "event_sink": event_sink,
             },
         )
     )

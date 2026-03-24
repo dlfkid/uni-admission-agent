@@ -395,6 +395,10 @@ class TaskStatusResponse(BaseModel):
         default_factory=dict,
         description="Structured progress metadata for fine-grained UI display",
     )
+    events: List[Dict[str, Any]] = Field(
+        default_factory=list,
+        description="Structured lifecycle events emitted by the task runtime",
+    )
 
 
 class ClientInfoResponse(BaseModel):

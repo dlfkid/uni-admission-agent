@@ -643,6 +643,9 @@ async def api_agent_run(body: AgentRunRequest) -> AgentRunResponse:
         root_logger = logging.getLogger()
         root_logger.addHandler(log_handler)
 
+        def _event_sink(event: dict[str, Any]) -> None:
+            task_manager.add_event(task_id, event)
+
         task_manager.update_task(
             task_id,
             state=TaskState.RUNNING,
@@ -659,6 +662,7 @@ async def api_agent_run(body: AgentRunRequest) -> AgentRunResponse:
                 runtime_mode=body.runtime,
                 autonomous=body.autonomous,
                 dry_run=body.dry_run,
+                event_sink=_event_sink,
                 policy_profile=(
                     body.policy_profile.model_dump(exclude_none=True)
                     if body.policy_profile
