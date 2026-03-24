@@ -9,6 +9,7 @@ from typing import Any
 from src.agent_runtime.base import AgentEvent, AgentRequest, AgentResponse, EventSink
 from src.agent_runtime.legacy_runtime import LegacyRuntime
 from src.agent_runtime.loop import agent_loop, AgentPageTimeout, PAGE_TIMEOUT, SYSTEM_PROMPT
+from src.agent_runtime.summary_stream import generate_summary_with_stream
 from src.agent_runtime.skills.registry import build_skill_registry
 
 logger = logging.getLogger(__name__)
@@ -58,6 +59,19 @@ class PydanticAIRuntime:
     # ------------------------------------------------------------------
     # Core: LLM-driven agent loop
     # ------------------------------------------------------------------
+
+    def _resolve_summary_provider(self, request: AgentRequest) -> Any:
+        """Resolve optional text-summary provider without affecting core crawl flow."""
+        provider = request.context.get("summary_provider")
+        if provider is not None:
+            return provider
+        if self.model_adapter is None:
+            return None
+        try:
+            return self.model_adapter.resolve(mode="internal")
+        except Exception as exc:  # pylint: disable=broad-except
+            logger.info("Summary provider unavailable, using one-shot fallback: %s", exc)
+            return None
 
     async def _run_agent(self, request: AgentRequest) -> AgentResponse:
         """Hand the request to the agent loop and let the LLM drive."""
@@ -114,6 +128,12 @@ class PydanticAIRuntime:
             "[Agent] Loop completed in %d iteration(s)",
             result.get("iterations", 0),
         )
+        final_response = await generate_summary_with_stream(
+            prompt=str(result.get("response", "") or ""),
+            provider=self._resolve_summary_provider(request),
+            fallback_text=str(result.get("response", "") or ""),
+            event_sink=event_sink,
+        )
 
         return AgentResponse(
             status="done",
@@ -121,7 +141,7 @@ class PydanticAIRuntime:
             trace=result.get("trace", []),
             output={
                 "task": request.task,
-                "agent_response": result.get("response", ""),
+                "agent_response": final_response,
                 "iterations": result.get("iterations", 0),
                 "parsed_programs": result.get("collected_programs", []),
                 **dict(request.payload or {}),
