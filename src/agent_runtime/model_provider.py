@@ -17,6 +17,8 @@ class ResolvedModelClient:
     mode: str
     client: Any
     context: dict[str, Any] = field(default_factory=dict)
+    stream_text: Callable[..., Any] | None = None
+    generate_text: Callable[..., Any] | None = None
 
 
 class ModelProviderAdapter:
@@ -46,13 +48,26 @@ class ModelProviderAdapter:
                 raise AgentConfigError("internal model disabled")
 
             factory = self.internal_factory or self._default_internal_factory
-            return ResolvedModelClient(mode="internal", client=factory(), context={})
+            client = factory()
+            return ResolvedModelClient(
+                mode="internal",
+                client=client,
+                context={},
+                stream_text=getattr(client, "stream_text", None),
+                generate_text=getattr(client, "generate_text", None),
+            )
 
         if normalized_mode == "external":
             if not self.allow_external:
                 raise AgentConfigError("external model disabled")
             context = dict(external_context or {})
-            return ResolvedModelClient(mode="external", client=context, context=context)
+            return ResolvedModelClient(
+                mode="external",
+                client=context,
+                context=context,
+                stream_text=context.get("stream_text"),
+                generate_text=context.get("generate_text"),
+            )
 
         raise AgentConfigError(f"unsupported model mode: {mode}")
 
