@@ -23,6 +23,7 @@ import os
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
+from src.agent_runtime.base import AgentEvent, EventSink
 from src.agent_runtime.background import BackgroundManager
 from src.agent_runtime.protocol import ProtocolManager
 
@@ -51,6 +52,18 @@ class AgentPageTimeout(Exception):
     """Raised when agent_loop exceeds PAGE_TIMEOUT."""
 
 _SKILL_LOADER = SkillLoader()
+
+
+def _emit_loop_event(
+    event_sink: EventSink | None,
+    event_type: str,
+    **payload: Any,
+) -> None:
+    """Safely emit a loop lifecycle event."""
+    if event_sink is None:
+        return
+    event: AgentEvent = {"type": event_type, **payload}
+    event_sink(event)
 
 
 def _build_system_prompt() -> str:
@@ -824,6 +837,7 @@ async def agent_loop(
     _teammate_name: str | None = None,
     _message_bus: MessageBus | None = None,
     page_type_hint: str | None = None,
+    event_sink: EventSink | None = None,
 ) -> dict[str, Any]:
     """Run the LLM-driven agent loop.
 
@@ -890,6 +904,11 @@ async def agent_loop(
         _maybe_inject_nag(messages, iterations_since_todo, todo)
 
         try:
+            _emit_loop_event(
+                event_sink,
+                "llm_call_started",
+                iteration=iteration,
+            )
             response = await asyncio.wait_for(
                 client.chat.completions.create(
                     model=model,
@@ -932,6 +951,11 @@ async def agent_loop(
         choice = response.choices[0]
         consecutive_timeouts = 0  # reset on successful call
         assistant_msg = choice.message
+        _emit_loop_event(
+            event_sink,
+            "llm_call_finished",
+            iteration=iteration,
+        )
 
         # Detect output truncation (token limit hit)
         if getattr(choice, "finish_reason", None) == "length":

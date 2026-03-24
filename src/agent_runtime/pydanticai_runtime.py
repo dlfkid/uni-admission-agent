@@ -6,12 +6,18 @@ import asyncio
 import logging
 from typing import Any
 
-from src.agent_runtime.base import AgentRequest, AgentResponse
+from src.agent_runtime.base import AgentEvent, AgentRequest, AgentResponse, EventSink
 from src.agent_runtime.legacy_runtime import LegacyRuntime
 from src.agent_runtime.loop import agent_loop, AgentPageTimeout, PAGE_TIMEOUT, SYSTEM_PROMPT
 from src.agent_runtime.skills.registry import build_skill_registry
 
 logger = logging.getLogger(__name__)
+
+
+def _emit_event(event_sink: EventSink | None, event: AgentEvent) -> None:
+    """Safely emit a runtime lifecycle event."""
+    if event_sink is not None:
+        event_sink(dict(event))
 
 
 class PydanticAIRuntime:
@@ -62,6 +68,18 @@ class PydanticAIRuntime:
         user_message = self._build_user_message(request)
         registry = build_skill_registry()
         hint = (request.payload or {}).get("page_type_hint")
+        event_sink = request.context.get("event_sink")
+        if not callable(event_sink):
+            event_sink = None
+
+        _emit_event(
+            event_sink,
+            {
+                "type": "agent_started",
+                "task": request.task,
+                "page_type_hint": hint,
+            },
+        )
 
         # Build system prompt with dry-run instruction if needed
         system_prompt = SYSTEM_PROMPT
@@ -83,6 +101,7 @@ class PydanticAIRuntime:
                     registry=registry,
                     system_prompt=system_prompt,
                     page_type_hint=hint,
+                    event_sink=event_sink,
                 ),
                 timeout=PAGE_TIMEOUT,
             )
