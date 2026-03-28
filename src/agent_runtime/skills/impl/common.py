@@ -7,7 +7,38 @@ import logging
 from src.agent_bridge.client_automation_bridge import ClientAutomationBridge
 from src.agent_bridge.contracts import BrowserFetchInput
 
+import threading
+import time
+
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# LLM link-filter cache
+# Keyed by (url, page_type_hint).  Entries expire after TTL seconds so that
+# stale index pages are eventually re-analysed without penalising the common
+# case where the agent mistakenly re-fetches the same index URL several times
+# within a single task run.
+# ---------------------------------------------------------------------------
+_llm_filter_cache: dict[tuple[str, str], tuple[float, list, dict]] = {}
+_llm_filter_lock = threading.Lock()
+_LLM_FILTER_CACHE_TTL = 300  # seconds
+
+
+def _get_cached_llm_filter(url: str, hint: str) -> tuple[list, dict] | None:
+    key = (url, hint)
+    with _llm_filter_lock:
+        entry = _llm_filter_cache.get(key)
+        if entry and (time.monotonic() - entry[0]) < _LLM_FILTER_CACHE_TTL:
+            return entry[1], entry[2]
+    return None
+
+
+def _set_cached_llm_filter(url: str, hint: str, urls: list, texts: dict) -> None:
+    key = (url, hint)
+    with _llm_filter_lock:
+        _llm_filter_cache[key] = (time.monotonic(), urls, texts)
+
+
 from src.agent_runtime.skills.contracts import (
     BrowserAutomationSkillInput,
     PersistProgramsSkillInput,
@@ -130,8 +161,56 @@ def browser_automation_skill_handler(
     )
     result = output.model_dump(mode="json")
 
-    # Convert raw HTML to markdown to avoid context bloat
+    # For index pages, replace the client-side heuristic selected_urls with
+    # LLM-ranked candidates.  The client heuristic matches on URL keywords
+    # (e.g. "/undergraduate") and returns links in DOM order — so navigation
+    # links that appear early in the page fill the limit before real course
+    # detail links are reached.  Running filter_links_by_llm on the raw HTML
+    # gives the agent a clean, correctly-ranked candidate list.
     html = result.get("html_content") or ""
+    if payload.page_type_hint == "index" and html:
+        cached = _get_cached_llm_filter(payload.url, payload.page_type_hint)
+        if cached is not None:
+            cached_urls, cached_texts = cached
+            result["selected_urls"] = cached_urls
+            if cached_texts:
+                result["selected_link_texts"] = cached_texts
+            logger.info(
+                "[BrowserSkill] LLM filter cache hit (%d links) for %s",
+                len(cached_urls),
+                payload.url,
+            )
+        else:
+            try:
+                from src.services.crawler import analyze_page
+                analysis = analyze_page(payload.url, html, "index")
+                llm_links = analysis.get("links") or []
+                filtered_urls = [link["url"] for link in llm_links]
+                filtered_texts = {
+                    link["url"]: link["text"]
+                    for link in llm_links
+                    if link.get("text")
+                }
+                _set_cached_llm_filter(payload.url, payload.page_type_hint, filtered_urls, filtered_texts)
+                if filtered_urls:
+                    result["selected_urls"] = filtered_urls
+                    result["selected_link_texts"] = filtered_texts
+                    logger.info(
+                        "[BrowserSkill] LLM filtered %d/%d candidate links for %s",
+                        len(filtered_urls),
+                        analysis.get("total_found", 0),
+                        payload.url,
+                    )
+                else:
+                    logger.info(
+                        "[BrowserSkill] LLM found no detail links (total_found=%d) for %s",
+                        analysis.get("total_found", 0),
+                        payload.url,
+                    )
+            except Exception as exc:
+                logger.warning("[BrowserSkill] LLM link filter failed, using heuristic: %s", exc)
+
+    # Convert raw HTML to markdown to avoid context bloat
     if html:
         result["html_content"] = _html_to_markdown(html, payload.url)
 

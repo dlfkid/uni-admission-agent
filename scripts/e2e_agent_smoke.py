@@ -506,7 +506,18 @@ async def main() -> None:
     print(f"  Results saved: {result_path.relative_to(PROJECT_ROOT)}")
     print(f"{'=' * 50}")
 
-    if detail_status != "DONE" or index_status != "DONE":
+    failed = False
+    if detail_status != "DONE":
+        print(f"  FAIL: detail test status={detail_status}")
+        failed = True
+    if index_status != "DONE":
+        print(f"  FAIL: index test status={index_status}")
+        failed = True
+    min_index_programs = 2
+    if index_progs < min_index_programs:
+        print(f"  FAIL: index test extracted {index_progs} program(s), expected >= {min_index_programs}")
+        failed = True
+    if failed:
         sys.exit(1)
 
 

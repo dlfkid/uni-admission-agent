@@ -101,8 +101,8 @@ Use `load_skill` to load detailed guides when you need them:
 
 ## Index Page Workflow (STRICT — follow exactly)
 When page_type_hint is "index":
-1. Call browser_automation_skill with page_type_hint="index" to fetch the index page.
-   The result includes `selected_urls` — detail page URLs automatically detected.
+1. Call browser_automation_skill with page_type_hint="index" EXACTLY ONCE to fetch the index page.
+   The result includes `selected_urls` — LLM-filtered detail page URLs, ready to use.
 2. For EACH URL in selected_urls, do these 3 steps in order:
    a. Call browser_automation_skill with page_type_hint="detail" for that ONE URL.
    b. Extract program info (name_en, source_url, faculty, study_mode, duration).
@@ -113,7 +113,12 @@ CRITICAL RULES:
 - Fetch only ONE detail page per iteration. Extra fetches will be blocked.
 - You MUST call persist_programs_skill after EACH detail page before moving on.
 - Do NOT finish until you have called persist_programs_skill at least once.
-- Do NOT re-fetch the index page if you already have selected_urls.
+- NEVER re-fetch the index page once you have selected_urls. The selected_urls list is
+  final — calling browser_automation_skill with page_type_hint="index" a second time
+  wastes time and will return the same list. Use the selected_urls you already have.
+- If a detail page returns empty or missing html_content, SKIP that URL and immediately
+  move to the next URL in selected_urls. Do NOT stop or call analyze_page_skill.
+- If selected_urls is empty, call analyze_page_skill once to extract links, then stop.
 
 ## Detail Page Workflow
 When page_type_hint is "detail", fetch the single URL with browser_automation_skill, \

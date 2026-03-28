@@ -209,6 +209,23 @@ class AgentRunRequest(BaseModel):
     )
 
 
+class AgentChatRequest(BaseModel):
+    """Body for ``POST /agent/chat``."""
+
+    message: str = Field(description="User message / question for the agent")
+    context: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Optional context dict forwarded to agent loop",
+    )
+
+
+class AgentChatResponse(BaseModel):
+    """Response for ``POST /agent/chat``."""
+
+    task_id: str = Field(description="Task identifier — subscribe to /tasks/{id}/events for streaming")
+    message: str = Field(default="Chat task submitted")
+
+
 class AgentReviewConfirmRequest(BaseModel):
     """Body for ``POST /agent/review/confirm``."""
 

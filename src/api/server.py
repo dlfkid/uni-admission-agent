@@ -36,6 +36,8 @@ from src.api.schemas import (
     CrawlResponse,
     AgentRunRequest,
     AgentRunResponse,
+    AgentChatRequest,
+    AgentChatResponse,
     AgentReviewConfirmRequest,
     AgentReviewConfirmResponse,
     ProgramResponse,
@@ -76,6 +78,7 @@ from src.services.crawler import (
     patch_program_snapshot,
     query_programs,
     run_agent_crawl,
+    run_agent_chat,
     resume_crawl_job,
 )
 from src.agent_runtime.review_selection import parse_selected_indices
@@ -692,6 +695,78 @@ async def api_agent_run(body: AgentRunRequest) -> AgentRunResponse:
     task_obj = asyncio.create_task(_run_agent_job())
     task_manager.register_task_object(task_id, task_obj)
     return AgentRunResponse(task_id=task_id)
+
+
+@app.post("/agent/chat", response_model=AgentChatResponse)
+async def api_agent_chat(body: AgentChatRequest) -> AgentChatResponse:
+    """Submit a free-form chat message to the agent using the server-side LLM.
+
+    Returns a ``task_id`` immediately.  Subscribe to ``GET /tasks/{task_id}/events``
+    for real-time streaming output (``summary_delta``, tool lifecycle events, etc.).
+    """
+    if not is_agent_enabled():
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Agent runtime is disabled. "
+                "Enable with AGENT_ENABLED=true or start server with --agent."
+            ),
+        )
+
+    try:
+        task_id = task_manager.create_task(
+            params={
+                "mode": "chat",
+                "message": body.message,
+            }
+        )
+    except RuntimeError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+
+    async def _run_chat_job() -> None:
+        log_handler = TaskLogHandler(task_manager, task_id)
+        root_logger = logging.getLogger()
+        root_logger.addHandler(log_handler)
+
+        def _event_sink(event: dict[str, Any]) -> None:
+            task_manager.add_event(task_id, event)
+
+        task_manager.update_task(
+            task_id,
+            state=TaskState.RUNNING,
+            progress="Agent thinking…",
+            progress_percent=3.0,
+            progress_meta={"event": "chat_task_started"},
+        )
+        try:
+            result = await run_agent_chat(
+                message=body.message,
+                context=body.context,
+                event_sink=_event_sink,
+            )
+            task_manager.update_task(
+                task_id,
+                state=TaskState.DONE,
+                progress="Complete",
+                result=result,
+                progress_percent=100.0,
+                progress_meta={"event": "chat_task_succeeded"},
+            )
+        except Exception as exc:
+            logger.exception("Chat task %s failed", task_id)
+            task_manager.update_task(
+                task_id,
+                state=TaskState.FAILED,
+                error=str(exc),
+                progress_percent=100.0,
+                progress_meta={"event": "chat_task_failed"},
+            )
+        finally:
+            root_logger.removeHandler(log_handler)
+
+    task_obj = asyncio.create_task(_run_chat_job())
+    task_manager.register_task_object(task_id, task_obj)
+    return AgentChatResponse(task_id=task_id)
 
 
 def _collect_review_selected_indices(
@@ -2241,17 +2316,57 @@ repair:
         LLM: index pages return candidate lists for external review instead
         of auto-crawling.  Set autonomous=True to let the internal runtime
         make all decisions autonomously.
+
+        A ``task_id`` is included in the response so callers can subscribe to
+        ``GET /tasks/{task_id}/events`` for real-time streaming progress.
         """
-        return await run_agent_crawl(
-            url=url,
-            univ_slug=univ_slug,
-            year=year,
-            page_type_hint=page_type_hint,
-            runtime_mode=runtime,
-            policy_profile=policy_profile,
-            client_id=client_id,
-            autonomous=autonomous,
+        task_id = task_manager.create_task(
+            params={
+                "mode": "agent",
+                "url": url,
+                "univ_slug": univ_slug,
+                "year": year,
+                "page_type_hint": page_type_hint,
+            }
         )
+
+        def _event_sink(event: dict[str, Any]) -> None:
+            task_manager.add_event(task_id, event)
+
+        task_manager.update_task(
+            task_id,
+            state=TaskState.RUNNING,
+            progress="Agent running…",
+            progress_percent=3.0,
+        )
+        try:
+            result = await run_agent_crawl(
+                url=url,
+                univ_slug=univ_slug,
+                year=year,
+                page_type_hint=page_type_hint,
+                runtime_mode=runtime,
+                policy_profile=policy_profile,
+                client_id=client_id,
+                autonomous=autonomous,
+                event_sink=_event_sink,
+            )
+            task_manager.update_task(
+                task_id,
+                state=TaskState.DONE,
+                progress="Complete",
+                result=result,
+                progress_percent=100.0,
+            )
+        except Exception as exc:
+            task_manager.update_task(
+                task_id,
+                state=TaskState.FAILED,
+                error=str(exc),
+                progress_percent=100.0,
+            )
+            raise
+        return {**result, "task_id": task_id}
 
     async def mcp_agent_review_confirm(
         task_id: str,

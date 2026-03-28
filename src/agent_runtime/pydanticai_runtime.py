@@ -172,5 +172,8 @@ class PydanticAIRuntime:
             ]
             return "\n".join(parts)
 
+        if task == "chat":
+            return str(payload.get("message", "")).strip()
+
         # Generic fallback for non-crawl tasks
         return f"Task: {task}\nPayload: {payload}"

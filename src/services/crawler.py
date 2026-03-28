@@ -680,6 +680,48 @@ async def run_agent_crawl(
     return response.model_dump(mode="json")
 
 
+async def run_agent_chat(
+    *,
+    message: str,
+    context: Optional[dict[str, Any]] = None,
+    event_sink: Any = None,
+) -> dict[str, Any]:
+    """Run a free-form chat request via the internal agent runtime.
+
+    Uses the server-side LLM exclusively (``allow_external=False``).
+    The agent loop receives the user message directly and responds using its
+    tool-calling capabilities.
+    """
+    runtime_factory = importlib.import_module("src.agent_runtime.runtime_factory")
+    build_agent_runtime = getattr(runtime_factory, "build_agent_runtime")
+
+    from src.agent_runtime.model_provider import ModelProviderAdapter
+
+    model_adapter = ModelProviderAdapter(
+        allow_internal=True,
+        allow_external=False,
+    )
+
+    runtime = build_agent_runtime(config=None, bridge=None, model_adapter=model_adapter)
+
+    extra_context = dict(context or {})
+    extra_context.update(
+        {
+            "entrypoint": "chat",
+            "event_sink": event_sink,
+        }
+    )
+
+    response = await runtime.run(
+        AgentRequest(
+            task="chat",
+            payload={"message": str(message or "").strip()},
+            context=extra_context,
+        )
+    )
+    return response.model_dump(mode="json")
+
+
 def ingest_program_records_external(
     *,
     univ_slug: str,

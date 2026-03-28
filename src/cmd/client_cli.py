@@ -386,5 +386,186 @@ def fetch(
     typer.echo(f"Fetched payload keys: {', '.join(sorted(payload.keys()))}")
 
 
+@app.command("chat")
+def chat(
+    server: str = typer.Option(
+        "",
+        "--server",
+        "-s",
+        help="Server base URL (default: from client config or http://127.0.0.1:8910)",
+    ),
+) -> None:
+    """Start an interactive chat session with the agent via the server-side LLM.
+
+    Streams live events (LLM thinking, tool calls, summary tokens) as they happen.
+    Type 'exit' or 'quit' to leave, Ctrl-C to abort.
+    """
+    asyncio.run(_chat_loop(server))
+
+
+async def _chat_loop(server_override: str) -> None:
+    """Async chat REPL — sends messages to /agent/chat and streams SSE events."""
+    import httpx  # transitive dependency via fastapi/mcp
+
+    config = load_client_config()
+    base_url = (
+        str(server_override or "").strip()
+        or (config.server_url if config else "")
+        or "http://127.0.0.1:8910"
+    )
+    base_url = base_url.rstrip("/")
+
+    # Verify connectivity + agent enabled
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as probe:
+            resp = await probe.get(f"{base_url}/status")
+            resp.raise_for_status()
+            status_data = resp.json()
+    except Exception as exc:
+        typer.echo(f"Cannot reach server at {base_url}: {exc}", err=True)
+        raise typer.Exit(code=1)
+
+    if not status_data.get("agent_enabled"):
+        typer.echo(
+            "Agent is disabled on the server. "
+            "Start with: adm-agent serve --agent",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    typer.echo(f"Connected to {base_url}  (agent enabled)")
+    typer.echo("Type your message and press Enter. Type 'exit' or Ctrl-C to quit.\n")
+
+    async with httpx.AsyncClient(timeout=None) as client:
+        while True:
+            try:
+                raw = input("You: ").strip()
+            except (EOFError, KeyboardInterrupt):
+                typer.echo("\nGoodbye.")
+                break
+
+            if not raw or raw.lower() in ("exit", "quit"):
+                typer.echo("Goodbye.")
+                break
+
+            # Submit chat message
+            try:
+                post_resp = await client.post(
+                    f"{base_url}/agent/chat",
+                    json={"message": raw},
+                    timeout=30.0,
+                )
+                post_resp.raise_for_status()
+            except httpx.HTTPStatusError as exc:
+                typer.echo(f"Error: {exc.response.status_code} — {exc.response.text}", err=True)
+                continue
+            except Exception as exc:
+                typer.echo(f"Request failed: {exc}", err=True)
+                continue
+
+            task_id = post_resp.json().get("task_id", "")
+            typer.echo(f"[task: {task_id}]")
+
+            # Stream SSE events
+            await _stream_task_events(client, base_url, task_id)
+            typer.echo()  # blank line before next prompt
+
+
+async def _stream_task_events(
+    client: "httpx.AsyncClient",
+    base_url: str,
+    task_id: str,
+) -> None:
+    """Consume /tasks/{task_id}/events and print formatted output."""
+    import httpx
+
+    url = f"{base_url}/tasks/{task_id}/events"
+    summary_started = False
+
+    try:
+        async with client.stream("GET", url, timeout=None) as response:
+            response.raise_for_status()
+            async for raw_line in response.aiter_lines():
+                if not raw_line.startswith("data: "):
+                    continue
+                data_str = raw_line[6:].strip()
+                if not data_str:
+                    continue
+                try:
+                    event = json.loads(data_str)
+                except json.JSONDecodeError:
+                    continue
+
+                evt_type = str(event.get("type", ""))
+
+                if evt_type == "agent_started":
+                    typer.echo("Agent: [started]")
+
+                elif evt_type == "llm_call_started":
+                    iteration = event.get("iteration", "?")
+                    typer.echo(f"  ● Thinking… (iter {iteration})", nl=False)
+                    sys.stdout.flush()
+
+                elif evt_type == "llm_call_finished":
+                    typer.echo("  ✓")
+
+                elif evt_type == "tool_call_started":
+                    name = event.get("tool_name") or event.get("name") or "unknown"
+                    typer.echo(f"  → {name}", nl=False)
+                    sys.stdout.flush()
+
+                elif evt_type == "tool_call_finished":
+                    typer.echo("  ✓")
+
+                elif evt_type == "persist_started":
+                    typer.echo("  [Persisting programs…]")
+
+                elif evt_type == "persist_finished":
+                    typer.echo("  [Persist done]")
+
+                elif evt_type == "summary_started":
+                    typer.echo("\nAgent: ", nl=False)
+                    summary_started = True
+                    sys.stdout.flush()
+
+                elif evt_type == "summary_delta":
+                    delta = str(event.get("delta", ""))
+                    typer.echo(delta, nl=False)
+                    sys.stdout.flush()
+
+                elif evt_type == "summary_finished":
+                    if summary_started:
+                        typer.echo()  # newline after streaming text
+                    summary_started = False
+
+                elif evt_type in ("agent_done", "agent_failed"):
+                    if evt_type == "agent_failed":
+                        typer.echo(f"\n[Failed: {event.get('error', '')}]", err=True)
+                    break
+
+    except httpx.RemoteProtocolError:
+        pass  # Server closed the stream cleanly
+    except KeyboardInterrupt:
+        typer.echo("\n[Interrupted]")
+    except Exception as exc:
+        typer.echo(f"\n[Stream error: {exc}]", err=True)
+
+    # Fallback: if no summary events, show agent_response from task result
+    if not summary_started:
+        try:
+            result_resp = await client.get(f"{base_url}/tasks/{task_id}", timeout=10.0)
+            if result_resp.status_code == 200:
+                task_data = result_resp.json()
+                result = task_data.get("result") or {}
+                output = result.get("output") or {}
+                agent_resp = str(output.get("agent_response", "") or "").strip()
+                if agent_resp:
+                    typer.echo(f"\nAgent: {agent_resp}")
+                elif task_data.get("state") == "FAILED":
+                    typer.echo(f"\n[Task failed: {task_data.get('error', '')}]", err=True)
+        except Exception:
+            pass
+
+
 if __name__ == "__main__":
     app()
