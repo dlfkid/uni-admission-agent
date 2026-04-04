@@ -84,62 +84,27 @@ def _emit_loop_done(
 
 
 def _build_system_prompt() -> str:
-    """Build the system prompt with a lightweight skill directory (s05 Layer 1)."""
-    skill_list = _SKILL_LOADER.get_descriptions()
-    return f"""\
-You are a university admission program crawler agent. Your job is to crawl \
-university websites and extract structured program information into a database.
+    """Build the system prompt — minimal, direct, no distractions."""
+    return """\
+You are a program crawler. You crawl ONE index page and save ALL programs found.
 
-## Planning
-Before starting work, use the `todo` tool to create a step-by-step plan. \
-Update it as you progress — mark tasks in_progress when you start them and \
-completed when done. Only one task may be in_progress at a time.
+WORKFLOW — repeat for EVERY URL in selected_urls:
+1. Call browser_automation_skill(url=<URL>, page_type_hint="detail")
+2. From the returned HTML, extract: name_en, source_url, faculty, study_mode, \
+duration, tuition_fees, requirements, deadline, description
+3. Call persist_programs_skill with the extracted data
+4. Move to the next URL. Do NOT stop until all URLs are done.
 
-## Knowledge Skills
-Use `load_skill` to load detailed guides when you need them:
-{skill_list}
+FIRST STEP: Call browser_automation_skill with page_type_hint="index" to get selected_urls.
+Then loop through every URL above.
 
-## Index Page Workflow (STRICT — follow exactly)
-When page_type_hint is "index":
-1. Call browser_automation_skill with page_type_hint="index" EXACTLY ONCE to fetch the index page.
-   The result includes `selected_urls` — LLM-filtered detail page URLs, ready to use.
-2. For EACH URL in selected_urls, do these 3 steps in order:
-   a. Call browser_automation_skill with page_type_hint="detail" for that ONE URL.
-   b. Extract program info (name_en, source_url, faculty, study_mode, duration).
-   c. Call persist_programs_skill IMMEDIATELY to save the program.
-3. After processing all URLs, respond with a summary.
-
-CRITICAL RULES:
-- Fetch only ONE detail page per iteration. Extra fetches will be blocked.
-- You MUST call persist_programs_skill after EACH detail page before moving on.
-- Do NOT finish until you have processed ALL URLs in selected_urls and called
-  persist_programs_skill for EACH one. If selected_urls has 10 URLs, you must
-  fetch and persist 10 programs before finishing.
-- NEVER re-fetch the index page once you have selected_urls. The selected_urls list is
-  final — calling browser_automation_skill with page_type_hint="index" a second time
-  wastes time and will return the same list. Use the selected_urls you already have.
-- If a detail page returns empty or missing html_content, SKIP that URL and immediately
-  move to the next URL in selected_urls. Do NOT stop or call analyze_page_skill.
-- If selected_urls is empty, call analyze_page_skill once to extract links, then stop.
-
-## Detail Page Workflow
-When page_type_hint is "detail", fetch the single URL with browser_automation_skill, \
-extract program info from the HTML, and call persist_programs_skill.
-
-## persist_programs_skill — IMPORTANT
-When calling persist_programs_skill:
-- Send ONE program per call (do NOT batch multiple programs).
-- Extract ALL available fields from the detail page HTML:
-  name_en, source_url, faculty, study_mode, duration,
-  tuition_fees (home and international if listed),
-  requirements (entry qualifications, GPA, IELTS/TOEFL scores),
-  deadline (application deadline dates),
-  description (1-2 sentence programme overview).
-- If a field is not found on the page, omit it — do NOT guess or fabricate.
-- Example: {{"univ_slug":"ucl","year":2026,"programs":[{{"name_en":"Anthropology BSc","source_url":"https://...","faculty":"Faculty of Social Sciences","study_mode":"Full-time","duration":"3 years","tuition_fees":"£9,250 (home), £28,500 (international)","requirements":"A-levels: ABB, IELTS 7.0","deadline":"2026-01-15"}}]}}
-
-When finished, respond with a brief summary of what was accomplished \
-(page type detected, how many programs imported, any errors).
+RULES:
+- Do NOT call load_skill, analyze_page_skill, or todo. Just fetch → extract → persist → next.
+- Do NOT re-fetch the index page. Use the selected_urls you already have.
+- Do NOT skip any URL. Process ALL of them.
+- Send ONE program per persist call.
+- Extract ALL fields you can find. If a field is missing, omit it.
+- When all URLs are processed, respond with a summary.
 """
 
 
@@ -753,31 +718,42 @@ def build_openai_tools(
             included so the LLM can spawn subagents.  Set to *False* for
             subagent loops to prevent recursive spawning.
         page_type_hint: Controls which tool categories are included.
-            ``"detail"`` — core skills + knowledge + todo + compact + task graph
-            + background only.  ``"index"`` — adds subagent + team.
-            ``None`` — all tools (backward compatible).
+            ``"detail"`` — minimal: browser + persist only.
+            ``"index"`` or ``"auto"`` — minimal: browser + persist only.
+            ``None`` — all tools (backward compatible, e.g. chat mode).
     """
-    # Always-included tools
-    tools: list[dict[str, Any]] = [
+    # For crawl tasks (index/detail/auto), give ONLY essential tools
+    # to prevent the LLM from wasting iterations on planning/skills/teams.
+    _ESSENTIAL_SKILL_NAMES = {
+        "browser_automation_skill",
+        "persist_programs_skill",
+        "analyze_page_skill",
+    }
+
+    if page_type_hint in ("index", "detail", "auto"):
+        tools: list[dict[str, Any]] = []
+        for name in registry:
+            if name in _ESSENTIAL_SKILL_NAMES:
+                skill = registry._skills[name]  # noqa: SLF001
+                tools.append(_skill_to_openai_tool(skill))
+        return tools
+
+    # Unrestricted mode (chat, etc.) — all tools
+    tools = [
         _TODO_TOOL, _LOAD_SKILL_TOOL, _COMPACT_TOOL,
         *_TASK_GRAPH_TOOLS,
         _BG_RUN_TOOL, _BG_CHECK_TOOL,
     ]
 
-    # Collaboration tools gated by page_type_hint
-    if page_type_hint != "detail":
-        # index and None both get team tools
-        tools.extend(_TEAM_TOOLS)
-        if include_task:
-            tools.append(_TASK_TOOL)
+    tools.extend(_TEAM_TOOLS)
+    if include_task:
+        tools.append(_TASK_TOOL)
 
-    if page_type_hint is None:
-        # Only unrestricted mode gets protocol/worktree/autonomy
-        tools.extend(_PROTOCOL_TOOLS)
-        tools.extend(_AUTONOMY_TOOLS)
-        tools.extend(_WORKTREE_TOOLS)
+    tools.extend(_PROTOCOL_TOOLS)
+    tools.extend(_AUTONOMY_TOOLS)
+    tools.extend(_WORKTREE_TOOLS)
 
-    # Skill tools (always included)
+    # All skill tools
     for name in registry:
         skill = registry._skills[name]  # noqa: SLF001
         tools.append(_skill_to_openai_tool(skill))
