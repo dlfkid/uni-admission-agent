@@ -89,20 +89,18 @@ def _build_system_prompt() -> str:
 You are a program crawler. You crawl ONE index page and save ALL programs found.
 
 STEP 1: Call browser_automation_skill(url=<given URL>, page_type_hint="index").
-The result contains `detail_pages` — a list of pre-fetched detail page HTMLs.
+The result contains `extracted_programs` — fully parsed program data from all detail pages.
 
-STEP 2: For EACH entry in detail_pages, extract these fields from the HTML:
-  name_en, source_url, faculty, study_mode, duration, tuition_fees,
-  requirements (entry qualifications, GPA, IELTS scores),
-  deadline (application dates), description (1-2 sentences).
+STEP 2: Call persist_programs_skill with ALL the extracted programs.
+Pass the programs array directly from extracted_programs into the persist call.
+Include univ_slug and year from the user's request.
 
-STEP 3: Call persist_programs_skill for EACH program. Send ONE program per call.
+STEP 3: Respond with a summary of how many programs were saved.
 
 RULES:
-- Do NOT call browser_automation_skill again. All detail pages are already in detail_pages.
-- Process EVERY entry in detail_pages. Do NOT skip any.
-- Extract ALL fields you can find from the HTML. If a field is missing, omit it.
-- When all programs are persisted, respond with a summary.
+- Do NOT call browser_automation_skill again. Everything is already extracted.
+- Do NOT modify the extracted program data. Pass it through as-is.
+- Call persist_programs_skill ONCE with the full programs array.
 """
 
 

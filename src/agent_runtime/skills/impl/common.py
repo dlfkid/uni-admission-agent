@@ -215,21 +215,23 @@ def browser_automation_skill_handler(
         result["html_content"] = _html_to_markdown(html, payload.url)
 
     # For index pages with selected_urls, auto-fetch all detail pages in
-    # parallel so the agent gets everything in one shot.
+    # parallel and extract structured program data via LLM pipeline.
+    # The agent only needs to call persist_programs_skill once with the results.
     selected = result.get("selected_urls") or []
     if selected:
-        detail_pages = _batch_fetch_detail_pages(selected, bridge)
-        result["detail_pages"] = detail_pages
+        link_texts = result.get("selected_link_texts") or {}
+        extracted = _auto_fetch_and_extract(selected, link_texts, bridge)
+        result["extracted_programs"] = extracted["programs"]
         result["html_content"] = (
-            f"[Index page with {len(selected)} detail URLs. "
-            f"All {len(detail_pages)} detail pages have been pre-fetched. "
-            f"Extract program data from each detail_pages entry and call "
-            f"persist_programs_skill for each one. Do NOT call "
-            f"browser_automation_skill again — the HTML is already here.]"
+            f"[Index page: {len(selected)} detail URLs found. "
+            f"All pages fetched and parsed automatically. "
+            f"{len(extracted['programs'])} programs extracted with full details. "
+            f"Call persist_programs_skill ONCE with all programs below. "
+            f"Do NOT call browser_automation_skill again.]"
         )
         logger.info(
-            "[BrowserSkill] Pre-fetched %d/%d detail pages for %s",
-            len(detail_pages), len(selected), payload.url,
+            "[BrowserSkill] Auto-extracted %d/%d programs for %s",
+            len(extracted["programs"]), len(selected), payload.url,
         )
     elif payload.page_type_hint == "index":
         md = result.get("html_content") or ""
@@ -245,41 +247,82 @@ def browser_automation_skill_handler(
     return result
 
 
-def _batch_fetch_detail_pages(
+def _auto_fetch_and_extract(
     urls: list[str],
+    link_texts: dict[str, str],
     bridge: ClientAutomationBridge,
     max_workers: int = 5,
-) -> list[dict]:
-    """Fetch multiple detail pages in parallel using thread pool.
+) -> dict:
+    """Fetch detail pages in parallel and extract structured data via LLM.
 
-    Returns a list of {url, html_content} dicts (markdown-converted).
-    Failed fetches are included with an error field.
+    Uses the existing LLMCleanerAgent pipeline for high-quality extraction
+    (tuition, requirements, deadlines, study options, etc.).
+    Returns extracted program dicts ready for persist_programs_skill.
     """
     import concurrent.futures
+    from src.agents.factory import RouterAgent
+    from src.agents.cleaner_agent import LLMCleanerAgent
+    from src.models.scraper_models import CrawlPageResult
+    from src.scrapers.page_processor import extract_program_data_from_page
 
-    def _fetch_one(url: str) -> dict:
+    # Step 1: Parallel fetch all detail pages
+    def _fetch_one(url: str) -> CrawlPageResult | None:
         try:
             output = bridge.fetch_browser_payload(
                 BrowserFetchInput(url=url, page_type_hint="detail")
             )
             raw_html = output.html_content or ""
             md = _html_to_markdown(raw_html, url) if raw_html else ""
-            # Truncate to keep context manageable (~8K per page)
-            MAX_DETAIL_MD = 16000
-            if len(md) > MAX_DETAIL_MD:
-                md = md[:MAX_DETAIL_MD] + "\n...(truncated)"
-            return {"url": url, "html_content": md}
+            return CrawlPageResult(
+                url=url,
+                html=raw_html,
+                markdown=md,
+                links=[],
+            )
         except Exception as exc:
-            logger.warning("[BrowserSkill] Failed to fetch detail page %s: %s", url, exc)
-            return {"url": url, "html_content": "", "error": str(exc)}
+            logger.warning("[AutoExtract] Failed to fetch %s: %s", url, exc)
+            return None
 
-    results = []
+    pages: list[CrawlPageResult] = []
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as pool:
         futures = {pool.submit(_fetch_one, url): url for url in urls}
         for future in concurrent.futures.as_completed(futures):
-            results.append(future.result())
+            page = future.result()
+            if page and page.markdown:
+                pages.append(page)
 
-    # Sort by original URL order
-    url_order = {url: i for i, url in enumerate(urls)}
-    results.sort(key=lambda r: url_order.get(r["url"], 999))
-    return results
+    logger.info("[AutoExtract] Fetched %d/%d detail pages", len(pages), len(urls))
+
+    # Step 2: Extract structured data using existing LLM pipeline
+    router = RouterAgent()
+    cleaner = LLMCleanerAgent(router=router)
+    programs: list[dict] = []
+
+    for page in pages:
+        anchor_text = link_texts.get(page.url)
+        try:
+            program_data, error = extract_program_data_from_page(
+                page=page,
+                cleaner=cleaner,
+                univ_slug="",  # placeholder — agent provides real slug via persist
+                year=0,        # placeholder — agent provides real year via persist
+                current_depth=0,
+                from_browser=True,
+                selected_anchor_text=anchor_text,
+            )
+            if program_data:
+                # Clean up placeholder fields; keep only extracted content
+                program_data.pop("academic_year", None)
+                program_data["source_url"] = page.url
+                programs.append(program_data)
+                logger.info(
+                    "[AutoExtract] Extracted: %s (%d fields)",
+                    program_data.get("name_en", "?"),
+                    len([v for v in program_data.values() if v]),
+                )
+            else:
+                logger.warning("[AutoExtract] No data from %s: %s", page.url, error)
+        except Exception as exc:
+            logger.warning("[AutoExtract] Failed %s: %s", page.url, exc)
+
+    return {"programs": programs}
