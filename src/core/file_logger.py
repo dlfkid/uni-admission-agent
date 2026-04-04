@@ -42,12 +42,22 @@ class InterceptHandler(logging.Handler):
             frame = frame.f_back
             depth += 1
 
-        logger.opt(depth=depth, exception=record.exc_info).log(
-            level, record.getMessage()
-        )
+        logger.opt(depth=depth, exception=record.exc_info).bind(
+            logger_name=record.name
+        ).log(level, record.getMessage())
 
 
 # Custom VERBOSE level — below DEBUG, for heartbeat / health-check noise
+def _log_format(record: dict) -> str:
+    """Format log line, preferring original stdlib logger name when available."""
+    name = record["extra"].get("logger_name", record["name"])
+    return (
+        "{time:YYYY-MM-DD HH:mm:ss} - "
+        + name
+        + " - {level} - {message}\n"
+    )
+
+
 _VERBOSE_LEVEL_NO = 5
 _VERBOSE_REGISTERED = False
 
@@ -91,7 +101,7 @@ def setup_file_logging(log_dir: Path | None = None) -> None:
         rotation="10 MB",
         retention=10,
         encoding="utf-8",
-        format="{time:YYYY-MM-DD HH:mm:ss} - {name} - {level} - {message}",
+        format=_log_format,
         enqueue=False,  # synchronous writes for predictable test behavior
     )
 
