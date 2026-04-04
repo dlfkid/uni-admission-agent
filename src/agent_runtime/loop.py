@@ -984,6 +984,15 @@ async def agent_loop(
             iteration=iteration,
         )
 
+        # Emit the agent's reasoning text (if any) so UIs can display it
+        if assistant_msg.content:
+            _emit_loop_event(
+                event_sink,
+                "agent_thinking",
+                iteration=iteration,
+                text=assistant_msg.content,
+            )
+
         # Detect output truncation (token limit hit)
         if getattr(choice, "finish_reason", None) == "length":
             logger.warning(

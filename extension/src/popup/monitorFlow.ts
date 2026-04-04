@@ -75,6 +75,8 @@ export function initMonitorFlow(deps: MonitorFlowDeps): {
                 return `[${ts}] [LLM] Thinking… (iter ${evt.iteration ?? "?"})`;
             case "llm_call_finished":
                 return `[${ts}] [LLM] Response received`;
+            case "agent_thinking":
+                return `[${ts}] [Think] ${evt.text ?? ""}`;
             case "tool_call_started":
                 return `[${ts}] [Tool] → ${evt.tool ?? evt.tool_name ?? evt.name ?? "unknown"}`;
             case "tool_call_finished":
