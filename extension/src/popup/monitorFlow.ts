@@ -77,6 +77,17 @@ export function initMonitorFlow(deps: MonitorFlowDeps): {
                 return `[${ts}] [LLM] Response received`;
             case "agent_thinking":
                 return `[${ts}] [Think] ${evt.text ?? ""}`;
+            case "agent_thinking_delta": {
+                // Append to the last streaming line instead of creating a new one
+                const chunk = String(evt.text ?? "");
+                if (streamingLines.length > 0 && streamingLines[streamingLines.length - 1].includes("[Think]")) {
+                    streamingLines[streamingLines.length - 1] += chunk;
+                } else {
+                    streamingLines.push(`[${ts}] [Think] ${chunk}`);
+                }
+                renderLogsConsole();
+                return null; // already handled
+            }
             case "tool_call_started":
                 return `[${ts}] [Tool] → ${evt.tool ?? evt.tool_name ?? evt.name ?? "unknown"}`;
             case "tool_call_finished":

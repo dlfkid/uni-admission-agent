@@ -112,7 +112,9 @@ When page_type_hint is "index":
 CRITICAL RULES:
 - Fetch only ONE detail page per iteration. Extra fetches will be blocked.
 - You MUST call persist_programs_skill after EACH detail page before moving on.
-- Do NOT finish until you have called persist_programs_skill at least once.
+- Do NOT finish until you have processed ALL URLs in selected_urls and called
+  persist_programs_skill for EACH one. If selected_urls has 10 URLs, you must
+  fetch and persist 10 programs before finishing.
 - NEVER re-fetch the index page once you have selected_urls. The selected_urls list is
   final — calling browser_automation_skill with page_type_hint="index" a second time
   wastes time and will return the same list. Use the selected_urls you already have.
@@ -845,6 +847,108 @@ def resolve_openai_client() -> tuple[Any, str]:
 
 
 # ---------------------------------------------------------------------------
+# Streaming LLM helper
+# ---------------------------------------------------------------------------
+
+
+async def _streaming_llm_call(
+    client: Any,
+    model: str,
+    messages: list[dict],
+    tools: list[dict] | None,
+    *,
+    event_sink: EventSink | None = None,
+    iteration: int = 0,
+) -> Any:
+    """Call LLM with streaming, emitting thinking deltas in real time.
+
+    Collects the full response and returns a ChatCompletion-like object
+    compatible with the non-streaming path.
+    """
+    stream = await client.chat.completions.create(
+        model=model,
+        messages=messages,
+        tools=tools or None,
+        max_tokens=32768,
+        stream=True,
+    )
+
+    # Accumulators
+    content_parts: list[str] = []
+    tool_calls_acc: dict[int, dict] = {}  # index → {id, type, function: {name, arguments}}
+    finish_reason = None
+    role = "assistant"
+
+    async for chunk in stream:
+        delta = chunk.choices[0].delta if chunk.choices else None
+        if delta is None:
+            continue
+
+        if chunk.choices[0].finish_reason:
+            finish_reason = chunk.choices[0].finish_reason
+
+        # Stream text content
+        if delta.content:
+            content_parts.append(delta.content)
+            _emit_loop_event(
+                event_sink,
+                "agent_thinking_delta",
+                iteration=iteration,
+                text=delta.content,
+            )
+
+        # Accumulate tool call deltas
+        if delta.tool_calls:
+            for tc_delta in delta.tool_calls:
+                idx = tc_delta.index
+                if idx not in tool_calls_acc:
+                    tool_calls_acc[idx] = {
+                        "id": tc_delta.id or "",
+                        "type": "function",
+                        "function": {"name": "", "arguments": ""},
+                    }
+                acc = tool_calls_acc[idx]
+                if tc_delta.id:
+                    acc["id"] = tc_delta.id
+                if tc_delta.function:
+                    if tc_delta.function.name:
+                        acc["function"]["name"] += tc_delta.function.name
+                    if tc_delta.function.arguments:
+                        acc["function"]["arguments"] += tc_delta.function.arguments
+
+    # Build a minimal response object that matches the non-streaming shape
+    full_content = "".join(content_parts) or None
+    tool_calls_list = None
+    if tool_calls_acc:
+        tool_calls_list = []
+        for idx in sorted(tool_calls_acc):
+            tc = tool_calls_acc[idx]
+            tool_calls_list.append(
+                type("ToolCall", (), {
+                    "id": tc["id"],
+                    "type": tc["type"],
+                    "function": type("Function", (), {
+                        "name": tc["function"]["name"],
+                        "arguments": tc["function"]["arguments"],
+                    })(),
+                })()
+            )
+
+    message = type("Message", (), {
+        "role": role,
+        "content": full_content,
+        "tool_calls": tool_calls_list,
+    })()
+
+    choice = type("Choice", (), {
+        "message": message,
+        "finish_reason": finish_reason,
+    })()
+
+    return type("Response", (), {"choices": [choice]})()
+
+
+# ---------------------------------------------------------------------------
 # The Loop
 # ---------------------------------------------------------------------------
 
@@ -932,11 +1036,9 @@ async def agent_loop(
                 iteration=iteration,
             )
             response = await asyncio.wait_for(
-                client.chat.completions.create(
-                    model=model,
-                    messages=messages,
-                    tools=tools or None,
-                    max_tokens=32768,
+                _streaming_llm_call(
+                    client, model, messages, tools,
+                    event_sink=event_sink, iteration=iteration,
                 ),
                 timeout=LLM_CALL_TIMEOUT,
             )
@@ -984,15 +1086,6 @@ async def agent_loop(
             iteration=iteration,
         )
 
-        # Emit the agent's reasoning text (if any) so UIs can display it
-        if assistant_msg.content:
-            _emit_loop_event(
-                event_sink,
-                "agent_thinking",
-                iteration=iteration,
-                text=assistant_msg.content,
-            )
-
         # Detect output truncation (token limit hit)
         if getattr(choice, "finish_reason", None) == "length":
             logger.warning(
@@ -1009,7 +1102,7 @@ async def agent_loop(
             # Guard: if this is an index crawl and no programs were persisted,
             # nudge the agent to keep going instead of finishing empty-handed.
             if (
-                page_type_hint == "index"
+                page_type_hint in ("index", "auto", None)
                 and not collected_programs
                 and iteration < max_iterations - 1
             ):
