@@ -876,6 +876,7 @@ async def _streaming_llm_call(
         tools=tools or None,
         max_tokens=32768,
         stream=True,
+        stream_options={"include_usage": True},
     )
 
     # Accumulators
@@ -883,8 +884,18 @@ async def _streaming_llm_call(
     tool_calls_acc: dict[int, dict] = {}  # index → {id, type, function: {name, arguments}}
     finish_reason = None
     role = "assistant"
+    usage_data: dict[str, int] = {}
 
     async for chunk in stream:
+        # Capture usage from the final chunk (OpenAI/volcengine include it there)
+        if hasattr(chunk, "usage") and chunk.usage is not None:
+            u = chunk.usage
+            usage_data = {
+                "prompt_tokens": getattr(u, "prompt_tokens", 0) or 0,
+                "completion_tokens": getattr(u, "completion_tokens", 0) or 0,
+                "total_tokens": getattr(u, "total_tokens", 0) or 0,
+            }
+
         delta = chunk.choices[0].delta if chunk.choices else None
         if delta is None:
             continue
@@ -920,6 +931,15 @@ async def _streaming_llm_call(
                         acc["function"]["name"] += tc_delta.function.name
                     if tc_delta.function.arguments:
                         acc["function"]["arguments"] += tc_delta.function.arguments
+
+    # Emit token usage if available
+    if usage_data:
+        _emit_loop_event(
+            event_sink,
+            "token_usage",
+            iteration=iteration,
+            **usage_data,
+        )
 
     # Build a minimal response object that matches the non-streaming shape
     full_content = "".join(content_parts) or None

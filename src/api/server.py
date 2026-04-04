@@ -646,8 +646,26 @@ async def api_agent_run(body: AgentRunRequest) -> AgentRunResponse:
         root_logger = logging.getLogger()
         root_logger.addHandler(log_handler)
 
+        accumulated_tokens = 0
+        program_count = 0
+
         def _event_sink(event: dict[str, Any]) -> None:
+            nonlocal accumulated_tokens, program_count
             task_manager.add_event(task_id, event)
+
+            # Accumulate token usage from streaming LLM calls
+            if event.get("type") == "token_usage":
+                accumulated_tokens += event.get("total_tokens", 0)
+                task_manager.update_task(task_id, tokens_used=accumulated_tokens)
+
+            # Count persisted programs from tool calls
+            if event.get("type") == "tool_call_finished" and event.get("tool") == "persist_programs_skill":
+                program_count += 1
+                task_manager.update_task(
+                    task_id,
+                    progress=f"Agent running… ({program_count} program(s) saved)",
+                    progress_meta={"event": "program_persisted", "program_count": program_count},
+                )
 
         task_manager.update_task(
             task_id,
@@ -672,13 +690,17 @@ async def api_agent_run(body: AgentRunRequest) -> AgentRunResponse:
                     else None
                 ),
             )
+            if isinstance(result, dict):
+                result["program_count"] = program_count
+                result["tokens_used"] = accumulated_tokens
             task_manager.update_task(
                 task_id,
                 state=TaskState.DONE,
                 progress="Complete",
                 result=result,
+                tokens_used=accumulated_tokens,
                 progress_percent=100.0,
-                progress_meta={"event": "agent_task_succeeded"},
+                progress_meta={"event": "agent_task_succeeded", "program_count": program_count},
             )
         except Exception as exc:
             logger.exception("Agent task %s failed", task_id)

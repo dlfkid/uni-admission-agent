@@ -43,6 +43,8 @@ export function initMonitorFlow(deps: MonitorFlowDeps): {
     let externalBatchLogs: string[] = [];
     // SSE-streamed event lines (separate from server-side task logs)
     let streamingLines: string[] = [];
+    let programCounter = 0;
+    let accumulatedTokens = 0;
     // Accumulates summary_delta tokens until summary_finished
     let summaryBuffer = "";
     let summaryLineIndex = -1; // index in streamingLines where summary text lives
@@ -90,8 +92,22 @@ export function initMonitorFlow(deps: MonitorFlowDeps): {
             }
             case "tool_call_started":
                 return `[${ts}] [Tool] → ${evt.tool ?? evt.tool_name ?? evt.name ?? "unknown"}`;
-            case "tool_call_finished":
-                return `[${ts}] [Tool] ✓ ${evt.tool ?? evt.tool_name ?? evt.name ?? "unknown"}`;
+            case "tool_call_finished": {
+                const toolName = String(evt.tool ?? evt.tool_name ?? evt.name ?? "unknown");
+                if (toolName === "persist_programs_skill") {
+                    programCounter++;
+                    showStatus(`Running… ${programCounter} program(s) saved`, "info");
+                }
+                return `[${ts}] [Tool] ✓ ${toolName}`;
+            }
+            case "token_usage": {
+                const total = Number(evt.total_tokens ?? 0);
+                if (total > 0) {
+                    accumulatedTokens += total;
+                    tokenDisplay.textContent = `Tokens: ${accumulatedTokens.toLocaleString()}`;
+                }
+                return null;
+            }
             case "persist_started":
                 return `[${ts}] [Persist] Saving programs…`;
             case "persist_finished":
@@ -229,6 +245,8 @@ export function initMonitorFlow(deps: MonitorFlowDeps): {
         streamingLines = [];
         summaryBuffer = "";
         summaryLineIndex = -1;
+        programCounter = 0;
+        accumulatedTokens = 0;
 
         // Start SSE stream for real-time events
         startEventStream(taskId);
@@ -327,7 +345,8 @@ export function initMonitorFlow(deps: MonitorFlowDeps): {
 
             if (state === "DONE") {
                 stopPolling();
-                showStatus(`Completed! Imported: ${result?.imported_count ?? 0}`, "success");
+                const count = result?.program_count ?? result?.imported_count ?? programCounter;
+                showStatus(`Completed! ${count} program(s) saved`, "success");
             } else if (state === "FAILED") {
                 stopPolling();
                 showStatus(`Failed: ${error}`, "error");
