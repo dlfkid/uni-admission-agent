@@ -42,10 +42,10 @@ from src.agent_runtime.worktree import WorktreeManager
 
 logger = logging.getLogger(__name__)
 
-MAX_ITERATIONS = 25
+MAX_ITERATIONS = 256
 NAG_INTERVAL = 3  # inject reminder after this many iterations without a todo update
 LLM_CALL_TIMEOUT = 480    # 8 minutes — single LLM API call
-PAGE_TIMEOUT = 900         # 15 minutes — entire agent_loop for one page
+PAGE_TIMEOUT = 3600        # 60 minutes — entire agent_loop for one page
 
 
 class AgentPageTimeout(Exception):
@@ -127,11 +127,16 @@ When page_type_hint is "detail", fetch the single URL with browser_automation_sk
 extract program info from the HTML, and call persist_programs_skill.
 
 ## persist_programs_skill — IMPORTANT
-When calling persist_programs_skill, keep the payload SMALL to avoid JSON errors:
+When calling persist_programs_skill:
 - Send ONE program per call (do NOT batch multiple programs).
-- Use ONLY these fields: name_en, source_url, faculty, study_mode, duration.
-- OMIT description, tuition_fees, requirements, and other large text fields.
-- Example: {{"univ_slug":"ucl","year":2026,"programs":[{{"name_en":"Anthropology BSc","source_url":"https://..."}}]}}
+- Extract ALL available fields from the detail page HTML:
+  name_en, source_url, faculty, study_mode, duration,
+  tuition_fees (home and international if listed),
+  requirements (entry qualifications, GPA, IELTS/TOEFL scores),
+  deadline (application deadline dates),
+  description (1-2 sentence programme overview).
+- If a field is not found on the page, omit it — do NOT guess or fabricate.
+- Example: {{"univ_slug":"ucl","year":2026,"programs":[{{"name_en":"Anthropology BSc","source_url":"https://...","faculty":"Faculty of Social Sciences","study_mode":"Full-time","duration":"3 years","tuition_fees":"£9,250 (home), £28,500 (international)","requirements":"A-levels: ABB, IELTS 7.0","deadline":"2026-01-15"}}]}}
 
 When finished, respond with a brief summary of what was accomplished \
 (page type detected, how many programs imported, any errors).
