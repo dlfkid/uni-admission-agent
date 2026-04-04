@@ -214,23 +214,24 @@ def browser_automation_skill_handler(
     if html:
         result["html_content"] = _html_to_markdown(html, payload.url)
 
-    # For index pages with selected_urls, strip the full HTML to avoid
-    # blowing context (150K+ markdown → auto_compact → lose everything).
-    # The agent only needs the URL list to proceed.
+    # For index pages with selected_urls, auto-fetch all detail pages in
+    # parallel so the agent gets everything in one shot.
     selected = result.get("selected_urls") or []
     if selected:
-        md = result.get("html_content") or ""
-        # Keep a small excerpt (first 2000 chars) for page context
+        detail_pages = _batch_fetch_detail_pages(selected, bridge)
+        result["detail_pages"] = detail_pages
         result["html_content"] = (
             f"[Index page with {len(selected)} detail URLs. "
-            f"Full HTML omitted to save context. Use selected_urls below.]\n\n"
-            + md[:2000]
-            + ("\n...(truncated)" if len(md) > 2000 else "")
+            f"All {len(detail_pages)} detail pages have been pre-fetched. "
+            f"Extract program data from each detail_pages entry and call "
+            f"persist_programs_skill for each one. Do NOT call "
+            f"browser_automation_skill again — the HTML is already here.]"
+        )
+        logger.info(
+            "[BrowserSkill] Pre-fetched %d/%d detail pages for %s",
+            len(detail_pages), len(selected), payload.url,
         )
     elif payload.page_type_hint == "index":
-        # Index page but client heuristics found no detail links.
-        # Trim HTML to a manageable size so the agent can use
-        # analyze_page_skill without blowing the context window.
         md = result.get("html_content") or ""
         MAX_INDEX_HTML = 15_000
         if len(md) > MAX_INDEX_HTML:
@@ -242,3 +243,43 @@ def browser_automation_skill_handler(
             )
 
     return result
+
+
+def _batch_fetch_detail_pages(
+    urls: list[str],
+    bridge: ClientAutomationBridge,
+    max_workers: int = 5,
+) -> list[dict]:
+    """Fetch multiple detail pages in parallel using thread pool.
+
+    Returns a list of {url, html_content} dicts (markdown-converted).
+    Failed fetches are included with an error field.
+    """
+    import concurrent.futures
+
+    def _fetch_one(url: str) -> dict:
+        try:
+            output = bridge.fetch_browser_payload(
+                BrowserFetchInput(url=url, page_type_hint="detail")
+            )
+            raw_html = output.html_content or ""
+            md = _html_to_markdown(raw_html, url) if raw_html else ""
+            # Truncate to keep context manageable (~8K per page)
+            MAX_DETAIL_MD = 8000
+            if len(md) > MAX_DETAIL_MD:
+                md = md[:MAX_DETAIL_MD] + "\n...(truncated)"
+            return {"url": url, "html_content": md}
+        except Exception as exc:
+            logger.warning("[BrowserSkill] Failed to fetch detail page %s: %s", url, exc)
+            return {"url": url, "html_content": "", "error": str(exc)}
+
+    results = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as pool:
+        futures = {pool.submit(_fetch_one, url): url for url in urls}
+        for future in concurrent.futures.as_completed(futures):
+            results.append(future.result())
+
+    # Sort by original URL order
+    url_order = {url: i for i, url in enumerate(urls)}
+    results.sort(key=lambda r: url_order.get(r["url"], 999))
+    return results

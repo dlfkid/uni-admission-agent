@@ -88,23 +88,21 @@ def _build_system_prompt() -> str:
     return """\
 You are a program crawler. You crawl ONE index page and save ALL programs found.
 
-WORKFLOW — repeat for EVERY URL in selected_urls:
-1. Call browser_automation_skill(url=<URL>, page_type_hint="detail")
-2. From the returned HTML, extract: name_en, source_url, faculty, study_mode, \
-duration, tuition_fees, requirements, deadline, description
-3. Call persist_programs_skill with the extracted data
-4. Move to the next URL. Do NOT stop until all URLs are done.
+STEP 1: Call browser_automation_skill(url=<given URL>, page_type_hint="index").
+The result contains `detail_pages` — a list of pre-fetched detail page HTMLs.
 
-FIRST STEP: Call browser_automation_skill with page_type_hint="index" to get selected_urls.
-Then loop through every URL above.
+STEP 2: For EACH entry in detail_pages, extract these fields from the HTML:
+  name_en, source_url, faculty, study_mode, duration, tuition_fees,
+  requirements (entry qualifications, GPA, IELTS scores),
+  deadline (application dates), description (1-2 sentences).
+
+STEP 3: Call persist_programs_skill for EACH program. Send ONE program per call.
 
 RULES:
-- Do NOT call load_skill, analyze_page_skill, or todo. Just fetch → extract → persist → next.
-- Do NOT re-fetch the index page. Use the selected_urls you already have.
-- Do NOT skip any URL. Process ALL of them.
-- Send ONE program per persist call.
-- Extract ALL fields you can find. If a field is missing, omit it.
-- When all URLs are processed, respond with a summary.
+- Do NOT call browser_automation_skill again. All detail pages are already in detail_pages.
+- Process EVERY entry in detail_pages. Do NOT skip any.
+- Extract ALL fields you can find from the HTML. If a field is missing, omit it.
+- When all programs are persisted, respond with a summary.
 """
 
 
