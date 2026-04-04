@@ -265,7 +265,7 @@ def _batch_fetch_detail_pages(
             raw_html = output.html_content or ""
             md = _html_to_markdown(raw_html, url) if raw_html else ""
             # Truncate to keep context manageable (~8K per page)
-            MAX_DETAIL_MD = 8000
+            MAX_DETAIL_MD = 16000
             if len(md) > MAX_DETAIL_MD:
                 md = md[:MAX_DETAIL_MD] + "\n...(truncated)"
             return {"url": url, "html_content": md}

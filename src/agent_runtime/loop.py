@@ -1159,7 +1159,7 @@ async def agent_loop(
             logger.info(
                 "[AgentLoop] Tool call: %s(%s)",
                 fn_name,
-                fn_args_raw[:200],
+                fn_args_raw[:2000],
             )
             _emit_loop_event(
                 event_sink,
