@@ -1256,13 +1256,30 @@ async def agent_loop(
             if fn_name == "browser_automation_skill":
                 browser_fetch_done_this_iteration = True
 
-            # Accumulate parsed programs from persist_programs_skill
+            # Accumulate program counts from persist_programs_skill
             if fn_name == "persist_programs_skill":
                 try:
                     skill_result = json.loads(result_str)
+                    # In non-dry-run mode, parsed_programs is empty but
+                    # imported/updated counts reflect actual DB writes.
                     for prog in skill_result.get("parsed_programs", []):
                         if isinstance(prog, dict):
                             collected_programs.append(prog)
+                    # Also count successful upserts as collected programs
+                    upserted = (
+                        skill_result.get("imported_count", 0)
+                        + skill_result.get("updated_count", 0)
+                    )
+                    if upserted > 0 and not skill_result.get("parsed_programs"):
+                        # Reconstruct minimal entries from the tool call args
+                        try:
+                            call_args = json.loads(fn_args_raw)
+                            for prog in call_args.get("programs", []):
+                                if isinstance(prog, dict):
+                                    collected_programs.append(prog)
+                        except (json.JSONDecodeError, TypeError):
+                            # Fallback: add a placeholder so guard knows we persisted
+                            collected_programs.append({"_persisted": True})
                 except (json.JSONDecodeError, TypeError):
                     pass
 
