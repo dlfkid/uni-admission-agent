@@ -277,6 +277,7 @@ def _auto_fetch_and_extract(
                 url=url,
                 html=raw_html,
                 markdown=md,
+                char_count=len(md),
                 links=[],
             )
         except Exception as exc:
