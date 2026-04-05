@@ -225,11 +225,11 @@ def browser_automation_skill_handler(
         )
         result["extracted_programs"] = extracted["programs"]
         result["html_content"] = (
-            f"[Index page: {len(selected)} detail URLs found. "
-            f"All pages fetched and parsed automatically. "
-            f"{len(extracted['programs'])} programs extracted with full details. "
-            f"Call persist_programs_skill ONCE with all programs below. "
-            f"Do NOT call browser_automation_skill again.]"
+            f"[Index page: {len(selected)} detail URLs found, "
+            f"{len(extracted['programs'])} programs extracted. "
+            f"The extracted_programs field contains the structured data. "
+            f"Call persist_programs_skill with univ_slug, year, and "
+            f"programs=extracted_programs AS-IS. Do NOT re-extract from HTML.]"
         )
         logger.info(
             "[BrowserSkill] Auto-extracted %d/%d programs for %s",
@@ -395,23 +395,31 @@ def _auto_fetch_and_extract(
     )
 
     # Step 1: Parallel fetch all detail pages (unchanged)
-    def _fetch_one(url: str) -> CrawlPageResult | None:
-        try:
-            output = bridge.fetch_browser_payload(
-                BrowserFetchInput(url=url, page_type_hint="detail")
-            )
-            raw_html = output.html_content or ""
-            md = _html_to_markdown(raw_html, url) if raw_html else ""
-            return CrawlPageResult(
-                url=url, html=raw_html, markdown=md,
-                char_count=len(md), links=[],
-            )
-        except Exception as exc:
-            logger.warning("[AutoExtract] Failed to fetch %s: %s", url, exc)
-            return None
+    def _fetch_one(url: str, retries: int = 2) -> CrawlPageResult | None:
+        for attempt in range(1, retries + 2):
+            try:
+                output = bridge.fetch_browser_payload(
+                    BrowserFetchInput(url=url, page_type_hint="detail")
+                )
+                raw_html = output.html_content or ""
+                md = _html_to_markdown(raw_html, url) if raw_html else ""
+                return CrawlPageResult(
+                    url=url, html=raw_html, markdown=md,
+                    char_count=len(md), links=[],
+                )
+            except Exception as exc:
+                if attempt <= retries:
+                    wait = attempt * 2
+                    logger.info("[AutoExtract] Retry %d/%d for %s in %ds: %s", attempt, retries, url, wait, exc)
+                    time.sleep(wait)
+                else:
+                    logger.warning("[AutoExtract] Failed to fetch %s after %d attempts: %s", url, retries + 1, exc)
+                    return None
 
+    # Use max 2 concurrent fetches to avoid overwhelming target servers
+    fetch_workers = min(max_workers, 2)
     pages: list[CrawlPageResult] = []
-    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as pool:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=fetch_workers) as pool:
         futures = {pool.submit(_fetch_one, url): url for url in urls}
         for future in concurrent.futures.as_completed(futures):
             page = future.result()

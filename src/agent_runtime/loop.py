@@ -90,16 +90,22 @@ You are a program crawler.
 
 ## For index pages (page_type_hint contains "index" or "auto"):
 1. Call browser_automation_skill(url=<given URL>, page_type_hint="index").
-   All detail pages are automatically fetched, parsed, and saved.
-   Check auto_persisted in the result for the count.
-2. Respond with a summary. Do NOT call any more tools.
+   The result contains `extracted_programs` — an array of fully structured program dicts.
+2. Call persist_programs_skill ONCE with:
+   - univ_slug and year from the user message
+   - programs: the `extracted_programs` array AS-IS (do NOT modify or re-extract)
+3. Respond with a summary. Do NOT call browser_automation_skill again.
 
 ## For detail pages (page_type_hint is "detail"):
 1. Call browser_automation_skill(url=<given URL>, page_type_hint="detail").
-2. Extract from the HTML: name_en, source_url, faculty, study_mode, duration,
-   tuition_fees, requirements, deadline, description.
-3. Call persist_programs_skill with univ_slug, year, and the extracted program.
-4. Respond with a summary.
+   The result contains `extracted_programs` with one structured program dict.
+2. Call persist_programs_skill with univ_slug, year, and the program from `extracted_programs`.
+   Pass the program dict AS-IS — do NOT re-extract fields from HTML.
+3. Respond with a summary.
+
+CRITICAL: The `extracted_programs` data is already structured with correct field names
+(name_en, faculty, tuition_amount, study_options, deadlines, requirements, etc.).
+NEVER re-extract or reformat this data. Pass it directly to persist_programs_skill.
 """
 
 
