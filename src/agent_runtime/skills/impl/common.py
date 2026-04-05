@@ -388,6 +388,52 @@ def _strip_html_boilerplate(html: str) -> str:
     return html
 
 
+_TAXONOMY_MATCH_THRESHOLD = 0.8
+
+
+def _resolve_program_name(
+    extracted_name: str,
+    anchor_text: str | None,
+    url: str,
+) -> str:
+    """Pick the best program name from multiple sources.
+
+    Priority:
+    1. anchor_text (from index page link) — if not noise
+    2. taxonomy match (known program names) — if score > threshold
+    3. extracted_name (from H1/H2 regex) — if not noise
+    4. empty string (caller should skip this program)
+    """
+    from src.scrapers.helpers import is_noise_program_name
+
+    # Source 1: anchor text — most reliable
+    if anchor_text and not is_noise_program_name(anchor_text):
+        if extracted_name and not is_noise_program_name(extracted_name) and extracted_name != anchor_text:
+            logger.debug("[NameResolve] anchor='%s', extracted='%s' — using anchor", anchor_text, extracted_name)
+        return anchor_text.strip()
+
+    # Source 2: taxonomy match — use URL + extracted name as signals
+    try:
+        from src.services.subject_taxonomy import get_subject_taxonomy_service
+        taxonomy = get_subject_taxonomy_service()
+        signals = [s for s in [extracted_name, anchor_text or "", url.split("/")[-1].replace("-", " ")] if s]
+        matches = taxonomy.match_signals(signals, top_k=1)
+        if matches and matches[0]["score"] >= _TAXONOMY_MATCH_THRESHOLD:
+            matched_name = matches[0]["name_en"]
+            logger.info("[NameResolve] Taxonomy match: '%s' (score=%.2f)", matched_name, matches[0]["score"])
+            return matched_name
+    except Exception:
+        pass
+
+    # Source 3: extracted name from H1/H2
+    if extracted_name and not is_noise_program_name(extracted_name):
+        return extracted_name.strip()
+
+    # Source 4: last resort — anchor text even if noisy, or empty
+    logger.warning("[NameResolve] No valid name for %s (extracted='%s', anchor='%s')", url, extracted_name, anchor_text)
+    return ""
+
+
 def _auto_fetch_and_extract(
     urls: list[str],
     link_texts: dict[str, str],
@@ -482,13 +528,11 @@ def _auto_fetch_and_extract(
             if program_data:
                 program_data.pop("academic_year", None)
                 program_data["source_url"] = page.url
-                # If extracted name is generic (e.g., "Masters courses"),
-                # override with the anchor text from the index page
-                from src.scrapers.helpers import is_noise_program_name
-                name = program_data.get("name_en", "")
-                if (not name or is_noise_program_name(name)) and anchor_text:
-                    program_data["name_en"] = anchor_text
-                    logger.info("[AutoExtract] Name override: '%s' → '%s'", name, anchor_text)
+                program_data["name_en"] = _resolve_program_name(
+                    extracted_name=program_data.get("name_en", ""),
+                    anchor_text=anchor_text,
+                    url=page.url,
+                )
                 logger.info(
                     "[AutoExtract] LLM extracted: %s (%d fields)",
                     program_data.get("name_en", "?"),
@@ -537,14 +581,11 @@ def _auto_fetch_and_extract(
         # Build program_data dict from selector results
         anchor_text = link_texts.get(page.url)
         program_data: dict[str, Any] = {"source_url": page.url}
-        if result.get("name_en"):
-            program_data["name_en"] = result["name_en"]
-        else:
-            from src.scrapers.helpers import extract_program_name
-            name = extract_program_name(page.markdown) if page.markdown else ""
-            if not name and anchor_text:
-                name = anchor_text
-            program_data["name_en"] = name or ""
+        program_data["name_en"] = _resolve_program_name(
+            extracted_name=result.get("name_en") or "",
+            anchor_text=anchor_text,
+            url=page.url,
+        )
 
         for key in ("faculty", "tuition_amount", "currency", "study_options", "deadlines", "requirements"):
             if result.get(key) is not None:
