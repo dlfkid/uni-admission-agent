@@ -344,6 +344,7 @@ async def _fetch_browser_payload_from_client(
     page_type_hint: str,
     client_id: Optional[str],
 ) -> Dict[str, Any]:
+    """Dispatch a browser fetch RPC. Must be called on the main event loop."""
     target_client_id = client_registry.select_client_id(client_id)
     if not target_client_id:
         raise RuntimeError("No available client for browser automation")
@@ -357,26 +358,7 @@ async def _fetch_browser_payload_from_client(
         "[RPC] Dispatching fetch_browser_payload to client=%s request_id=%s url=%s",
         target_client_id, request_id, url,
     )
-
-    # When called from a worker thread (via run_sync/asyncio.run), the WebSocket
-    # belongs to the main FastAPI event loop, not this thread's loop.
-    # Schedule the send+wait on the main loop and block until done.
-    try:
-        current_loop = asyncio.get_running_loop()
-    except RuntimeError:
-        current_loop = None
-
-    if _main_loop is not None and current_loop is not _main_loop:
-        # Cross-thread call: schedule on main loop
-        future = asyncio.run_coroutine_threadsafe(
-            _rpc_send_and_wait(websocket, request_id, url, page_type_hint),
-            _main_loop,
-        )
-        payload = future.result(timeout=120)
-    else:
-        # Already on main loop (normal async call)
-        payload = await _rpc_send_and_wait(websocket, request_id, url, page_type_hint)
-
+    payload = await _rpc_send_and_wait(websocket, request_id, url, page_type_hint)
     logger.info(
         "[RPC] Client %s responded to request_id=%s (payload keys: %s)",
         target_client_id, request_id, list(payload.keys()),
@@ -384,9 +366,25 @@ async def _fetch_browser_payload_from_client(
     return payload
 
 
+def _fetch_browser_payload_from_client_sync(
+    *,
+    url: str,
+    page_type_hint: str,
+    client_id: Optional[str],
+) -> Dict[str, Any]:
+    """Thread-safe sync wrapper: schedules RPC on the main event loop and blocks."""
+    if _main_loop is None:
+        raise RuntimeError("Server main event loop not initialized")
+    future = asyncio.run_coroutine_threadsafe(
+        _fetch_browser_payload_from_client(url=url, page_type_hint=page_type_hint, client_id=client_id),
+        _main_loop,
+    )
+    return future.result(timeout=120)
+
+
 browser_provider_service.configure_client_dispatchers(
     availability_fn=_has_available_client,
-    fetch_fn=_fetch_browser_payload_from_client,
+    fetch_fn=_fetch_browser_payload_from_client_sync,
     select_client_fn=_select_available_client_id,
 )
 
