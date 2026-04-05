@@ -405,3 +405,25 @@ class FallbackHandler:
         except Exception as exc:
             logger.warning("[FallbackHandler] Field fallback failed: %s", exc)
             return {}
+
+
+# ---------------------------------------------------------------------------
+# Utilities
+# ---------------------------------------------------------------------------
+
+def derive_page_pattern(index_url: str) -> str:
+    from urllib.parse import urlparse
+    parsed = urlparse(index_url)
+    path = parsed.path.rstrip("/")
+    if not path:
+        return "default"
+    segments = [s for s in path.split("/") if s]
+    if not segments:
+        return "default"
+    if len(segments) >= 2:
+        last_two = segments[-2:]
+        generic = {"programmes", "courses", "prospective-students", "students", "study"}
+        if last_two[0].lower() in generic:
+            return last_two[1]
+        return f"{last_two[0]}_{last_two[1]}"
+    return segments[-1]

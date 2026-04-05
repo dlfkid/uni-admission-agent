@@ -255,3 +255,22 @@ class TestFallbackHandler:
     def test_four_missing_triggers_full(self):
         result = {"a": "ok", "b": None, "c": None, "d": None, "e": None, "f": "ok"}
         assert FallbackHandler.decide(result, total_fields=6) == "full"
+
+
+from src.scrapers.schema_extractor import derive_page_pattern
+
+
+class TestDerivePagePattern:
+    def test_edinburgh(self):
+        assert derive_page_pattern("https://study.ed.ac.uk/programmes/postgraduate-taught?page=5") == "postgraduate-taught"
+
+    def test_ucl(self):
+        assert derive_page_pattern("https://www.ucl.ac.uk/prospective-students/graduate/taught-degrees") == "graduate_taught-degrees"
+
+    def test_strips_query_params(self):
+        result = derive_page_pattern("https://example.com/courses/masters?filter=cs&page=2")
+        assert "?" not in result
+        assert result == "masters"
+
+    def test_empty_path_returns_default(self):
+        assert derive_page_pattern("https://example.com/") == "default"
