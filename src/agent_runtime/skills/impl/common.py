@@ -219,6 +219,14 @@ def browser_automation_skill_handler(
     # The agent only needs to call persist_programs_skill once with the results.
     selected = result.get("selected_urls") or []
     if selected:
+        # Cap detail pages to avoid timeout on large indexes.
+        MAX_AUTO_EXTRACT = 10
+        if len(selected) > MAX_AUTO_EXTRACT:
+            logger.info(
+                "[BrowserSkill] Capping detail pages from %d to %d",
+                len(selected), MAX_AUTO_EXTRACT,
+            )
+            selected = selected[:MAX_AUTO_EXTRACT]
         link_texts = result.get("selected_link_texts") or {}
         extracted = _auto_fetch_and_extract(selected, link_texts, bridge)
         result["extracted_programs"] = extracted["programs"]
