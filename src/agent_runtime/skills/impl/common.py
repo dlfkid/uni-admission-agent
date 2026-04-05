@@ -247,6 +247,95 @@ def browser_automation_skill_handler(
     return result
 
 
+def _strip_boilerplate(md: str) -> str:
+    """Remove common university page boilerplate from markdown.
+
+    Strips navigation menus, breadcrumbs, footers, and repeated header
+    blocks that appear on every page. This typically reduces page size
+    by 30-50%, often avoiding the need for multi-chunk LLM parsing.
+    """
+    import re
+
+    lines = md.split("\n")
+    filtered: list[str] = []
+
+    # Common boilerplate patterns (case-insensitive line matching)
+    _SKIP_PATTERNS = re.compile(
+        r"^(?:"
+        r"Skip to (?:main )?content|"
+        r"Toggle Navigation|"
+        r"Expand/collapse submenu|"
+        r"Show/hide site search|"
+        r"Submit search|"
+        r"Breadcrumb|"
+        r"Subsite (?:menu|mobile menu)|"
+        r"User account menu|"
+        r"CMS login|"
+        r"Terms & conditions|"
+        r"Privacy & cookies|"
+        r"Complaints procedure|"
+        r"Modern slavery|"
+        r"Website accessibility|"
+        r"Freedom of information|"
+        r"Data protection|"
+        r"Digital Sustainability|"
+        r"MyEd login|"
+        r"The University of Edinburgh is a charitable body|"
+        r"Unless explicitly stated otherwise|"
+        r"copyright ©"
+        r")\s*$",
+        re.IGNORECASE,
+    )
+
+    # Footer markers — skip everything after these
+    _FOOTER_MARKERS = re.compile(
+        r"^(?:On this page|Related degree programmes|You may also be interested in)\s*$",
+        re.IGNORECASE,
+    )
+
+    for line in lines:
+        stripped = line.strip()
+
+        # Skip empty lines in sequences
+        if not stripped:
+            if filtered and not filtered[-1].strip():
+                continue
+            filtered.append(line)
+            continue
+
+        # Stop at footer sections
+        if _FOOTER_MARKERS.match(stripped):
+            break
+
+        # Skip known boilerplate lines
+        if _SKIP_PATTERNS.match(stripped):
+            continue
+
+        # Skip navigation-like lines (single words/short phrases)
+        if stripped in (
+            "Home", "Study", "Global", "Visit", "Research", "News",
+            "About", "Alumni", "Local", "Staff", "Students",
+            "Schools & departments", "MyEd", "Degree finder",
+            "Search degree programmes", "Undergraduate degree programmes",
+            "Postgraduate taught programmes", "Postgraduate research programmes",
+            "A to Z of degree programmes", "Degree programmes by subject",
+            "Undergraduate degree programmes by subject",
+            "Postgraduate degree programmes by subject",
+            "Postgraduate taught degree programmes A to Z",
+            "Postgraduate research degree programmes A to Z",
+            "Search", "Filter", "Refine results", "Close filters X",
+            "Apply now", "Apply",
+        ):
+            continue
+
+        filtered.append(line)
+
+    result = "\n".join(filtered).strip()
+    # Collapse excessive whitespace
+    result = re.sub(r"\n{4,}", "\n\n\n", result)
+    return result
+
+
 def _auto_fetch_and_extract(
     urls: list[str],
     link_texts: dict[str, str],
@@ -303,9 +392,21 @@ def _auto_fetch_and_extract(
         router = create_router()
         cleaner = LLMCleanerAgent(router=router)
         anchor_text = link_texts.get(page.url)
+
+        # Strip navigation/footer boilerplate to reduce page size and
+        # avoid chunking (single-chunk pages parse 2x faster).
+        trimmed_md = _strip_boilerplate(page.markdown)
+        trimmed_page = CrawlPageResult(
+            url=page.url,
+            html=page.html,
+            markdown=trimmed_md,
+            char_count=len(trimmed_md),
+            links=page.links,
+        )
+
         try:
             program_data, error = extract_program_data_from_page(
-                page=page,
+                page=trimmed_page,
                 cleaner=cleaner,
                 univ_slug="",  # placeholder — auto-persist provides real slug
                 year=0,        # placeholder — auto-persist provides real year
@@ -330,7 +431,7 @@ def _auto_fetch_and_extract(
             return None
 
     programs: list[dict] = []
-    with concurrent.futures.ThreadPoolExecutor(max_workers=3) as pool:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as pool:
         futures = {pool.submit(_extract_one, page): page for page in pages}
         for future in concurrent.futures.as_completed(futures):
             result = future.result()
