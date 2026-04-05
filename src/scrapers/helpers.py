@@ -160,7 +160,9 @@ _NOISE_PROGRAM_NAME_RE = re.compile(
     r"|degree\s+finder|search\s+(?:programmes?|courses?|degrees?)"
     r"|a\s+to\s+z\s+of\s+(?:degree\s+)?programmes?"
     r"|browse\s+(?:by\s+)?(?:faculty|subject|department)"
-    r"|all\s+(?:programmes?|courses?))$",
+    r"|all\s+(?:programmes?|courses?)"
+    r"|masters?\s+courses?|bachelor'?s?\s+courses?"
+    r"|course\s+search|find\s+a?\s*(?:course|programme|degree))$",
     re.IGNORECASE,
 )
 

@@ -482,6 +482,13 @@ def _auto_fetch_and_extract(
             if program_data:
                 program_data.pop("academic_year", None)
                 program_data["source_url"] = page.url
+                # If extracted name is generic (e.g., "Masters courses"),
+                # override with the anchor text from the index page
+                from src.scrapers.helpers import is_noise_program_name
+                name = program_data.get("name_en", "")
+                if (not name or is_noise_program_name(name)) and anchor_text:
+                    program_data["name_en"] = anchor_text
+                    logger.info("[AutoExtract] Name override: '%s' → '%s'", name, anchor_text)
                 logger.info(
                     "[AutoExtract] LLM extracted: %s (%d fields)",
                     program_data.get("name_en", "?"),
