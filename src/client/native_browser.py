@@ -10,6 +10,7 @@ from pathlib import Path
 import platform
 import signal
 import shutil
+import threading
 import tempfile
 import time
 from typing import Any
@@ -63,6 +64,11 @@ def select_detail_links(
 
 
 class _BrowserProcess:
+    """Manages a persistent Chrome/Edge process for CDP automation."""
+
+    _instance: _BrowserProcess | None = None
+    _lock = threading.Lock()
+
     def __init__(self, *, browser_path: str, debug_port: int, launch_timeout: float) -> None:
         self.browser_path = browser_path
         self.debug_port = int(debug_port)
@@ -70,6 +76,17 @@ class _BrowserProcess:
         self.process_pid: int | None = None
         self.temp_profile_dir: str | None = None
         self.started_by_me = False
+
+    @classmethod
+    def get_or_create(cls, *, browser_path: str, debug_port: int = 9222, launch_timeout: float = 20.0) -> _BrowserProcess:
+        """Get the singleton browser instance, starting Chrome if needed."""
+        with cls._lock:
+            if cls._instance is not None and _is_debugger_ready(cls._instance.debug_port):
+                return cls._instance
+            instance = cls(browser_path=browser_path, debug_port=debug_port, launch_timeout=launch_timeout)
+            instance.start()
+            cls._instance = instance
+            return instance
 
     def start(self) -> None:
         if _is_debugger_ready(self.debug_port):
@@ -107,6 +124,9 @@ class _BrowserProcess:
                     pass
         if self.temp_profile_dir:
             shutil.rmtree(self.temp_profile_dir, ignore_errors=True)
+        with self._lock:
+            if _BrowserProcess._instance is self:
+                _BrowserProcess._instance = None
 
 
 def fetch_browser_payload(
@@ -118,29 +138,30 @@ def fetch_browser_payload(
     debug_port: int = 9222,
     launch_timeout: float = 20.0,
 ) -> dict[str, Any]:
-    """Fetch browser payload by driving local Chrome/Edge via CDP."""
+    """Fetch browser payload by driving local Chrome/Edge via CDP.
+
+    Reuses a persistent Chrome instance (singleton). Each call opens a new
+    tab via /json/new and closes it when done. Safe for concurrent calls.
+    """
     target_url = str(url or "").strip()
     if not target_url:
         raise ValueError("url is required")
 
     resolved_browser = _resolve_browser_path(browser_path)
-    session = _BrowserProcess(
+    _BrowserProcess.get_or_create(
         browser_path=resolved_browser,
         debug_port=debug_port,
         launch_timeout=launch_timeout,
     )
-    session.start()
-    try:
-        return asyncio.run(
-            _fetch_payload_async(
-                url=target_url,
-                page_type_hint=page_type_hint,
-                detail_limit=max(1, int(detail_limit)),
-                debug_port=debug_port,
-            )
+    # Chrome is running; each call just opens a new tab (via _open_debug_target)
+    return asyncio.run(
+        _fetch_payload_async(
+            url=target_url,
+            page_type_hint=page_type_hint,
+            detail_limit=max(1, int(detail_limit)),
+            debug_port=debug_port,
         )
-    finally:
-        session.close()
+    )
 
 
 async def _fetch_payload_async(
