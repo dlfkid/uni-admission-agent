@@ -306,7 +306,8 @@ app.add_middleware(
 task_manager = TaskManager()
 client_registry = ClientRegistry()
 client_sockets: Dict[str, WebSocket] = {}
-_client_ws_locks: Dict[str, asyncio.Lock] = {}  # per-client lock for WebSocket sends
+_client_ws_locks: Dict[str, threading.Lock] = {}  # per-client lock for WebSocket sends
+_client_ws_locks_guard = threading.Lock()  # protects _client_ws_locks dict creation
 client_rpc_broker = ClientRpcBroker(timeout_seconds=120.0)
 
 
@@ -332,10 +333,12 @@ async def _fetch_browser_payload_from_client(
     if websocket is None:
         raise RuntimeError(f"Client websocket unavailable: {target_client_id}")
 
-    # Per-client lock to serialize WebSocket sends (prevents frame interleaving)
-    if target_client_id not in _client_ws_locks:
-        _client_ws_locks[target_client_id] = asyncio.Lock()
-    ws_lock = _client_ws_locks[target_client_id]
+    # Per-client lock to serialize WebSocket sends (prevents frame interleaving).
+    # Uses threading.Lock because callers may run in different threads via run_sync().
+    with _client_ws_locks_guard:
+        if target_client_id not in _client_ws_locks:
+            _client_ws_locks[target_client_id] = threading.Lock()
+        ws_lock = _client_ws_locks[target_client_id]
 
     request_id, _future = client_rpc_broker.create_pending(target_client_id)
     logger.info(
@@ -344,7 +347,7 @@ async def _fetch_browser_payload_from_client(
         request_id,
         url,
     )
-    async with ws_lock:
+    with ws_lock:
         await websocket.send_json(
             {
                 "type": "rpc_request",

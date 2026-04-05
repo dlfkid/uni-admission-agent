@@ -288,6 +288,7 @@ class ClientRuntime:
         websocket: websockets.WebSocketClientProtocol,
         payload: dict[str, Any],
     ) -> None:
+        # Concurrent RPC handlers + heartbeat can interleave sends; serialize them.
         if self._ws_send_lock is None:
             self._ws_send_lock = asyncio.Lock()
         async with self._ws_send_lock:
