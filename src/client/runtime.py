@@ -133,6 +133,9 @@ class ClientRuntime:
                 await asyncio.sleep(3)
 
     async def _rpc_loop(self, websocket: websockets.WebSocketClientProtocol) -> None:
+        rpc_semaphore = asyncio.Semaphore(5)  # max 5 concurrent RPC handlers
+        rpc_tasks: set[asyncio.Task] = set()
+
         while True:
             raw = await websocket.recv()
             message = _loads_json(raw)
@@ -148,7 +151,14 @@ class ClientRuntime:
                     action,
                     url,
                 )
-                await self._handle_rpc_request(websocket, message)
+
+                async def _bounded_handle(ws, msg, sem):
+                    async with sem:
+                        await self._handle_rpc_request(ws, msg)
+
+                task = asyncio.create_task(_bounded_handle(websocket, message, rpc_semaphore))
+                rpc_tasks.add(task)
+                task.add_done_callback(rpc_tasks.discard)
 
     async def _heartbeat_loop(self, websocket: websockets.WebSocketClientProtocol) -> None:
         while True:
@@ -271,12 +281,17 @@ class ClientRuntime:
             raise RuntimeError("fetch command output must be a JSON object")
         return parsed
 
-    @staticmethod
+    _ws_send_lock: asyncio.Lock | None = None
+
     async def _send_json(
+        self,
         websocket: websockets.WebSocketClientProtocol,
         payload: dict[str, Any],
     ) -> None:
-        await websocket.send(json.dumps(payload, ensure_ascii=False))
+        if self._ws_send_lock is None:
+            self._ws_send_lock = asyncio.Lock()
+        async with self._ws_send_lock:
+            await websocket.send(json.dumps(payload, ensure_ascii=False))
 
 
 def _loads_json(raw: Any) -> dict[str, Any]:
