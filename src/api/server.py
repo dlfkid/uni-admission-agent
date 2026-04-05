@@ -306,6 +306,7 @@ app.add_middleware(
 task_manager = TaskManager()
 client_registry = ClientRegistry()
 client_sockets: Dict[str, WebSocket] = {}
+_client_ws_locks: Dict[str, asyncio.Lock] = {}  # per-client lock for WebSocket sends
 client_rpc_broker = ClientRpcBroker(timeout_seconds=120.0)
 
 
@@ -331,6 +332,11 @@ async def _fetch_browser_payload_from_client(
     if websocket is None:
         raise RuntimeError(f"Client websocket unavailable: {target_client_id}")
 
+    # Per-client lock to serialize WebSocket sends (prevents frame interleaving)
+    if target_client_id not in _client_ws_locks:
+        _client_ws_locks[target_client_id] = asyncio.Lock()
+    ws_lock = _client_ws_locks[target_client_id]
+
     request_id, _future = client_rpc_broker.create_pending(target_client_id)
     logger.info(
         "[RPC] Dispatching fetch_browser_payload to client=%s request_id=%s url=%s",
@@ -338,17 +344,18 @@ async def _fetch_browser_payload_from_client(
         request_id,
         url,
     )
-    await websocket.send_json(
-        {
-            "type": "rpc_request",
-            "request_id": request_id,
-            "action": "fetch_browser_payload",
-            "payload": {
-                "url": url,
-                "page_type_hint": page_type_hint,
-            },
-        }
-    )
+    async with ws_lock:
+        await websocket.send_json(
+            {
+                "type": "rpc_request",
+                "request_id": request_id,
+                "action": "fetch_browser_payload",
+                "payload": {
+                    "url": url,
+                    "page_type_hint": page_type_hint,
+                },
+            }
+        )
     payload = await client_rpc_broker.wait_for_response(request_id)
     logger.info(
         "[RPC] Client %s responded to request_id=%s (payload keys: %s)",
