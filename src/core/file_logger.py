@@ -75,7 +75,7 @@ def setup_file_logging(log_dir: Path | None = None) -> None:
     log_dir:
         Directory for log files.  Defaults to :func:`resolve_log_dir`.
     """
-    global _VERBOSE_REGISTERED  # noqa: PLW0603
+    global _VERBOSE_REGISTERED  # noqa: PLW0603  # pylint: disable=global-statement
 
     # 1. Register VERBOSE level (idempotent guard)
     if not _VERBOSE_REGISTERED:

@@ -275,7 +275,7 @@ def _update_env_file_structured(config: StructuredConfig) -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Lifespan context manager for database initialization."""
-    global _main_loop
+    global _main_loop  # pylint: disable=global-statement
     _main_loop = asyncio.get_running_loop()
     try:
         _register_agent_mcp_tools_if_enabled()

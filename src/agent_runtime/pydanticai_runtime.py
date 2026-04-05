@@ -96,6 +96,12 @@ class PydanticAIRuntime:
         )
 
         system_prompt = SYSTEM_PROMPT
+        if request.context.get("dry_run"):
+            system_prompt += (
+                "\n\nIMPORTANT: dry_run mode is enabled. "
+                "Pass dry_run=true when calling persist_programs_skill "
+                "so that no records are written to the database."
+            )
         payload = dict(request.payload or {})
 
         try:

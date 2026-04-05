@@ -8,6 +8,65 @@ from src.agent_runtime.pydanticai_runtime import PydanticAIRuntime
 from src.agent_runtime.skills.registry import SkillRegistry
 
 
+class _AsyncChunkIter:
+    """Wraps a list of chunks into an async iterator for fake streaming."""
+
+    def __init__(self, chunks):
+        self._chunks = chunks
+        self._idx = 0
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        if self._idx >= len(self._chunks):
+            raise StopAsyncIteration
+        chunk = self._chunks[self._idx]
+        self._idx += 1
+        return chunk
+
+
+def _make_stream_chunks(*, content=None, tool_calls=None, finish_reason="stop"):
+    """Build a list of streaming chunks that _streaming_llm_call can consume."""
+    chunks = []
+    if content:
+        chunks.append(SimpleNamespace(
+            choices=[SimpleNamespace(
+                delta=SimpleNamespace(content=content, tool_calls=None),
+                finish_reason=None,
+            )],
+            usage=None,
+        ))
+    if tool_calls:
+        for idx, tc in enumerate(tool_calls):
+            chunks.append(SimpleNamespace(
+                choices=[SimpleNamespace(
+                    delta=SimpleNamespace(
+                        content=None,
+                        tool_calls=[SimpleNamespace(
+                            index=idx,
+                            id=tc.id,
+                            function=SimpleNamespace(
+                                name=tc.function.name,
+                                arguments=tc.function.arguments,
+                            ),
+                        )],
+                    ),
+                    finish_reason=None,
+                )],
+                usage=None,
+            ))
+    # Final chunk with finish_reason
+    chunks.append(SimpleNamespace(
+        choices=[SimpleNamespace(
+            delta=SimpleNamespace(content=None, tool_calls=None),
+            finish_reason=finish_reason,
+        )],
+        usage=None,
+    ))
+    return chunks
+
+
 @pytest.mark.asyncio
 async def test_runtime_delegates_to_agent_loop(monkeypatch):
     """The runtime now delegates to the LLM-driven agent loop."""
@@ -84,41 +143,22 @@ async def test_agent_loop_emits_tool_call_started_and_finished(monkeypatch, tmp_
     emitted: list[dict[str, object]] = []
     monkeypatch.chdir(tmp_path)
 
-    responses = [
-        SimpleNamespace(
-            choices=[
-                SimpleNamespace(
-                    message=SimpleNamespace(
-                        content=None,
-                        tool_calls=[
-                            SimpleNamespace(
-                                id="call-1",
-                                function=SimpleNamespace(
-                                    name="todo",
-                                    arguments=(
-                                        '{"items":[{"content":"inspect page","status":"completed"}]}'
-                                    ),
-                                ),
-                            )
-                        ],
-                    ),
-                    finish_reason="tool_calls",
-                )
-            ]
+    todo_tc = SimpleNamespace(
+        id="call-1",
+        function=SimpleNamespace(
+            name="todo",
+            arguments='{"items":[{"content":"inspect page","status":"completed"}]}',
         ),
-        SimpleNamespace(
-            choices=[
-                SimpleNamespace(
-                    message=SimpleNamespace(content="done", tool_calls=[]),
-                    finish_reason="stop",
-                )
-            ]
-        ),
+    )
+
+    streams = [
+        _AsyncChunkIter(_make_stream_chunks(tool_calls=[todo_tc], finish_reason="tool_calls")),
+        _AsyncChunkIter(_make_stream_chunks(content="done", finish_reason="stop")),
     ]
 
     class FakeCompletions:
         async def create(self, **_kwargs):
-            return responses.pop(0)
+            return streams.pop(0)
 
     fake_client = SimpleNamespace(
         chat=SimpleNamespace(completions=FakeCompletions())
@@ -147,33 +187,21 @@ async def test_agent_loop_emits_agent_done_when_max_iterations_hit(monkeypatch, 
     emitted: list[dict[str, object]] = []
     monkeypatch.chdir(tmp_path)
 
-    responses = [
-        SimpleNamespace(
-            choices=[
-                SimpleNamespace(
-                    message=SimpleNamespace(
-                        content=None,
-                        tool_calls=[
-                            SimpleNamespace(
-                                id="call-1",
-                                function=SimpleNamespace(
-                                    name="todo",
-                                    arguments=(
-                                        '{"items":[{"content":"inspect page","status":"completed"}]}'
-                                    ),
-                                ),
-                            )
-                        ],
-                    ),
-                    finish_reason="tool_calls",
-                )
-            ]
-        )
+    todo_tc = SimpleNamespace(
+        id="call-1",
+        function=SimpleNamespace(
+            name="todo",
+            arguments='{"items":[{"content":"inspect page","status":"completed"}]}',
+        ),
+    )
+
+    streams = [
+        _AsyncChunkIter(_make_stream_chunks(tool_calls=[todo_tc], finish_reason="tool_calls")),
     ]
 
     class FakeCompletions:
         async def create(self, **_kwargs):
-            return responses.pop(0)
+            return streams.pop(0)
 
     fake_client = SimpleNamespace(
         chat=SimpleNamespace(completions=FakeCompletions())

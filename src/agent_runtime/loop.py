@@ -951,6 +951,124 @@ async def _streaming_llm_call(
 
 
 # ---------------------------------------------------------------------------
+# Auto-persist helper (extracted to reduce nesting in the main loop)
+# ---------------------------------------------------------------------------
+
+
+async def _auto_persist_browser_programs(
+    result_str: str,
+    univ_slug: str,
+    year: int,
+    dry_run: bool,
+    registry: "SkillRegistry",
+    collected_programs: list[dict[str, Any]],
+    event_sink: "EventSink | None",
+    iteration: int,
+) -> str:
+    """Persist extracted programs from a browser result, return updated result_str."""
+    try:
+        browser_result = json.loads(result_str)
+        extracted = browser_result.get("extracted_programs") or []
+        if not (extracted and univ_slug and year):
+            return result_str
+
+        persist_payload = json.dumps({
+            "univ_slug": univ_slug,
+            "year": year,
+            "programs": extracted,
+            "dry_run": dry_run,
+        }, ensure_ascii=False, default=str)
+        persist_result_str = await _handle_skill_call(
+            "persist_programs_skill", persist_payload, registry
+        )
+        persist_result = json.loads(persist_result_str)
+
+        # Accumulate into collected_programs
+        for prog in persist_result.get("parsed_programs", []):
+            if isinstance(prog, dict):
+                collected_programs.append(prog)
+        n_upserted = (
+            persist_result.get("imported_count", 0)
+            + persist_result.get("updated_count", 0)
+        )
+        if n_upserted > 0 and not persist_result.get("parsed_programs"):
+            for prog in extracted:
+                if isinstance(prog, dict):
+                    collected_programs.append(prog)
+
+        # Emit events for extension counters
+        n_persisted = len(collected_programs)
+        for _ in range(n_persisted):
+            _emit_loop_event(
+                event_sink,
+                "tool_call_finished",
+                iteration=iteration,
+                tool="persist_programs_skill",
+                tool_call_id="auto_persist",
+            )
+        _emit_loop_event(
+            event_sink,
+            "token_usage",
+            iteration=iteration,
+            total_tokens=0,  # extraction tokens already counted
+        )
+
+        # Replace extracted_programs with summary for LLM
+        browser_result.pop("extracted_programs", None)
+        browser_result["auto_persisted"] = {
+            "count": n_persisted,
+            "univ_slug": univ_slug,
+            "year": year,
+            "dry_run": dry_run,
+        }
+        result_str = json.dumps(
+            browser_result, ensure_ascii=False, default=str
+        )
+
+        logger.info(
+            "[AgentLoop] Auto-persisted %d programs for %s/%d (dry_run=%s)",
+            n_persisted, univ_slug, year, dry_run,
+        )
+    except Exception as exc:
+        logger.warning("[AgentLoop] Auto-persist failed: %s", exc)
+    return result_str
+
+
+def _accumulate_persist_results(
+    result_str: str,
+    fn_args_raw: str,
+    collected_programs: list[dict[str, Any]],
+) -> None:
+    """Extract persisted program data from a persist_programs_skill result."""
+    try:
+        skill_result = json.loads(result_str)
+    except (json.JSONDecodeError, TypeError):
+        return
+
+    # In non-dry-run mode, parsed_programs is empty but
+    # imported/updated counts reflect actual DB writes.
+    for prog in skill_result.get("parsed_programs", []):
+        if isinstance(prog, dict):
+            collected_programs.append(prog)
+
+    # Also count successful upserts as collected programs
+    upserted = (
+        skill_result.get("imported_count", 0)
+        + skill_result.get("updated_count", 0)
+    )
+    if upserted > 0 and not skill_result.get("parsed_programs"):
+        # Reconstruct minimal entries from the tool call args
+        try:
+            call_args = json.loads(fn_args_raw)
+            for prog in call_args.get("programs", []):
+                if isinstance(prog, dict):
+                    collected_programs.append(prog)
+        except (json.JSONDecodeError, TypeError):
+            # Fallback: add a placeholder so guard knows we persisted
+            collected_programs.append({"_persisted": True})
+
+
+# ---------------------------------------------------------------------------
 # The Loop
 # ---------------------------------------------------------------------------
 
@@ -1267,96 +1385,17 @@ async def agent_loop(
 
                 # AUTO-PERSIST: If the skill extracted programs, persist them
                 # directly in code — never ask the LLM to relay the data.
-                try:
-                    browser_result = json.loads(result_str)
-                    extracted = browser_result.get("extracted_programs") or []
-                    if extracted and univ_slug and year:
-                        persist_payload = json.dumps({
-                            "univ_slug": univ_slug,
-                            "year": year,
-                            "programs": extracted,
-                            "dry_run": dry_run,
-                        }, ensure_ascii=False, default=str)
-                        persist_result_str = await _handle_skill_call(
-                            "persist_programs_skill", persist_payload, registry
-                        )
-                        persist_result = json.loads(persist_result_str)
-
-                        # Accumulate into collected_programs
-                        for prog in persist_result.get("parsed_programs", []):
-                            if isinstance(prog, dict):
-                                collected_programs.append(prog)
-                        n_upserted = (
-                            persist_result.get("imported_count", 0)
-                            + persist_result.get("updated_count", 0)
-                        )
-                        if n_upserted > 0 and not persist_result.get("parsed_programs"):
-                            for prog in extracted:
-                                if isinstance(prog, dict):
-                                    collected_programs.append(prog)
-
-                        # Emit events for extension counters
-                        n_persisted = len(collected_programs)
-                        for _ in range(n_persisted):
-                            _emit_loop_event(
-                                event_sink,
-                                "tool_call_finished",
-                                iteration=iteration,
-                                tool="persist_programs_skill",
-                                tool_call_id="auto_persist",
-                            )
-                        _emit_loop_event(
-                            event_sink,
-                            "token_usage",
-                            iteration=iteration,
-                            total_tokens=0,  # extraction tokens already counted
-                        )
-
-                        # Replace extracted_programs with summary for LLM
-                        browser_result.pop("extracted_programs", None)
-                        browser_result["auto_persisted"] = {
-                            "count": n_persisted,
-                            "univ_slug": univ_slug,
-                            "year": year,
-                            "dry_run": dry_run,
-                        }
-                        result_str = json.dumps(
-                            browser_result, ensure_ascii=False, default=str
-                        )
-
-                        logger.info(
-                            "[AgentLoop] Auto-persisted %d programs for %s/%d (dry_run=%s)",
-                            n_persisted, univ_slug, year, dry_run,
-                        )
-                except Exception as exc:
-                    logger.warning("[AgentLoop] Auto-persist failed: %s", exc)
+                result_str = await _auto_persist_browser_programs(
+                    result_str, univ_slug, year, dry_run,
+                    registry, collected_programs,
+                    event_sink, iteration,
+                )
 
             # Accumulate program counts from persist_programs_skill
             if fn_name == "persist_programs_skill":
-                try:
-                    skill_result = json.loads(result_str)
-                    # In non-dry-run mode, parsed_programs is empty but
-                    # imported/updated counts reflect actual DB writes.
-                    for prog in skill_result.get("parsed_programs", []):
-                        if isinstance(prog, dict):
-                            collected_programs.append(prog)
-                    # Also count successful upserts as collected programs
-                    upserted = (
-                        skill_result.get("imported_count", 0)
-                        + skill_result.get("updated_count", 0)
-                    )
-                    if upserted > 0 and not skill_result.get("parsed_programs"):
-                        # Reconstruct minimal entries from the tool call args
-                        try:
-                            call_args = json.loads(fn_args_raw)
-                            for prog in call_args.get("programs", []):
-                                if isinstance(prog, dict):
-                                    collected_programs.append(prog)
-                        except (json.JSONDecodeError, TypeError):
-                            # Fallback: add a placeholder so guard knows we persisted
-                            collected_programs.append({"_persisted": True})
-                except (json.JSONDecodeError, TypeError):
-                    pass
+                _accumulate_persist_results(
+                    result_str, fn_args_raw, collected_programs
+                )
 
             trace.append(
                 {

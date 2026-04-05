@@ -482,6 +482,7 @@ def _auto_fetch_and_extract(
                 else:
                     logger.warning("[AutoExtract] Failed to fetch %s after %d attempts: %s", url, retries + 1, exc)
                     return None
+        return None  # unreachable, but satisfies pylint R1710
 
     # Use max 2 concurrent fetches to avoid overwhelming target servers
     pages: list[CrawlPageResult] = []
