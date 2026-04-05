@@ -612,5 +612,18 @@ def _auto_fetch_and_extract(
                     if program_data:
                         programs.append(program_data)
 
+    # Filter out noise entries (index page titles mistaken for programs)
+    from src.scrapers.helpers import is_noise_program_name
+    before_filter = len(programs)
+    programs = [
+        p for p in programs
+        if p.get("name_en") and not is_noise_program_name(p["name_en"])
+    ]
+    if len(programs) < before_filter:
+        logger.info(
+            "[AutoExtract] Filtered %d noise entries (index page titles etc.)",
+            before_filter - len(programs),
+        )
+
     logger.info("[AutoExtract] Total programs: %d/%d pages", len(programs), len(pages))
     return {"programs": programs}
