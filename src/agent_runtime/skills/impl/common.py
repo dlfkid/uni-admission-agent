@@ -390,7 +390,6 @@ def _strip_html_boilerplate(html: str) -> str:
 
 _TAXONOMY_MATCH_THRESHOLD = 0.8
 
-
 def _resolve_program_name(
     extracted_name: str,
     anchor_text: str | None,
@@ -406,7 +405,7 @@ def _resolve_program_name(
     """
     from src.scrapers.helpers import is_noise_program_name
 
-    # Source 1: anchor text — most reliable
+    # Source 1: anchor text — already filtered by LLM link filter, just check noise
     if anchor_text and not is_noise_program_name(anchor_text):
         if extracted_name and not is_noise_program_name(extracted_name) and extracted_name != anchor_text:
             logger.debug("[NameResolve] anchor='%s', extracted='%s' — using anchor", anchor_text, extracted_name)
