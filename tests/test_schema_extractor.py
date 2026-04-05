@@ -185,3 +185,48 @@ class TestSelectorExtractor:
         result = SelectorExtractor.extract(SAMPLE_HTML, schema)
         score = SelectorExtractor.compute_score(result, schema)
         assert abs(score - 2 / 3) < 0.01
+
+
+from unittest.mock import MagicMock
+from src.scrapers.schema_extractor import SchemaLearner
+
+
+class TestSchemaLearner:
+    def test_learn_produces_schema_with_validated_selectors(self):
+        html = SAMPLE_HTML  # already defined in the test file
+        extracted_data = {
+            "name_en": "Cognitive Science MSc",
+            "faculty": "School of Informatics",
+            "tuition_amount": "£12,500 per year",
+        }
+        mock_llm_response = {
+            "fields": {
+                "name_en": {"selector": "h1.page-title", "attribute": "text"},
+                "faculty": {"selector": "div.field-school a", "attribute": "text"},
+                "tuition_amount": {"selector": "div.tuition-fee", "attribute": "text", "post_process": "extract_decimal"},
+            }
+        }
+        mock_router = MagicMock()
+        mock_response = MagicMock()
+        mock_response.content = json.dumps(mock_llm_response)
+        mock_router.generate.return_value = mock_response
+
+        schema = SchemaLearner.learn(
+            html=html, extracted_data=extracted_data, router=mock_router,
+            univ_slug="edinburgh", page_pattern="postgraduate-taught",
+            source_url="https://example.com/page1",
+        )
+        assert schema is not None
+        assert schema.univ_slug == "edinburgh"
+        assert "name_en" in schema.fields
+        assert schema.baseline_score > 0
+
+    def test_learn_returns_none_on_llm_failure(self):
+        mock_router = MagicMock()
+        mock_router.generate.side_effect = Exception("LLM timeout")
+        schema = SchemaLearner.learn(
+            html="<html></html>", extracted_data={"name_en": "Test"},
+            router=mock_router, univ_slug="test", page_pattern="test",
+            source_url="https://example.com",
+        )
+        assert schema is None

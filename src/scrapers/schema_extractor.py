@@ -216,6 +216,123 @@ class SelectorExtractor:
         return [k for k, v in result.items() if v is None]
 
 
+# ---------------------------------------------------------------------------
+# SchemaLearner — LLM selector inference
+# ---------------------------------------------------------------------------
+
+_LEARNER_SYSTEM_PROMPT = """\
+You are an HTML structure analysis expert. Return ONLY valid JSON matching the schema below.
+
+{
+  "fields": {
+    "<field_name>": {
+      "selector": "<css_selector>",
+      "attribute": "text" | "href" | "<attr_name>",
+      "is_list": true | false,
+      "post_process": null | "extract_decimal" | "parse_study_option" | "parse_deadline" | "parse_requirements"
+    }
+  }
+}
+"""
+
+_LEARNER_USER_PROMPT = """\
+I have a university course page's HTML and structured data already extracted from it.
+
+For each extracted field, find where its value appears in the HTML and return a CSS selector
+that can reliably locate that value on other pages with the same template.
+
+Requirements:
+- Use class/id-based selectors. Avoid fragile positional selectors (div > div > span).
+- If a value appears in multiple places, prefer the most semantically clear location.
+- If a field's value cannot be found in the HTML, omit that field entirely.
+- For numeric fields (tuition), set post_process to "extract_decimal".
+- For study option lists, set is_list=true and post_process="parse_study_option".
+- For deadline lists, set is_list=true and post_process="parse_deadline".
+- For requirements text, set post_process="parse_requirements".
+
+Extracted data:
+{extracted_data}
+
+HTML:
+{html}
+"""
+
+
+class _LearnerOutput(BaseModel):
+    """Schema for LLM response in selector learning."""
+    fields: dict[str, FieldSpec]
+
+
+class SchemaLearner:
+    """Learns CSS selectors by asking LLM to reverse-engineer HTML structure."""
+
+    @staticmethod
+    def learn(
+        html: str,
+        extracted_data: dict[str, Any],
+        router: Any,
+        univ_slug: str,
+        page_pattern: str,
+        source_url: str,
+    ) -> SelectorSchema | None:
+        stripped = _strip_for_learner(html)
+        filtered_data = {k: v for k, v in extracted_data.items() if v}
+        if not filtered_data:
+            logger.warning("[SchemaLearner] No extracted data to learn from")
+            return None
+
+        prompt = _LEARNER_USER_PROMPT.format(
+            extracted_data=json.dumps(filtered_data, indent=2, default=str),
+            html=stripped,
+        )
+
+        try:
+            response = router.generate(
+                prompt=_LEARNER_SYSTEM_PROMPT + "\n\n" + prompt,
+                schema=_LearnerOutput,
+            )
+            if hasattr(response, "content") and isinstance(response.content, str):
+                parsed = json.loads(response.content)
+                fields = {
+                    k: FieldSpec(**v) if isinstance(v, dict) else v
+                    for k, v in parsed.get("fields", {}).items()
+                }
+            elif hasattr(response, "parsed") and response.parsed:
+                fields = response.parsed.fields
+            else:
+                logger.warning("[SchemaLearner] Unexpected LLM response format")
+                return None
+        except Exception as exc:
+            logger.warning("[SchemaLearner] LLM call failed: %s", exc)
+            return None
+
+        if not fields:
+            logger.warning("[SchemaLearner] LLM returned no selectors")
+            return None
+
+        schema = SelectorSchema(
+            univ_slug=univ_slug, page_pattern=page_pattern,
+            source_url=source_url, total_fields=len(fields), fields=fields,
+        )
+        result = SelectorExtractor.extract(html, schema)
+        score = SelectorExtractor.compute_score(result, schema)
+        schema.baseline_score = score
+
+        logger.info("[SchemaLearner] Learned %d selectors, baseline=%.2f for %s_%s",
+                    len(fields), score, univ_slug, page_pattern)
+        return schema
+
+
+def _strip_for_learner(html: str, max_chars: int = 30000) -> str:
+    html = re.sub(r"<(script|style|nav|header|footer|noscript)[^>]*>.*?</\1>", "", html, flags=re.DOTALL | re.IGNORECASE)
+    html = re.sub(r"<!--.*?-->", "", html, flags=re.DOTALL)
+    html = re.sub(r"\n{3,}", "\n\n", html)
+    if len(html) <= max_chars:
+        return html
+    half = max_chars // 2
+    return html[:half] + "\n<!-- ... truncated ... -->\n" + html[-half:]
+
+
 def _extract_element_value(el: Any, spec: FieldSpec) -> str | None:
     """Extract a value from a BeautifulSoup element based on FieldSpec."""
     if spec.attribute == "text":
