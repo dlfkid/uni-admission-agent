@@ -86,21 +86,20 @@ def _emit_loop_done(
 def _build_system_prompt() -> str:
     """Build the system prompt — minimal, direct, no distractions."""
     return """\
-You are a program crawler. You crawl ONE index page and save ALL programs found.
+You are a program crawler.
 
-STEP 1: Call browser_automation_skill(url=<given URL>, page_type_hint="index").
-The result contains `extracted_programs` — fully parsed program data from all detail pages.
+## For index pages (page_type_hint contains "index" or "auto"):
+1. Call browser_automation_skill(url=<given URL>, page_type_hint="index").
+   All detail pages are automatically fetched, parsed, and saved.
+   Check auto_persisted in the result for the count.
+2. Respond with a summary. Do NOT call any more tools.
 
-STEP 2: Call persist_programs_skill with ALL the extracted programs.
-Pass the programs array directly from extracted_programs into the persist call.
-Include univ_slug and year from the user's request.
-
-STEP 3: Respond with a summary of how many programs were saved.
-
-RULES:
-- Do NOT call browser_automation_skill again. Everything is already extracted.
-- Do NOT modify the extracted program data. Pass it through as-is.
-- Call persist_programs_skill ONCE with the full programs array.
+## For detail pages (page_type_hint is "detail"):
+1. Call browser_automation_skill(url=<given URL>, page_type_hint="detail").
+2. Extract from the HTML: name_en, source_url, faculty, study_mode, duration,
+   tuition_fees, requirements, deadline, description.
+3. Call persist_programs_skill with univ_slug, year, and the extracted program.
+4. Respond with a summary.
 """
 
 
@@ -961,6 +960,9 @@ async def agent_loop(
     _message_bus: MessageBus | None = None,
     page_type_hint: str | None = None,
     event_sink: EventSink | None = None,
+    univ_slug: str = "",
+    year: int = 0,
+    dry_run: bool = False,
 ) -> dict[str, Any]:
     """Run the LLM-driven agent loop.
 
@@ -1252,6 +1254,72 @@ async def agent_loop(
             # Track browser fetch for rate-limiting
             if fn_name == "browser_automation_skill":
                 browser_fetch_done_this_iteration = True
+
+                # AUTO-PERSIST: If the skill extracted programs, persist them
+                # directly in code — never ask the LLM to relay the data.
+                try:
+                    browser_result = json.loads(result_str)
+                    extracted = browser_result.get("extracted_programs") or []
+                    if extracted and univ_slug and year:
+                        persist_payload = json.dumps({
+                            "univ_slug": univ_slug,
+                            "year": year,
+                            "programs": extracted,
+                            "dry_run": dry_run,
+                        }, ensure_ascii=False, default=str)
+                        persist_result_str = await _handle_skill_call(
+                            "persist_programs_skill", persist_payload, registry
+                        )
+                        persist_result = json.loads(persist_result_str)
+
+                        # Accumulate into collected_programs
+                        for prog in persist_result.get("parsed_programs", []):
+                            if isinstance(prog, dict):
+                                collected_programs.append(prog)
+                        n_upserted = (
+                            persist_result.get("imported_count", 0)
+                            + persist_result.get("updated_count", 0)
+                        )
+                        if n_upserted > 0 and not persist_result.get("parsed_programs"):
+                            for prog in extracted:
+                                if isinstance(prog, dict):
+                                    collected_programs.append(prog)
+
+                        # Emit events for extension counters
+                        n_persisted = len(collected_programs)
+                        for _ in range(n_persisted):
+                            _emit_loop_event(
+                                event_sink,
+                                "tool_call_finished",
+                                iteration=iteration,
+                                tool="persist_programs_skill",
+                                tool_call_id="auto_persist",
+                            )
+                        _emit_loop_event(
+                            event_sink,
+                            "token_usage",
+                            iteration=iteration,
+                            total_tokens=0,  # extraction tokens already counted
+                        )
+
+                        # Replace extracted_programs with summary for LLM
+                        browser_result.pop("extracted_programs", None)
+                        browser_result["auto_persisted"] = {
+                            "count": n_persisted,
+                            "univ_slug": univ_slug,
+                            "year": year,
+                            "dry_run": dry_run,
+                        }
+                        result_str = json.dumps(
+                            browser_result, ensure_ascii=False, default=str
+                        )
+
+                        logger.info(
+                            "[AgentLoop] Auto-persisted %d programs for %s/%d (dry_run=%s)",
+                            n_persisted, univ_slug, year, dry_run,
+                        )
+                except Exception as exc:
+                    logger.warning("[AgentLoop] Auto-persist failed: %s", exc)
 
             # Accumulate program counts from persist_programs_skill
             if fn_name == "persist_programs_skill":

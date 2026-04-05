@@ -294,37 +294,47 @@ def _auto_fetch_and_extract(
 
     logger.info("[AutoExtract] Fetched %d/%d detail pages", len(pages), len(urls))
 
-    # Step 2: Extract structured data using existing LLM pipeline
+    # Step 2: Extract structured data in parallel using LLM pipeline
     from src.agents.factory import create_router
-    router = create_router()
-    cleaner = LLMCleanerAgent(router=router)
-    programs: list[dict] = []
 
-    for page in pages:
+    def _extract_one(page: CrawlPageResult) -> dict | None:
+        """Extract program data from one page (runs in thread)."""
+        # Each thread gets its own router/cleaner to avoid contention
+        router = create_router()
+        cleaner = LLMCleanerAgent(router=router)
         anchor_text = link_texts.get(page.url)
         try:
             program_data, error = extract_program_data_from_page(
                 page=page,
                 cleaner=cleaner,
-                univ_slug="",  # placeholder — agent provides real slug via persist
-                year=0,        # placeholder — agent provides real year via persist
+                univ_slug="",  # placeholder — auto-persist provides real slug
+                year=0,        # placeholder — auto-persist provides real year
                 current_depth=0,
                 from_browser=True,
                 selected_anchor_text=anchor_text,
             )
             if program_data:
-                # Clean up placeholder fields; keep only extracted content
                 program_data.pop("academic_year", None)
                 program_data["source_url"] = page.url
-                programs.append(program_data)
                 logger.info(
                     "[AutoExtract] Extracted: %s (%d fields)",
                     program_data.get("name_en", "?"),
                     len([v for v in program_data.values() if v]),
                 )
+                return program_data
             else:
                 logger.warning("[AutoExtract] No data from %s: %s", page.url, error)
+                return None
         except Exception as exc:
             logger.warning("[AutoExtract] Failed %s: %s", page.url, exc)
+            return None
+
+    programs: list[dict] = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=3) as pool:
+        futures = {pool.submit(_extract_one, page): page for page in pages}
+        for future in concurrent.futures.as_completed(futures):
+            result = future.result()
+            if result:
+                programs.append(result)
 
     return {"programs": programs}
