@@ -336,6 +336,35 @@ def _strip_boilerplate(md: str) -> str:
     return result
 
 
+def _strip_html_boilerplate(html: str) -> str:
+    """Remove nav/header/footer HTML elements to reduce page size for LLM.
+
+    Targets <nav>, <header>, <footer> tags and common id/class patterns.
+    This is critical for sites like UCL where markdown conversion fails
+    and the raw HTML (60K+) gets split into 4 LLM chunks.
+    """
+    import re
+
+    if not html:
+        return html
+
+    # Remove <nav>, <header>, <footer> blocks entirely
+    html = re.sub(
+        r"<(?:nav|header|footer)[\s>].*?</(?:nav|header|footer)>",
+        "", html, flags=re.DOTALL | re.IGNORECASE,
+    )
+    # Remove elements with navigation-related class/id
+    html = re.sub(
+        r'<(?:div|section|aside|ul)[^>]*(?:class|id)\s*=\s*"[^"]*'
+        r'(?:nav|breadcrumb|sidebar|footer|cookie|skip-link)[^"]*"[^>]*>.*?'
+        r'</(?:div|section|aside|ul)>',
+        "", html, flags=re.DOTALL | re.IGNORECASE,
+    )
+    # Collapse whitespace
+    html = re.sub(r"\n{3,}", "\n\n", html)
+    return html
+
+
 def _auto_fetch_and_extract(
     urls: list[str],
     link_texts: dict[str, str],
@@ -396,9 +425,10 @@ def _auto_fetch_and_extract(
         # Strip navigation/footer boilerplate to reduce page size and
         # avoid chunking (single-chunk pages parse 2x faster).
         trimmed_md = _strip_boilerplate(page.markdown)
+        trimmed_html = _strip_html_boilerplate(page.html) if page.html else page.html
         trimmed_page = CrawlPageResult(
             url=page.url,
-            html=page.html,
+            html=trimmed_html,
             markdown=trimmed_md,
             char_count=len(trimmed_md),
             links=page.links,
