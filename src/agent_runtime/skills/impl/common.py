@@ -228,7 +228,9 @@ def browser_automation_skill_handler(
             )
             selected = selected[:MAX_AUTO_EXTRACT]
         link_texts = result.get("selected_link_texts") or {}
-        extracted = _auto_fetch_and_extract(selected, link_texts, bridge)
+        extracted = _auto_fetch_and_extract(
+            selected, link_texts, bridge, index_url=payload.url,
+        )
         result["extracted_programs"] = extracted["programs"]
         result["html_content"] = (
             f"[Index page: {len(selected)} detail URLs found. "
@@ -378,20 +380,29 @@ def _auto_fetch_and_extract(
     link_texts: dict[str, str],
     bridge: ClientAutomationBridge,
     max_workers: int = 5,
+    univ_slug: str = "",
+    index_url: str = "",
 ) -> dict:
-    """Fetch detail pages in parallel and extract structured data via LLM.
+    """Fetch detail pages in parallel, then extract using schema or LLM.
 
-    Uses the existing LLMCleanerAgent pipeline for high-quality extraction
-    (tuition, requirements, deadlines, study options, etc.).
-    Returns extracted program dicts ready for persist_programs_skill.
+    Schema-based extraction flow:
+    1. Check for existing schema on disk
+    2. If valid → CSS selector extraction for all pages (fast)
+    3. If no schema → LLM extract page 1, learn schema, then CSS for rest
+    4. Fallback to LLM for missing fields (≤3: field-level, >3: full-page)
     """
     import concurrent.futures
-    from src.agents.factory import RouterAgent
+    from typing import Any
+    from src.agents.factory import create_router
     from src.agents.cleaner_agent import LLMCleanerAgent
     from src.models.scraper_models import CrawlPageResult
     from src.scrapers.page_processor import extract_program_data_from_page
+    from src.scrapers.schema_extractor import (
+        SchemaManager, SchemaLearner, SelectorExtractor,
+        FallbackHandler, derive_page_pattern,
+    )
 
-    # Step 1: Parallel fetch all detail pages
+    # Step 1: Parallel fetch all detail pages (unchanged)
     def _fetch_one(url: str) -> CrawlPageResult | None:
         try:
             output = bridge.fetch_browser_payload(
@@ -400,11 +411,8 @@ def _auto_fetch_and_extract(
             raw_html = output.html_content or ""
             md = _html_to_markdown(raw_html, url) if raw_html else ""
             return CrawlPageResult(
-                url=url,
-                html=raw_html,
-                markdown=md,
-                char_count=len(md),
-                links=[],
+                url=url, html=raw_html, markdown=md,
+                char_count=len(md), links=[],
             )
         except Exception as exc:
             logger.warning("[AutoExtract] Failed to fetch %s: %s", url, exc)
@@ -415,65 +423,189 @@ def _auto_fetch_and_extract(
         futures = {pool.submit(_fetch_one, url): url for url in urls}
         for future in concurrent.futures.as_completed(futures):
             page = future.result()
-            if page and page.markdown:
+            if page and (page.html or page.markdown):
                 pages.append(page)
 
     logger.info("[AutoExtract] Fetched %d/%d detail pages", len(pages), len(urls))
+    if not pages:
+        return {"programs": []}
 
-    # Step 2: Extract structured data in parallel using LLM pipeline
-    from src.agents.factory import create_router
+    # Step 2: Schema-aware extraction
+    page_pattern = derive_page_pattern(index_url) if index_url else "default"
+    mgr = SchemaManager()
+    schema = mgr.load(univ_slug, page_pattern) if univ_slug else None
 
-    def _extract_one(page: CrawlPageResult) -> dict | None:
-        """Extract program data from one page (runs in thread)."""
-        # Each thread gets its own router/cleaner to avoid contention
+    # Score tracking for deprecation
+    sum_scores = 0.0
+    page_count = 0
+
+    def _extract_with_llm(page: CrawlPageResult) -> tuple[dict | None, dict[str, Any]]:
+        """Full LLM extraction — returns (program_data, raw_extracted_fields)."""
         router = create_router()
         cleaner = LLMCleanerAgent(router=router)
         anchor_text = link_texts.get(page.url)
-
-        # Strip navigation/footer boilerplate to reduce page size and
-        # avoid chunking (single-chunk pages parse 2x faster).
-        trimmed_md = _strip_boilerplate(page.markdown)
-        trimmed_html = _strip_html_boilerplate(page.html) if page.html else page.html
+        trimmed_md = _strip_boilerplate(page.markdown) if page.markdown else ""
+        trimmed_html = _strip_html_boilerplate(page.html) if page.html else ""
         trimmed_page = CrawlPageResult(
-            url=page.url,
-            html=trimmed_html,
-            markdown=trimmed_md,
-            char_count=len(trimmed_md),
-            links=page.links,
+            url=page.url, html=trimmed_html, markdown=trimmed_md,
+            char_count=len(trimmed_md), links=page.links,
         )
-
         try:
             program_data, error = extract_program_data_from_page(
-                page=trimmed_page,
-                cleaner=cleaner,
-                univ_slug="",  # placeholder — auto-persist provides real slug
-                year=0,        # placeholder — auto-persist provides real year
-                current_depth=0,
-                from_browser=True,
+                page=trimmed_page, cleaner=cleaner,
+                univ_slug=univ_slug or "", year=0,
+                current_depth=0, from_browser=True,
                 selected_anchor_text=anchor_text,
             )
             if program_data:
                 program_data.pop("academic_year", None)
                 program_data["source_url"] = page.url
                 logger.info(
-                    "[AutoExtract] Extracted: %s (%d fields)",
+                    "[AutoExtract] LLM extracted: %s (%d fields)",
                     program_data.get("name_en", "?"),
                     len([v for v in program_data.values() if v]),
                 )
-                return program_data
+                return program_data, program_data
             else:
-                logger.warning("[AutoExtract] No data from %s: %s", page.url, error)
-                return None
+                logger.warning("[AutoExtract] LLM no data from %s: %s", page.url, error)
+                return None, {}
         except Exception as exc:
-            logger.warning("[AutoExtract] Failed %s: %s", page.url, exc)
-            return None
+            logger.warning("[AutoExtract] LLM failed %s: %s", page.url, exc)
+            return None, {}
+
+    def _extract_with_schema(page: CrawlPageResult, schema) -> dict | None:
+        """Schema-based extraction with fallback."""
+        nonlocal sum_scores, page_count
+
+        result = SelectorExtractor.extract(page.html, schema)
+        score = SelectorExtractor.compute_score(result, schema)
+        sum_scores += score
+        page_count += 1
+
+        decision = FallbackHandler.decide(result, total_fields=schema.total_fields)
+
+        if decision == "field":
+            missing = SelectorExtractor.missing_fields(result)
+            router = create_router()
+            supplement = FallbackHandler.field_fallback(page.html, missing, router)
+            filled = 0
+            for field_name in missing:
+                if field_name in supplement and supplement[field_name] is not None:
+                    result[field_name] = supplement[field_name]
+                    filled += 1
+            logger.info(
+                "[AutoExtract] Schema + field fallback for %s (score=%.2f, filled %d/%d)",
+                page.url, score, filled, len(missing),
+            )
+        elif decision == "full":
+            logger.info("[AutoExtract] Schema score too low (%.2f), full LLM for %s", score, page.url)
+            program_data, _ = _extract_with_llm(page)
+            return program_data
+        else:
+            logger.info("[AutoExtract] Schema hit all fields for %s (score=%.2f)", page.url, score)
+
+        # Build program_data dict from selector results
+        anchor_text = link_texts.get(page.url)
+        program_data: dict[str, Any] = {"source_url": page.url}
+        if result.get("name_en"):
+            program_data["name_en"] = result["name_en"]
+        else:
+            from src.scrapers.helpers import extract_program_name
+            name = extract_program_name(page.markdown) if page.markdown else ""
+            if not name and anchor_text:
+                name = anchor_text
+            program_data["name_en"] = name or ""
+
+        for key in ("faculty", "tuition_amount", "currency", "study_options", "deadlines", "requirements"):
+            if result.get(key) is not None:
+                program_data[key] = result[key]
+
+        program_data["extra_metadata"] = {
+            "source_url": page.url, "from_browser": True, "schema_score": score,
+        }
+        return program_data if program_data.get("name_en") else None
 
     programs: list[dict] = []
-    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as pool:
-        futures = {pool.submit(_extract_one, page): page for page in pages}
-        for future in concurrent.futures.as_completed(futures):
-            result = future.result()
-            if result:
-                programs.append(result)
 
+    # --- Page 1: Learn or validate schema ---
+    first_page = pages[0]
+    remaining_pages = pages[1:]
+
+    if schema:
+        # Validate existing schema on first page
+        result = SelectorExtractor.extract(first_page.html, schema)
+        score = SelectorExtractor.compute_score(result, schema)
+        threshold = schema.baseline_score * 0.8
+        if score < threshold:
+            logger.info(
+                "[AutoExtract] Schema validation failed (%.2f < %.2f), rebuilding",
+                score, threshold,
+            )
+            mgr.deprecate(univ_slug, page_pattern)
+            schema = None
+        else:
+            logger.info("[AutoExtract] Schema validated (%.2f >= %.2f)", score, threshold)
+
+    if not schema:
+        # Learn from first page via LLM
+        program_data, extracted_fields = _extract_with_llm(first_page)
+        if program_data:
+            programs.append(program_data)
+            # Try to learn schema for remaining pages
+            if univ_slug and extracted_fields and first_page.html:
+                try:
+                    router = create_router()
+                    schema = SchemaLearner.learn(
+                        html=first_page.html,
+                        extracted_data=extracted_fields,
+                        router=router,
+                        univ_slug=univ_slug,
+                        page_pattern=page_pattern,
+                        source_url=first_page.url,
+                    )
+                    if schema:
+                        mgr.save(schema)
+                except Exception as exc:
+                    logger.warning("[AutoExtract] Schema learning failed: %s", exc)
+                    schema = None
+    else:
+        # Schema validated — use it for first page
+        program_data = _extract_with_schema(first_page, schema)
+        if program_data:
+            programs.append(program_data)
+
+    # --- Pages 2-N ---
+    if remaining_pages:
+        if schema:
+            # Parallel schema extraction
+            with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as pool:
+                futures = {
+                    pool.submit(_extract_with_schema, page, schema): page
+                    for page in remaining_pages
+                }
+                for future in concurrent.futures.as_completed(futures):
+                    result = future.result()
+                    if result:
+                        programs.append(result)
+
+            # Check for schema deprecation
+            if page_count >= 3 and (sum_scores / page_count) < schema.baseline_score * 0.8:
+                logger.warning(
+                    "[AutoExtract] Schema degraded (avg=%.2f < baseline=%.2f×0.8), deprecating",
+                    sum_scores / page_count, schema.baseline_score,
+                )
+                mgr.deprecate(univ_slug, page_pattern)
+        else:
+            # No schema — fall back to full LLM for all remaining
+            with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as pool:
+                futures = {
+                    pool.submit(_extract_with_llm, page): page
+                    for page in remaining_pages
+                }
+                for future in concurrent.futures.as_completed(futures):
+                    program_data, _ = future.result()
+                    if program_data:
+                        programs.append(program_data)
+
+    logger.info("[AutoExtract] Total programs: %d/%d pages", len(programs), len(pages))
     return {"programs": programs}
