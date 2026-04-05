@@ -983,6 +983,10 @@ async def agent_loop(
     Returns:
         ``{"response": str, "trace": list, "iterations": int, "todos": list}``
     """
+    # Set task context for skill handlers (univ_slug, year)
+    from src.agent_runtime.skills.impl.common import set_task_context
+    set_task_context(univ_slug=univ_slug, year=year)
+
     client, model = resolve_openai_client()
     tools = build_openai_tools(
         registry,

@@ -165,6 +165,7 @@ def extract_program_data_from_page(
             markdown=content_for_llm,
             source_url=page.url,
             name_hints=name_hints,
+            academic_year=year,
         )
         
         if content_type == "html":

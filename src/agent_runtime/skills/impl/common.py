@@ -13,6 +13,23 @@ import time
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
+# Task context — set by agent loop, read by skill handlers
+# ---------------------------------------------------------------------------
+_task_context: dict[str, str | int] = {}
+
+
+def set_task_context(*, univ_slug: str = "", year: int = 0) -> None:
+    """Set task-level context for skill handlers (called by agent loop)."""
+    _task_context["univ_slug"] = univ_slug
+    _task_context["year"] = year
+
+
+def get_task_context() -> dict[str, str | int]:
+    """Read current task context."""
+    return dict(_task_context)
+
+
+# ---------------------------------------------------------------------------
 # LLM link-filter cache
 # Keyed by (url, page_type_hint).  Entries expire after TTL seconds so that
 # stale index pages are eventually re-analysed without penalising the common
@@ -220,8 +237,12 @@ def browser_automation_skill_handler(
     selected = result.get("selected_urls") or []
     if selected:
         link_texts = result.get("selected_link_texts") or {}
+        ctx = get_task_context()
         extracted = _auto_fetch_and_extract(
-            selected, link_texts, bridge, index_url=payload.url,
+            selected, link_texts, bridge,
+            index_url=payload.url,
+            univ_slug=str(ctx.get("univ_slug", "")),
+            year=int(ctx.get("year", 0)),
         )
         result["extracted_programs"] = extracted["programs"]
         result["html_content"] = (
@@ -374,6 +395,7 @@ def _auto_fetch_and_extract(
     max_workers: int = 5,
     univ_slug: str = "",
     index_url: str = "",
+    year: int = 0,
 ) -> dict:
     """Fetch detail pages in parallel, then extract using schema or LLM.
 
@@ -453,7 +475,7 @@ def _auto_fetch_and_extract(
         try:
             program_data, error = extract_program_data_from_page(
                 page=trimmed_page, cleaner=cleaner,
-                univ_slug=univ_slug or "", year=0,
+                univ_slug=univ_slug or "", year=year or 0,
                 current_depth=0, from_browser=True,
                 selected_anchor_text=anchor_text,
             )
