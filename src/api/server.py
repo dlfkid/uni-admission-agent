@@ -275,6 +275,8 @@ def _update_env_file_structured(config: StructuredConfig) -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Lifespan context manager for database initialization."""
+    global _main_loop
+    _main_loop = asyncio.get_running_loop()
     try:
         _register_agent_mcp_tools_if_enabled()
         DatabaseManager().init_db()
@@ -306,8 +308,7 @@ app.add_middleware(
 task_manager = TaskManager()
 client_registry = ClientRegistry()
 client_sockets: Dict[str, WebSocket] = {}
-_client_ws_locks: Dict[str, threading.Lock] = {}  # per-client lock for WebSocket sends
-_client_ws_locks_guard = threading.Lock()  # protects _client_ws_locks dict creation
+_main_loop: Optional[asyncio.AbstractEventLoop] = None  # set on startup
 client_rpc_broker = ClientRpcBroker(timeout_seconds=120.0)
 
 
@@ -317,6 +318,24 @@ def _has_available_client(preferred_client_id: Optional[str]) -> bool:
 
 def _select_available_client_id(preferred_client_id: Optional[str]) -> Optional[str]:
     return client_registry.select_client_id(preferred_client_id)
+
+
+async def _rpc_send_and_wait(
+    websocket: WebSocket,
+    request_id: str,
+    url: str,
+    page_type_hint: str,
+) -> Dict[str, Any]:
+    """Send RPC request and wait for response. Must run on the main event loop."""
+    await websocket.send_json(
+        {
+            "type": "rpc_request",
+            "request_id": request_id,
+            "action": "fetch_browser_payload",
+            "payload": {"url": url, "page_type_hint": page_type_hint},
+        }
+    )
+    return dict(await client_rpc_broker.wait_for_response(request_id) or {})
 
 
 async def _fetch_browser_payload_from_client(
@@ -333,40 +352,36 @@ async def _fetch_browser_payload_from_client(
     if websocket is None:
         raise RuntimeError(f"Client websocket unavailable: {target_client_id}")
 
-    # Per-client lock to serialize WebSocket sends (prevents frame interleaving).
-    # Uses threading.Lock because callers may run in different threads via run_sync().
-    with _client_ws_locks_guard:
-        if target_client_id not in _client_ws_locks:
-            _client_ws_locks[target_client_id] = threading.Lock()
-        ws_lock = _client_ws_locks[target_client_id]
-
     request_id, _future = client_rpc_broker.create_pending(target_client_id)
     logger.info(
         "[RPC] Dispatching fetch_browser_payload to client=%s request_id=%s url=%s",
-        target_client_id,
-        request_id,
-        url,
+        target_client_id, request_id, url,
     )
-    with ws_lock:
-        await websocket.send_json(
-            {
-                "type": "rpc_request",
-                "request_id": request_id,
-                "action": "fetch_browser_payload",
-                "payload": {
-                    "url": url,
-                    "page_type_hint": page_type_hint,
-                },
-            }
+
+    # When called from a worker thread (via run_sync/asyncio.run), the WebSocket
+    # belongs to the main FastAPI event loop, not this thread's loop.
+    # Schedule the send+wait on the main loop and block until done.
+    try:
+        current_loop = asyncio.get_running_loop()
+    except RuntimeError:
+        current_loop = None
+
+    if _main_loop is not None and current_loop is not _main_loop:
+        # Cross-thread call: schedule on main loop
+        future = asyncio.run_coroutine_threadsafe(
+            _rpc_send_and_wait(websocket, request_id, url, page_type_hint),
+            _main_loop,
         )
-    payload = await client_rpc_broker.wait_for_response(request_id)
+        payload = future.result(timeout=120)
+    else:
+        # Already on main loop (normal async call)
+        payload = await _rpc_send_and_wait(websocket, request_id, url, page_type_hint)
+
     logger.info(
         "[RPC] Client %s responded to request_id=%s (payload keys: %s)",
-        target_client_id,
-        request_id,
-        list((payload or {}).keys()),
+        target_client_id, request_id, list(payload.keys()),
     )
-    return dict(payload or {})
+    return payload
 
 
 browser_provider_service.configure_client_dispatchers(
