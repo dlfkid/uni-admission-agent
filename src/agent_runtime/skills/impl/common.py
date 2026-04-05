@@ -219,14 +219,6 @@ def browser_automation_skill_handler(
     # The agent only needs to call persist_programs_skill once with the results.
     selected = result.get("selected_urls") or []
     if selected:
-        # Cap detail pages to avoid timeout on large indexes.
-        MAX_AUTO_EXTRACT = 10
-        if len(selected) > MAX_AUTO_EXTRACT:
-            logger.info(
-                "[BrowserSkill] Capping detail pages from %d to %d",
-                len(selected), MAX_AUTO_EXTRACT,
-            )
-            selected = selected[:MAX_AUTO_EXTRACT]
         link_texts = result.get("selected_link_texts") or {}
         extracted = _auto_fetch_and_extract(
             selected, link_texts, bridge, index_url=payload.url,
@@ -435,7 +427,8 @@ def _auto_fetch_and_extract(
     mgr = SchemaManager()
     schema = mgr.load(univ_slug, page_pattern) if univ_slug else None
 
-    # Score tracking for deprecation
+    # Score tracking for deprecation (thread-safe)
+    _score_lock = threading.Lock()
     sum_scores = 0.0
     page_count = 0
 
@@ -479,8 +472,9 @@ def _auto_fetch_and_extract(
 
         result = SelectorExtractor.extract(page.html, schema)
         score = SelectorExtractor.compute_score(result, schema)
-        sum_scores += score
-        page_count += 1
+        with _score_lock:
+            sum_scores += score
+            page_count += 1
 
         decision = FallbackHandler.decide(result, total_fields=schema.total_fields)
 
@@ -589,10 +583,13 @@ def _auto_fetch_and_extract(
                         programs.append(result)
 
             # Check for schema deprecation
-            if page_count >= 3 and (sum_scores / page_count) < schema.baseline_score * 0.8:
+            with _score_lock:
+                avg_score = sum_scores / page_count if page_count else 0
+                pc = page_count
+            if pc >= 3 and avg_score < schema.baseline_score * 0.8:
                 logger.warning(
                     "[AutoExtract] Schema degraded (avg=%.2f < baseline=%.2f×0.8), deprecating",
-                    sum_scores / page_count, schema.baseline_score,
+                    avg_score, schema.baseline_score,
                 )
                 mgr.deprecate(univ_slug, page_pattern)
         else:
