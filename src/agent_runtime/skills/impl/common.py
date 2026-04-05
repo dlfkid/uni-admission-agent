@@ -295,7 +295,8 @@ def _auto_fetch_and_extract(
     logger.info("[AutoExtract] Fetched %d/%d detail pages", len(pages), len(urls))
 
     # Step 2: Extract structured data using existing LLM pipeline
-    router = RouterAgent()
+    from src.agents.factory import create_router
+    router = create_router()
     cleaner = LLMCleanerAgent(router=router)
     programs: list[dict] = []
 
