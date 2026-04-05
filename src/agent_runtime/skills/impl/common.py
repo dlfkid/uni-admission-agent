@@ -417,9 +417,8 @@ def _auto_fetch_and_extract(
                     return None
 
     # Use max 2 concurrent fetches to avoid overwhelming target servers
-    fetch_workers = min(max_workers, 2)
     pages: list[CrawlPageResult] = []
-    with concurrent.futures.ThreadPoolExecutor(max_workers=fetch_workers) as pool:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as pool:
         futures = {pool.submit(_fetch_one, url): url for url in urls}
         for future in concurrent.futures.as_completed(futures):
             page = future.result()
