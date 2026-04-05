@@ -341,3 +341,67 @@ def _extract_element_value(el: Any, spec: FieldSpec) -> str | None:
     else:
         val = el.get(spec.attribute)
         return str(val) if val else None
+
+
+# ---------------------------------------------------------------------------
+# FallbackHandler
+# ---------------------------------------------------------------------------
+
+_FIELD_FALLBACK_SYSTEM = """\
+You are a data extraction assistant. Return ONLY valid JSON matching the requested fields.
+If a field is not found on the page, use null."""
+
+_FIELD_FALLBACK_USER = """\
+Extract ONLY the following fields from this university programme page HTML.
+Return JSON with only these keys.
+
+Fields to extract: {field_names}
+
+Field definitions:
+- name_en: The full English name of the programme
+- faculty: The school, faculty, or department offering the programme
+- tuition_amount: Annual tuition fee as a number
+- study_options: List of study modes with duration
+- deadlines: Application deadline dates
+- requirements: Entry requirements text
+
+HTML:
+{html}
+"""
+
+
+class _FieldFallbackOutput(BaseModel):
+    model_config = {"extra": "allow"}
+
+
+class FallbackHandler:
+    FIELD_THRESHOLD = 3
+
+    @staticmethod
+    def decide(result: dict[str, Any], total_fields: int) -> str:
+        missing = sum(1 for v in result.values() if v is None)
+        if missing == 0:
+            return "none"
+        if missing <= FallbackHandler.FIELD_THRESHOLD:
+            return "field"
+        return "full"
+
+    @staticmethod
+    def field_fallback(html: str, missing_field_names: list[str], router: Any) -> dict[str, Any]:
+        stripped = _strip_for_learner(html)
+        prompt = _FIELD_FALLBACK_USER.format(
+            field_names=", ".join(missing_field_names), html=stripped,
+        )
+        try:
+            response = router.generate(
+                prompt=_FIELD_FALLBACK_SYSTEM + "\n\n" + prompt,
+                schema=_FieldFallbackOutput,
+            )
+            if hasattr(response, "content") and isinstance(response.content, str):
+                return json.loads(response.content)
+            elif hasattr(response, "parsed") and response.parsed:
+                return response.parsed.model_dump()
+            return {}
+        except Exception as exc:
+            logger.warning("[FallbackHandler] Field fallback failed: %s", exc)
+            return {}

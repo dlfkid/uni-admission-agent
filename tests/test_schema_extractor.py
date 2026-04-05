@@ -230,3 +230,28 @@ class TestSchemaLearner:
             source_url="https://example.com",
         )
         assert schema is None
+
+
+from src.scrapers.schema_extractor import FallbackHandler
+
+
+class TestFallbackHandler:
+    def test_no_fallback_when_all_fields_present(self):
+        result = {"name_en": "Test", "faculty": "Engineering", "tuition_amount": Decimal("10000")}
+        assert FallbackHandler.decide(result, total_fields=3) == "none"
+
+    def test_field_level_fallback_when_few_missing(self):
+        result = {"name_en": "Test", "faculty": None, "tuition_amount": None}
+        assert FallbackHandler.decide(result, total_fields=3) == "field"
+
+    def test_full_page_fallback_when_many_missing(self):
+        result = {"name_en": None, "faculty": None, "tuition_amount": None, "deadlines": None}
+        assert FallbackHandler.decide(result, total_fields=4) == "full"
+
+    def test_exactly_3_missing_is_field_level(self):
+        result = {"a": "ok", "b": None, "c": None, "d": None, "e": "ok", "f": "ok"}
+        assert FallbackHandler.decide(result, total_fields=6) == "field"
+
+    def test_four_missing_triggers_full(self):
+        result = {"a": "ok", "b": None, "c": None, "d": None, "e": None, "f": "ok"}
+        assert FallbackHandler.decide(result, total_fields=6) == "full"
