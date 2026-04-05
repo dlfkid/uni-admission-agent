@@ -1,7 +1,70 @@
+from types import SimpleNamespace
+
 import pytest
 
 from src.agent_runtime.base import AgentRequest
+from src.agent_runtime.loop import agent_loop
 from src.agent_runtime.pydanticai_runtime import PydanticAIRuntime
+from src.agent_runtime.skills.registry import SkillRegistry
+
+
+class _AsyncChunkIter:
+    """Wraps a list of chunks into an async iterator for fake streaming."""
+
+    def __init__(self, chunks):
+        self._chunks = chunks
+        self._idx = 0
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        if self._idx >= len(self._chunks):
+            raise StopAsyncIteration
+        chunk = self._chunks[self._idx]
+        self._idx += 1
+        return chunk
+
+
+def _make_stream_chunks(*, content=None, tool_calls=None, finish_reason="stop"):
+    """Build a list of streaming chunks that _streaming_llm_call can consume."""
+    chunks = []
+    if content:
+        chunks.append(SimpleNamespace(
+            choices=[SimpleNamespace(
+                delta=SimpleNamespace(content=content, tool_calls=None),
+                finish_reason=None,
+            )],
+            usage=None,
+        ))
+    if tool_calls:
+        for idx, tc in enumerate(tool_calls):
+            chunks.append(SimpleNamespace(
+                choices=[SimpleNamespace(
+                    delta=SimpleNamespace(
+                        content=None,
+                        tool_calls=[SimpleNamespace(
+                            index=idx,
+                            id=tc.id,
+                            function=SimpleNamespace(
+                                name=tc.function.name,
+                                arguments=tc.function.arguments,
+                            ),
+                        )],
+                    ),
+                    finish_reason=None,
+                )],
+                usage=None,
+            ))
+    # Final chunk with finish_reason
+    chunks.append(SimpleNamespace(
+        choices=[SimpleNamespace(
+            delta=SimpleNamespace(content=None, tool_calls=None),
+            finish_reason=finish_reason,
+        )],
+        usage=None,
+    ))
+    return chunks
 
 
 @pytest.mark.asyncio
@@ -73,3 +136,88 @@ async def test_runtime_builds_correct_user_message(monkeypatch):
     assert "ucl" in msg
     assert "2026" in msg
     assert "auto" in msg
+
+
+@pytest.mark.asyncio
+async def test_agent_loop_emits_tool_call_started_and_finished(monkeypatch, tmp_path):
+    emitted: list[dict[str, object]] = []
+    monkeypatch.chdir(tmp_path)
+
+    todo_tc = SimpleNamespace(
+        id="call-1",
+        function=SimpleNamespace(
+            name="todo",
+            arguments='{"items":[{"content":"inspect page","status":"completed"}]}',
+        ),
+    )
+
+    streams = [
+        _AsyncChunkIter(_make_stream_chunks(tool_calls=[todo_tc], finish_reason="tool_calls")),
+        _AsyncChunkIter(_make_stream_chunks(content="done", finish_reason="stop")),
+    ]
+
+    class FakeCompletions:
+        async def create(self, **_kwargs):
+            return streams.pop(0)
+
+    fake_client = SimpleNamespace(
+        chat=SimpleNamespace(completions=FakeCompletions())
+    )
+
+    monkeypatch.setattr(
+        "src.agent_runtime.loop.resolve_openai_client",
+        lambda: (fake_client, "fake-model"),
+    )
+
+    result = await agent_loop(
+        user_message="crawl this page",
+        registry=SkillRegistry([]),
+        max_iterations=2,
+        event_sink=emitted.append,
+    )
+
+    event_types = [event["type"] for event in emitted]
+    assert "tool_call_started" in event_types
+    assert "tool_call_finished" in event_types
+    assert result["response"] == "done"
+
+
+@pytest.mark.asyncio
+async def test_agent_loop_emits_agent_done_when_max_iterations_hit(monkeypatch, tmp_path):
+    emitted: list[dict[str, object]] = []
+    monkeypatch.chdir(tmp_path)
+
+    todo_tc = SimpleNamespace(
+        id="call-1",
+        function=SimpleNamespace(
+            name="todo",
+            arguments='{"items":[{"content":"inspect page","status":"completed"}]}',
+        ),
+    )
+
+    streams = [
+        _AsyncChunkIter(_make_stream_chunks(tool_calls=[todo_tc], finish_reason="tool_calls")),
+    ]
+
+    class FakeCompletions:
+        async def create(self, **_kwargs):
+            return streams.pop(0)
+
+    fake_client = SimpleNamespace(
+        chat=SimpleNamespace(completions=FakeCompletions())
+    )
+
+    monkeypatch.setattr(
+        "src.agent_runtime.loop.resolve_openai_client",
+        lambda: (fake_client, "fake-model"),
+    )
+
+    await agent_loop(
+        user_message="crawl this page",
+        registry=SkillRegistry([]),
+        max_iterations=1,
+        event_sink=emitted.append,
+    )
+
+    event_types = [event["type"] for event in emitted]
+    assert "agent_done" in event_types

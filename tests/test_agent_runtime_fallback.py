@@ -44,3 +44,35 @@ async def test_page_timeout_is_not_caught_by_fallback(monkeypatch):
 
     with pytest.raises(AgentPageTimeout):
         await runtime.run(AgentRequest(task="crawl", payload={"url": "https://x"}))
+
+
+@pytest.mark.asyncio
+async def test_pydanticai_runtime_emits_lifecycle_events(monkeypatch):
+    emitted: list[dict[str, object]] = []
+
+    async def fake_loop(**kwargs):
+        event_sink = kwargs.get("event_sink")
+        if event_sink is not None:
+            event_sink({"type": "llm_call_started", "iteration": 1})
+        return {
+            "response": "done",
+            "trace": [],
+            "iterations": 1,
+            "collected_programs": [],
+        }
+
+    monkeypatch.setattr("src.agent_runtime.pydanticai_runtime.agent_loop", fake_loop)
+    runtime = PydanticAIRuntime()
+
+    await runtime.run(
+        AgentRequest(
+            task="crawl",
+            payload={"url": "https://example.com", "univ_slug": "x", "year": 2026},
+            context={"event_sink": emitted.append},
+        )
+    )
+
+    assert [event["type"] for event in emitted][:2] == [
+        "agent_started",
+        "llm_call_started",
+    ]

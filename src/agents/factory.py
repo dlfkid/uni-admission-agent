@@ -90,6 +90,19 @@ class RouterAgent:
             f"All providers failed: {'; '.join(errors)}"
         )
 
+    async def generate_text(self, prompt: str) -> str:
+        """Return a one-shot text summary without changing structured paths."""
+        return str(prompt or "")
+
+    async def stream_text(self, prompt: str):
+        """Expose optional text streaming entrypoint for summary helpers."""
+        del prompt
+        for chunk in ():
+            yield chunk
+        raise NotImplementedError(
+            "RouterAgent does not provide token streaming for text summaries yet"
+        )
+
 
 def create_router() -> RouterAgent:
     """

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any, Protocol
 
 from pydantic import BaseModel, Field
@@ -13,6 +14,10 @@ class AgentRequest(BaseModel):
     task: str = Field(default="crawl")
     payload: dict[str, Any] = Field(default_factory=dict)
     context: dict[str, Any] = Field(default_factory=dict)
+
+
+AgentEvent = dict[str, Any]
+EventSink = Callable[[AgentEvent], None]
 
 
 class AgentResponse(BaseModel):

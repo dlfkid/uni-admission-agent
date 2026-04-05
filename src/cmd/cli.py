@@ -247,6 +247,9 @@ def _setup_logging(verbose: bool = False) -> None:
         level=logging.DEBUG if verbose else logging.INFO,
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     )
+    # Activate file logging — writes all output to timestamped .txt files
+    from src.core.file_logger import setup_file_logging
+    setup_file_logging()
 
 
 def _init_db(verbose: bool = False) -> None:

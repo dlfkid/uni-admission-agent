@@ -23,6 +23,7 @@ import os
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
+from src.agent_runtime.base import AgentEvent, EventSink
 from src.agent_runtime.background import BackgroundManager
 from src.agent_runtime.protocol import ProtocolManager
 
@@ -41,10 +42,10 @@ from src.agent_runtime.worktree import WorktreeManager
 
 logger = logging.getLogger(__name__)
 
-MAX_ITERATIONS = 25
+MAX_ITERATIONS = 256
 NAG_INTERVAL = 3  # inject reminder after this many iterations without a todo update
 LLM_CALL_TIMEOUT = 480    # 8 minutes — single LLM API call
-PAGE_TIMEOUT = 900         # 15 minutes — entire agent_loop for one page
+PAGE_TIMEOUT = 3600        # 60 minutes — entire agent_loop for one page
 
 
 class AgentPageTimeout(Exception):
@@ -53,51 +54,58 @@ class AgentPageTimeout(Exception):
 _SKILL_LOADER = SkillLoader()
 
 
+def _emit_loop_event(
+    event_sink: EventSink | None,
+    event_type: str,
+    **payload: Any,
+) -> None:
+    """Safely emit a loop lifecycle event."""
+    if event_sink is None:
+        return
+    event: AgentEvent = {"type": event_type, **payload}
+    event_sink(event)
+
+
+def _emit_loop_done(
+    event_sink: EventSink | None,
+    *,
+    iteration: int,
+    reason: str,
+    response_preview: str = "",
+) -> None:
+    """Emit a terminal loop event for any completion path."""
+    _emit_loop_event(
+        event_sink,
+        "agent_done",
+        iteration=iteration,
+        reason=reason,
+        response_preview=response_preview[:300],
+    )
+
+
 def _build_system_prompt() -> str:
-    """Build the system prompt with a lightweight skill directory (s05 Layer 1)."""
-    skill_list = _SKILL_LOADER.get_descriptions()
-    return f"""\
-You are a university admission program crawler agent. Your job is to crawl \
-university websites and extract structured program information into a database.
+    """Build the system prompt — minimal, direct, no distractions."""
+    return """\
+You are a program crawler.
 
-## Planning
-Before starting work, use the `todo` tool to create a step-by-step plan. \
-Update it as you progress — mark tasks in_progress when you start them and \
-completed when done. Only one task may be in_progress at a time.
+## For index pages (page_type_hint contains "index" or "auto"):
+1. Call browser_automation_skill(url=<given URL>, page_type_hint="index").
+   The result contains `extracted_programs` — an array of fully structured program dicts.
+2. Call persist_programs_skill ONCE with:
+   - univ_slug and year from the user message
+   - programs: the `extracted_programs` array AS-IS (do NOT modify or re-extract)
+3. Respond with a summary. Do NOT call browser_automation_skill again.
 
-## Knowledge Skills
-Use `load_skill` to load detailed guides when you need them:
-{skill_list}
+## For detail pages (page_type_hint is "detail"):
+1. Call browser_automation_skill(url=<given URL>, page_type_hint="detail").
+   The result contains `extracted_programs` with one structured program dict.
+2. Call persist_programs_skill with univ_slug, year, and the program from `extracted_programs`.
+   Pass the program dict AS-IS — do NOT re-extract fields from HTML.
+3. Respond with a summary.
 
-## Index Page Workflow (STRICT — follow exactly)
-When page_type_hint is "index":
-1. Call browser_automation_skill with page_type_hint="index" to fetch the index page.
-   The result includes `selected_urls` — detail page URLs automatically detected.
-2. For EACH URL in selected_urls, do these 3 steps in order:
-   a. Call browser_automation_skill with page_type_hint="detail" for that ONE URL.
-   b. Extract program info (name_en, source_url, faculty, study_mode, duration).
-   c. Call persist_programs_skill IMMEDIATELY to save the program.
-3. After processing all URLs, respond with a summary.
-
-CRITICAL RULES:
-- Fetch only ONE detail page per iteration. Extra fetches will be blocked.
-- You MUST call persist_programs_skill after EACH detail page before moving on.
-- Do NOT finish until you have called persist_programs_skill at least once.
-- Do NOT re-fetch the index page if you already have selected_urls.
-
-## Detail Page Workflow
-When page_type_hint is "detail", fetch the single URL with browser_automation_skill, \
-extract program info from the HTML, and call persist_programs_skill.
-
-## persist_programs_skill — IMPORTANT
-When calling persist_programs_skill, keep the payload SMALL to avoid JSON errors:
-- Send ONE program per call (do NOT batch multiple programs).
-- Use ONLY these fields: name_en, source_url, faculty, study_mode, duration.
-- OMIT description, tuition_fees, requirements, and other large text fields.
-- Example: {{"univ_slug":"ucl","year":2026,"programs":[{{"name_en":"Anthropology BSc","source_url":"https://..."}}]}}
-
-When finished, respond with a brief summary of what was accomplished \
-(page type detected, how many programs imported, any errors).
+CRITICAL: The `extracted_programs` data is already structured with correct field names
+(name_en, faculty, tuition_amount, study_options, deadlines, requirements, etc.).
+NEVER re-extract or reformat this data. Pass it directly to persist_programs_skill.
 """
 
 
@@ -711,31 +719,42 @@ def build_openai_tools(
             included so the LLM can spawn subagents.  Set to *False* for
             subagent loops to prevent recursive spawning.
         page_type_hint: Controls which tool categories are included.
-            ``"detail"`` — core skills + knowledge + todo + compact + task graph
-            + background only.  ``"index"`` — adds subagent + team.
-            ``None`` — all tools (backward compatible).
+            ``"detail"`` — minimal: browser + persist only.
+            ``"index"`` or ``"auto"`` — minimal: browser + persist only.
+            ``None`` — all tools (backward compatible, e.g. chat mode).
     """
-    # Always-included tools
-    tools: list[dict[str, Any]] = [
+    # For crawl tasks (index/detail/auto), give ONLY essential tools
+    # to prevent the LLM from wasting iterations on planning/skills/teams.
+    _ESSENTIAL_SKILL_NAMES = {
+        "browser_automation_skill",
+        "persist_programs_skill",
+        "analyze_page_skill",
+    }
+
+    if page_type_hint in ("index", "detail", "auto"):
+        tools: list[dict[str, Any]] = []
+        for name in registry:
+            if name in _ESSENTIAL_SKILL_NAMES:
+                skill = registry._skills[name]  # noqa: SLF001
+                tools.append(_skill_to_openai_tool(skill))
+        return tools
+
+    # Unrestricted mode (chat, etc.) — all tools
+    tools = [
         _TODO_TOOL, _LOAD_SKILL_TOOL, _COMPACT_TOOL,
         *_TASK_GRAPH_TOOLS,
         _BG_RUN_TOOL, _BG_CHECK_TOOL,
     ]
 
-    # Collaboration tools gated by page_type_hint
-    if page_type_hint != "detail":
-        # index and None both get team tools
-        tools.extend(_TEAM_TOOLS)
-        if include_task:
-            tools.append(_TASK_TOOL)
+    tools.extend(_TEAM_TOOLS)
+    if include_task:
+        tools.append(_TASK_TOOL)
 
-    if page_type_hint is None:
-        # Only unrestricted mode gets protocol/worktree/autonomy
-        tools.extend(_PROTOCOL_TOOLS)
-        tools.extend(_AUTONOMY_TOOLS)
-        tools.extend(_WORKTREE_TOOLS)
+    tools.extend(_PROTOCOL_TOOLS)
+    tools.extend(_AUTONOMY_TOOLS)
+    tools.extend(_WORKTREE_TOOLS)
 
-    # Skill tools (always included)
+    # All skill tools
     for name in registry:
         skill = registry._skills[name]  # noqa: SLF001
         tools.append(_skill_to_openai_tool(skill))
@@ -810,6 +829,246 @@ def resolve_openai_client() -> tuple[Any, str]:
 
 
 # ---------------------------------------------------------------------------
+# Streaming LLM helper
+# ---------------------------------------------------------------------------
+
+
+async def _streaming_llm_call(
+    client: Any,
+    model: str,
+    messages: list[dict],
+    tools: list[dict] | None,
+    *,
+    event_sink: EventSink | None = None,
+    iteration: int = 0,
+) -> Any:
+    """Call LLM with streaming, emitting thinking deltas in real time.
+
+    Collects the full response and returns a ChatCompletion-like object
+    compatible with the non-streaming path.
+    """
+    stream = await client.chat.completions.create(
+        model=model,
+        messages=messages,
+        tools=tools or None,
+        max_tokens=32768,
+        stream=True,
+        stream_options={"include_usage": True},
+    )
+
+    # Accumulators
+    content_parts: list[str] = []
+    tool_calls_acc: dict[int, dict] = {}  # index → {id, type, function: {name, arguments}}
+    finish_reason = None
+    role = "assistant"
+    usage_data: dict[str, int] = {}
+
+    async for chunk in stream:
+        # Capture usage from the final chunk (OpenAI/volcengine include it there)
+        if hasattr(chunk, "usage") and chunk.usage is not None:
+            u = chunk.usage
+            usage_data = {
+                "prompt_tokens": getattr(u, "prompt_tokens", 0) or 0,
+                "completion_tokens": getattr(u, "completion_tokens", 0) or 0,
+                "total_tokens": getattr(u, "total_tokens", 0) or 0,
+            }
+
+        delta = chunk.choices[0].delta if chunk.choices else None
+        if delta is None:
+            continue
+
+        if chunk.choices[0].finish_reason:
+            finish_reason = chunk.choices[0].finish_reason
+
+        # Stream text content
+        if delta.content:
+            content_parts.append(delta.content)
+            _emit_loop_event(
+                event_sink,
+                "agent_thinking_delta",
+                iteration=iteration,
+                text=delta.content,
+            )
+
+        # Accumulate tool call deltas
+        if delta.tool_calls:
+            for tc_delta in delta.tool_calls:
+                idx = tc_delta.index
+                if idx not in tool_calls_acc:
+                    tool_calls_acc[idx] = {
+                        "id": tc_delta.id or "",
+                        "type": "function",
+                        "function": {"name": "", "arguments": ""},
+                    }
+                acc = tool_calls_acc[idx]
+                if tc_delta.id:
+                    acc["id"] = tc_delta.id
+                if tc_delta.function:
+                    if tc_delta.function.name:
+                        acc["function"]["name"] += tc_delta.function.name
+                    if tc_delta.function.arguments:
+                        acc["function"]["arguments"] += tc_delta.function.arguments
+
+    # Emit token usage if available
+    if usage_data:
+        _emit_loop_event(
+            event_sink,
+            "token_usage",
+            iteration=iteration,
+            **usage_data,
+        )
+
+    # Build a minimal response object that matches the non-streaming shape
+    full_content = "".join(content_parts) or None
+    tool_calls_list = None
+    if tool_calls_acc:
+        tool_calls_list = []
+        for idx in sorted(tool_calls_acc):
+            tc = tool_calls_acc[idx]
+            tool_calls_list.append(
+                type("ToolCall", (), {
+                    "id": tc["id"],
+                    "type": tc["type"],
+                    "function": type("Function", (), {
+                        "name": tc["function"]["name"],
+                        "arguments": tc["function"]["arguments"],
+                    })(),
+                })()
+            )
+
+    message = type("Message", (), {
+        "role": role,
+        "content": full_content,
+        "tool_calls": tool_calls_list,
+    })()
+
+    choice = type("Choice", (), {
+        "message": message,
+        "finish_reason": finish_reason,
+    })()
+
+    return type("Response", (), {"choices": [choice]})()
+
+
+# ---------------------------------------------------------------------------
+# Auto-persist helper (extracted to reduce nesting in the main loop)
+# ---------------------------------------------------------------------------
+
+
+async def _auto_persist_browser_programs(
+    result_str: str,
+    univ_slug: str,
+    year: int,
+    dry_run: bool,
+    registry: "SkillRegistry",
+    collected_programs: list[dict[str, Any]],
+    event_sink: "EventSink | None",
+    iteration: int,
+) -> str:
+    """Persist extracted programs from a browser result, return updated result_str."""
+    try:
+        browser_result = json.loads(result_str)
+        extracted = browser_result.get("extracted_programs") or []
+        if not (extracted and univ_slug and year):
+            return result_str
+
+        persist_payload = json.dumps({
+            "univ_slug": univ_slug,
+            "year": year,
+            "programs": extracted,
+            "dry_run": dry_run,
+        }, ensure_ascii=False, default=str)
+        persist_result_str = await _handle_skill_call(
+            "persist_programs_skill", persist_payload, registry
+        )
+        persist_result = json.loads(persist_result_str)
+
+        # Accumulate into collected_programs
+        for prog in persist_result.get("parsed_programs", []):
+            if isinstance(prog, dict):
+                collected_programs.append(prog)
+        n_upserted = (
+            persist_result.get("imported_count", 0)
+            + persist_result.get("updated_count", 0)
+        )
+        if n_upserted > 0 and not persist_result.get("parsed_programs"):
+            for prog in extracted:
+                if isinstance(prog, dict):
+                    collected_programs.append(prog)
+
+        # Emit events for extension counters
+        n_persisted = len(collected_programs)
+        for _ in range(n_persisted):
+            _emit_loop_event(
+                event_sink,
+                "tool_call_finished",
+                iteration=iteration,
+                tool="persist_programs_skill",
+                tool_call_id="auto_persist",
+            )
+        _emit_loop_event(
+            event_sink,
+            "token_usage",
+            iteration=iteration,
+            total_tokens=0,  # extraction tokens already counted
+        )
+
+        # Replace extracted_programs with summary for LLM
+        browser_result.pop("extracted_programs", None)
+        browser_result["auto_persisted"] = {
+            "count": n_persisted,
+            "univ_slug": univ_slug,
+            "year": year,
+            "dry_run": dry_run,
+        }
+        result_str = json.dumps(
+            browser_result, ensure_ascii=False, default=str
+        )
+
+        logger.info(
+            "[AgentLoop] Auto-persisted %d programs for %s/%d (dry_run=%s)",
+            n_persisted, univ_slug, year, dry_run,
+        )
+    except Exception as exc:
+        logger.warning("[AgentLoop] Auto-persist failed: %s", exc)
+    return result_str
+
+
+def _accumulate_persist_results(
+    result_str: str,
+    fn_args_raw: str,
+    collected_programs: list[dict[str, Any]],
+) -> None:
+    """Extract persisted program data from a persist_programs_skill result."""
+    try:
+        skill_result = json.loads(result_str)
+    except (json.JSONDecodeError, TypeError):
+        return
+
+    # In non-dry-run mode, parsed_programs is empty but
+    # imported/updated counts reflect actual DB writes.
+    for prog in skill_result.get("parsed_programs", []):
+        if isinstance(prog, dict):
+            collected_programs.append(prog)
+
+    # Also count successful upserts as collected programs
+    upserted = (
+        skill_result.get("imported_count", 0)
+        + skill_result.get("updated_count", 0)
+    )
+    if upserted > 0 and not skill_result.get("parsed_programs"):
+        # Reconstruct minimal entries from the tool call args
+        try:
+            call_args = json.loads(fn_args_raw)
+            for prog in call_args.get("programs", []):
+                if isinstance(prog, dict):
+                    collected_programs.append(prog)
+        except (json.JSONDecodeError, TypeError):
+            # Fallback: add a placeholder so guard knows we persisted
+            collected_programs.append({"_persisted": True})
+
+
+# ---------------------------------------------------------------------------
 # The Loop
 # ---------------------------------------------------------------------------
 
@@ -824,6 +1083,10 @@ async def agent_loop(
     _teammate_name: str | None = None,
     _message_bus: MessageBus | None = None,
     page_type_hint: str | None = None,
+    event_sink: EventSink | None = None,
+    univ_slug: str = "",
+    year: int = 0,
+    dry_run: bool = False,
 ) -> dict[str, Any]:
     """Run the LLM-driven agent loop.
 
@@ -838,6 +1101,10 @@ async def agent_loop(
     Returns:
         ``{"response": str, "trace": list, "iterations": int, "todos": list}``
     """
+    # Set task context for skill handlers (univ_slug, year)
+    from src.agent_runtime.skills.impl.common import set_task_context
+    set_task_context(univ_slug=univ_slug, year=year)
+
     client, model = resolve_openai_client()
     tools = build_openai_tools(
         registry,
@@ -890,12 +1157,15 @@ async def agent_loop(
         _maybe_inject_nag(messages, iterations_since_todo, todo)
 
         try:
+            _emit_loop_event(
+                event_sink,
+                "llm_call_started",
+                iteration=iteration,
+            )
             response = await asyncio.wait_for(
-                client.chat.completions.create(
-                    model=model,
-                    messages=messages,
-                    tools=tools or None,
-                    max_tokens=32768,
+                _streaming_llm_call(
+                    client, model, messages, tools,
+                    event_sink=event_sink, iteration=iteration,
                 ),
                 timeout=LLM_CALL_TIMEOUT,
             )
@@ -910,6 +1180,11 @@ async def agent_loop(
                 logger.error(
                     "[AgentLoop] %d consecutive LLM timeouts — aborting loop",
                     consecutive_timeouts,
+                )
+                _emit_loop_done(
+                    event_sink,
+                    iteration=iteration,
+                    reason="consecutive_timeouts",
                 )
                 return {
                     "response": "",
@@ -932,6 +1207,11 @@ async def agent_loop(
         choice = response.choices[0]
         consecutive_timeouts = 0  # reset on successful call
         assistant_msg = choice.message
+        _emit_loop_event(
+            event_sink,
+            "llm_call_finished",
+            iteration=iteration,
+        )
 
         # Detect output truncation (token limit hit)
         if getattr(choice, "finish_reason", None) == "length":
@@ -949,7 +1229,7 @@ async def agent_loop(
             # Guard: if this is an index crawl and no programs were persisted,
             # nudge the agent to keep going instead of finishing empty-handed.
             if (
-                page_type_hint == "index"
+                page_type_hint in ("index", "auto", None)
                 and not collected_programs
                 and iteration < max_iterations - 1
             ):
@@ -980,6 +1260,12 @@ async def agent_loop(
                     "response_preview": final_text[:300],
                 }
             )
+            _emit_loop_done(
+                event_sink,
+                iteration=iteration,
+                reason="completed",
+                response_preview=final_text[:300],
+            )
             return {
                 "response": final_text,
                 "trace": trace,
@@ -1001,7 +1287,14 @@ async def agent_loop(
             logger.info(
                 "[AgentLoop] Tool call: %s(%s)",
                 fn_name,
-                fn_args_raw[:200],
+                fn_args_raw[:2000],
+            )
+            _emit_loop_event(
+                event_sink,
+                "tool_call_started",
+                iteration=iteration,
+                tool=fn_name,
+                tool_call_id=tool_call.id,
             )
 
             # Rate-limit: only one browser_automation_skill call per iteration
@@ -1024,6 +1317,13 @@ async def agent_loop(
                     "args_preview": fn_args_raw[:500],
                     "result_preview": result_str,
                 })
+                _emit_loop_event(
+                    event_sink,
+                    "tool_call_finished",
+                    iteration=iteration,
+                    tool=fn_name,
+                    tool_call_id=tool_call.id,
+                )
                 continue
 
             # -- Built-in tool dispatch --
@@ -1083,15 +1383,19 @@ async def agent_loop(
             if fn_name == "browser_automation_skill":
                 browser_fetch_done_this_iteration = True
 
-            # Accumulate parsed programs from persist_programs_skill
+                # AUTO-PERSIST: If the skill extracted programs, persist them
+                # directly in code — never ask the LLM to relay the data.
+                result_str = await _auto_persist_browser_programs(
+                    result_str, univ_slug, year, dry_run,
+                    registry, collected_programs,
+                    event_sink, iteration,
+                )
+
+            # Accumulate program counts from persist_programs_skill
             if fn_name == "persist_programs_skill":
-                try:
-                    skill_result = json.loads(result_str)
-                    for prog in skill_result.get("parsed_programs", []):
-                        if isinstance(prog, dict):
-                            collected_programs.append(prog)
-                except (json.JSONDecodeError, TypeError):
-                    pass
+                _accumulate_persist_results(
+                    result_str, fn_args_raw, collected_programs
+                )
 
             trace.append(
                 {
@@ -1101,6 +1405,13 @@ async def agent_loop(
                     "args_preview": fn_args_raw[:500],
                     "result_preview": result_str[:500],
                 }
+            )
+            _emit_loop_event(
+                event_sink,
+                "tool_call_finished",
+                iteration=iteration,
+                tool=fn_name,
+                tool_call_id=tool_call.id,
             )
 
             messages.append(
@@ -1114,6 +1425,12 @@ async def agent_loop(
         # s11: if idle was requested, stop the loop so teammate enters idle phase
         if idle_requested:
             logger.info("[AgentLoop] Idle requested — stopping loop")
+            _emit_loop_done(
+                event_sink,
+                iteration=iteration,
+                reason="idle_requested",
+                response_preview="Entered idle mode.",
+            )
             return {
                 "response": "Entered idle mode.",
                 "trace": trace,
@@ -1129,6 +1446,12 @@ async def agent_loop(
             iterations_since_todo += 1
 
     logger.warning("[AgentLoop] Hit max iterations (%d)", max_iterations)
+    _emit_loop_done(
+        event_sink,
+        iteration=max_iterations,
+        reason="max_iterations",
+        response_preview="Agent reached maximum iteration limit.",
+    )
     return {
         "response": "Agent reached maximum iteration limit.",
         "trace": trace,

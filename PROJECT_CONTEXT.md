@@ -193,6 +193,10 @@ Entrypoints:
 Safety and fallback:
 - `PydanticAIRuntime` failure automatically falls back to `LegacyRuntime`
 - Base REST/MCP tools remain unchanged when agent mode is disabled
+- Streaming boundary:
+  - `/tasks/{id}/events` provides SSE lifecycle updates for agent tasks.
+  - The final user-visible summary may emit `summary_delta` events or gracefully fall back to one-shot text.
+  - Structured LLM calls remain on the synchronous `generate()` path, including cleaner extraction, page-type classification, and program-name resolution.
 
 #### Agent Capability Stack (s01–s12)
 

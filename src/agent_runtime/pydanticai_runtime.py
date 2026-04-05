@@ -6,12 +6,19 @@ import asyncio
 import logging
 from typing import Any
 
-from src.agent_runtime.base import AgentRequest, AgentResponse
+from src.agent_runtime.base import AgentEvent, AgentRequest, AgentResponse, EventSink
 from src.agent_runtime.legacy_runtime import LegacyRuntime
 from src.agent_runtime.loop import agent_loop, AgentPageTimeout, PAGE_TIMEOUT, SYSTEM_PROMPT
+from src.agent_runtime.summary_stream import generate_summary_with_stream
 from src.agent_runtime.skills.registry import build_skill_registry
 
 logger = logging.getLogger(__name__)
+
+
+def _emit_event(event_sink: EventSink | None, event: AgentEvent) -> None:
+    """Safely emit a runtime lifecycle event."""
+    if event_sink is not None:
+        event_sink(dict(event))
 
 
 class PydanticAIRuntime:
@@ -53,6 +60,19 @@ class PydanticAIRuntime:
     # Core: LLM-driven agent loop
     # ------------------------------------------------------------------
 
+    def _resolve_summary_provider(self, request: AgentRequest) -> Any:
+        """Resolve optional text-summary provider without affecting core crawl flow."""
+        provider = request.context.get("summary_provider")
+        if provider is not None:
+            return provider
+        if self.model_adapter is None:
+            return None
+        try:
+            return self.model_adapter.resolve(mode="internal")
+        except Exception as exc:  # pylint: disable=broad-except
+            logger.info("Summary provider unavailable, using one-shot fallback: %s", exc)
+            return None
+
     async def _run_agent(self, request: AgentRequest) -> AgentResponse:
         """Hand the request to the agent loop and let the LLM drive."""
         logger.info(
@@ -62,19 +82,27 @@ class PydanticAIRuntime:
         user_message = self._build_user_message(request)
         registry = build_skill_registry()
         hint = (request.payload or {}).get("page_type_hint")
+        event_sink = request.context.get("event_sink")
+        if not callable(event_sink):
+            event_sink = None
 
-        # Build system prompt with dry-run instruction if needed
+        _emit_event(
+            event_sink,
+            {
+                "type": "agent_started",
+                "task": request.task,
+                "page_type_hint": hint,
+            },
+        )
+
         system_prompt = SYSTEM_PROMPT
         if request.context.get("dry_run"):
             system_prompt += (
-                "\n\nIMPORTANT: dry_run mode is active. "
-                "When calling persist_programs_skill, set dry_run=true "
-                "in the payload. Do NOT attempt database writes. "
-                "Do NOT use legacy_crawl_batch_skill — it bypasses dry-run "
-                "and writes directly to the database. Instead use "
-                "browser_automation_skill to fetch HTML, then "
-                "persist_programs_skill with dry_run=true."
+                "\n\nIMPORTANT: dry_run mode is enabled. "
+                "Pass dry_run=true when calling persist_programs_skill "
+                "so that no records are written to the database."
             )
+        payload = dict(request.payload or {})
 
         try:
             result = await asyncio.wait_for(
@@ -83,6 +111,10 @@ class PydanticAIRuntime:
                     registry=registry,
                     system_prompt=system_prompt,
                     page_type_hint=hint,
+                    event_sink=event_sink,
+                    univ_slug=str(payload.get("univ_slug", "")),
+                    year=int(payload.get("year", 0) or 0),
+                    dry_run=bool(request.context.get("dry_run", False)),
                 ),
                 timeout=PAGE_TIMEOUT,
             )
@@ -95,6 +127,12 @@ class PydanticAIRuntime:
             "[Agent] Loop completed in %d iteration(s)",
             result.get("iterations", 0),
         )
+        final_response = await generate_summary_with_stream(
+            prompt=str(result.get("response", "") or ""),
+            provider=self._resolve_summary_provider(request),
+            fallback_text=str(result.get("response", "") or ""),
+            event_sink=event_sink,
+        )
 
         return AgentResponse(
             status="done",
@@ -102,7 +140,7 @@ class PydanticAIRuntime:
             trace=result.get("trace", []),
             output={
                 "task": request.task,
-                "agent_response": result.get("response", ""),
+                "agent_response": final_response,
                 "iterations": result.get("iterations", 0),
                 "parsed_programs": result.get("collected_programs", []),
                 **dict(request.payload or {}),
@@ -132,6 +170,9 @@ class PydanticAIRuntime:
                 f"Page type hint: {page_type_hint}",
             ]
             return "\n".join(parts)
+
+        if task == "chat":
+            return str(payload.get("message", "")).strip()
 
         # Generic fallback for non-crawl tasks
         return f"Task: {task}\nPayload: {payload}"

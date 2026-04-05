@@ -155,7 +155,14 @@ _NOISE_HEADING_RE = re.compile(
 )
 
 _NOISE_PROGRAM_NAME_RE = re.compile(
-    r"^(?:what'?s new|news|overview|home|admissions?|programme(?:s)? list)$",
+    r"^(?:what'?s new|news|overview|home|admissions?|programme(?:s)? list"
+    r"|(?:postgraduate|undergraduate|graduate)\s+(?:taught\s+)?(?:programmes?|courses?|degrees?)"
+    r"|degree\s+finder|search\s+(?:programmes?|courses?|degrees?)"
+    r"|a\s+to\s+z\s+of\s+(?:degree\s+)?programmes?"
+    r"|browse\s+(?:by\s+)?(?:faculty|subject|department)"
+    r"|all\s+(?:programmes?|courses?)"
+    r"|masters?\s+courses?|bachelor'?s?\s+courses?"
+    r"|course\s+search|find\s+a?\s*(?:course|programme|degree))$",
     re.IGNORECASE,
 )
 

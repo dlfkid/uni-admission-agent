@@ -122,3 +122,4 @@ class BrowserAutomationSkillOutput(BaseModel):
     detail_pages_batch: list[dict[str, Any]] = Field(default_factory=list)
     selected_urls: list[str] = Field(default_factory=list)
     selected_link_texts: dict[str, str] = Field(default_factory=dict)
+    extracted_programs: list[dict[str, Any]] = Field(default_factory=list)

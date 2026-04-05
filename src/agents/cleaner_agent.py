@@ -217,6 +217,18 @@ class LLMCleanerAgent:
                 "Use these only as guidance for program identity; do not invent fields.\n"
             )
 
+        # Extract academic year for deadline inference
+        year = int(raw_row.get("academic_year") or 0)
+        year_minus_1 = year - 1 if year else 0
+        deadline_year_hint = ""
+        if year:
+            deadline_year_hint = (
+                f"   - When dates lack a year (e.g., '15 December', '31 March'), infer the year\n"
+                f"             from the academic year context. For entry year {year}, application deadlines\n"
+                f"             before September are typically in {year}, and deadlines\n"
+                f"             in October-December are typically in {year_minus_1}.\n"
+            )
+
         prompt = f"""
         You are an expert data parsing assistant.
         Your task is to extract structured admission data from the following raw data.
@@ -234,6 +246,7 @@ class LLMCleanerAgent:
         3. **Study Options**: Convert descriptions like "1 year FT / 2 years PT" into a list of options with mode and months.
         4. **Deadlines**: Extract dates and descriptions.
            - Output ALL valid deadlines found, sorted chronologically.
+{deadline_year_hint}\
         5. **Requirements**: Extract subject-level admission requirements.
            - Include score/grade thresholds when present (e.g., Math A, IELTS 6.5).
            - Capture framework when available (A-Level/IB/Gaokao/SAT/ACT).
@@ -263,6 +276,7 @@ class LLMCleanerAgent:
         markdown: str,
         source_url: str = "",
         name_hints: Optional[List[str]] = None,
+        academic_year: int = 0,
     ) -> Optional[ParsedProgramData]:
         """Parse Markdown content from a detail page into structured data.
 
@@ -278,9 +292,9 @@ class LLMCleanerAgent:
             ParsedProgramData or None if parsing fails entirely.
         """
         if len(markdown) <= MAX_DETAIL_CHARS:
-            return self._parse_single_pass(markdown, source_url, name_hints)
+            return self._parse_single_pass(markdown, source_url, name_hints, academic_year)
 
-        return self._parse_rolling_chunks(markdown, source_url, name_hints)
+        return self._parse_rolling_chunks(markdown, source_url, name_hints, academic_year)
 
     # ------------------------------------------------------------------ #
     #  Private helpers                                                     #
@@ -291,12 +305,15 @@ class LLMCleanerAgent:
         markdown: str,
         source_url: str,
         name_hints: Optional[List[str]],
+        academic_year: int = 0,
     ) -> Optional[ParsedProgramData]:
         """Parse a small detail page in one LLM call."""
         raw_row: Dict[str, str] = {
             "source_url": source_url,
             "raw_content": markdown,
         }
+        if academic_year:
+            raw_row["academic_year"] = str(academic_year)
         return self.clean_row(raw_row, name_hints=name_hints)
 
     def _parse_rolling_chunks(
@@ -304,6 +321,7 @@ class LLMCleanerAgent:
         markdown: str,
         source_url: str,
         name_hints: Optional[List[str]],
+        academic_year: int = 0,
     ) -> Optional[ParsedProgramData]:
         """Parse a large detail page using rolling-window sequential chunks.
 
@@ -324,6 +342,13 @@ class LLMCleanerAgent:
         context_summary = "No previous context. This is the first chunk."
 
         hints = self._normalize_name_hints(name_hints)
+        year_context = ""
+        if academic_year:
+            year_context = (
+                f"\nAcademic year context: entry year is {academic_year}. "
+                f"When dates lack a year, deadlines before September = {academic_year}, "
+                f"October-December = {academic_year - 1}.\n"
+            )
 
         for i, chunk in enumerate(chunks):
             chunk_num = i + 1
@@ -338,6 +363,8 @@ class LLMCleanerAgent:
                 total_chunks=total_chunks,
                 chunk_content=chunk,
             )
+            if year_context:
+                prompt = year_context + prompt
             if hints:
                 hints_lines = "\n".join(f"- {item}" for item in hints)
                 prompt = (

@@ -46,6 +46,10 @@ Entry Points                    Services Layer              Infrastructure
 - Taxonomy-guided name accuracy is enabled for crawl requests (hint injection + optional high-confidence override).
 - Latest benchmark includes 4 cases (UCL/Manchester/Leeds/PolyU) and passes global threshold `0.60`.
 - **Agent Runtime (s01–s12)**: Full LLM-driven agent loop with tool dispatch, task DAG, subagents, team coordination, background execution, context compression, and git worktree isolation.
+- Agent streaming boundary:
+  - Agent lifecycle progress is available via task events / SSE.
+  - Final user-visible agent summary may stream token deltas or fall back to one-shot text.
+  - Structured extraction paths remain non-streaming for stability, including cleaner extraction, page-type classification, and name resolution.
 
 ## Production Usage (No Code Required)
 

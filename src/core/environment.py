@@ -137,6 +137,10 @@ def setup_logging(verbose: bool = False) -> None:
     
     logger.debug("Logging configured (verbose mode: %s)", verbose)
 
+    # Activate file logging — writes all output to timestamped .txt files
+    from src.core.file_logger import setup_file_logging
+    setup_file_logging()
+
 
 # ============================================================================
 # Private Helper Functions

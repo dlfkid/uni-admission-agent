@@ -72,12 +72,15 @@ async def fetch_index_and_details_via_client(
     fetch_fn = _dispatchers.get("fetch_fn")
     if fetch_fn is None:
         raise RuntimeError("Client bridge fetch handler is not configured")
-    payload = await fetch_fn(
+    import inspect
+    result = fetch_fn(
         url=url,
         page_type_hint=page_type_hint,
         client_id=client_id,
     )
-    return dict(payload or {})
+    if inspect.isawaitable(result):
+        result = await result
+    return dict(result or {})
 
 
 def resolve_provider_metadata(

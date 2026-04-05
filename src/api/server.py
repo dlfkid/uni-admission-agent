@@ -15,6 +15,7 @@ Or directly:
 
 import asyncio
 import copy
+import json
 import logging
 import os
 import shutil
@@ -25,8 +26,9 @@ from typing import List, Optional, Dict, Any
 from io import StringIO
 
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, HTTPException, Query, Body, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Query, Body, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from dotenv import find_dotenv, dotenv_values
 
 from src.api.schemas import (
@@ -34,6 +36,8 @@ from src.api.schemas import (
     CrawlResponse,
     AgentRunRequest,
     AgentRunResponse,
+    AgentChatRequest,
+    AgentChatResponse,
     AgentReviewConfirmRequest,
     AgentReviewConfirmResponse,
     ProgramResponse,
@@ -74,6 +78,7 @@ from src.services.crawler import (
     patch_program_snapshot,
     query_programs,
     run_agent_crawl,
+    run_agent_chat,
     resume_crawl_job,
 )
 from src.agent_runtime.review_selection import parse_selected_indices
@@ -270,6 +275,8 @@ def _update_env_file_structured(config: StructuredConfig) -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Lifespan context manager for database initialization."""
+    global _main_loop  # pylint: disable=global-statement
+    _main_loop = asyncio.get_running_loop()
     try:
         _register_agent_mcp_tools_if_enabled()
         DatabaseManager().init_db()
@@ -301,6 +308,7 @@ app.add_middleware(
 task_manager = TaskManager()
 client_registry = ClientRegistry()
 client_sockets: Dict[str, WebSocket] = {}
+_main_loop: Optional[asyncio.AbstractEventLoop] = None  # set on startup
 client_rpc_broker = ClientRpcBroker(timeout_seconds=120.0)
 
 
@@ -312,12 +320,31 @@ def _select_available_client_id(preferred_client_id: Optional[str]) -> Optional[
     return client_registry.select_client_id(preferred_client_id)
 
 
+async def _rpc_send_and_wait(
+    websocket: WebSocket,
+    request_id: str,
+    url: str,
+    page_type_hint: str,
+) -> Dict[str, Any]:
+    """Send RPC request and wait for response. Must run on the main event loop."""
+    await websocket.send_json(
+        {
+            "type": "rpc_request",
+            "request_id": request_id,
+            "action": "fetch_browser_payload",
+            "payload": {"url": url, "page_type_hint": page_type_hint},
+        }
+    )
+    return dict(await client_rpc_broker.wait_for_response(request_id) or {})
+
+
 async def _fetch_browser_payload_from_client(
     *,
     url: str,
     page_type_hint: str,
     client_id: Optional[str],
 ) -> Dict[str, Any]:
+    """Dispatch a browser fetch RPC. Must be called on the main event loop."""
     target_client_id = client_registry.select_client_id(client_id)
     if not target_client_id:
         raise RuntimeError("No available client for browser automation")
@@ -329,34 +356,35 @@ async def _fetch_browser_payload_from_client(
     request_id, _future = client_rpc_broker.create_pending(target_client_id)
     logger.info(
         "[RPC] Dispatching fetch_browser_payload to client=%s request_id=%s url=%s",
-        target_client_id,
-        request_id,
-        url,
+        target_client_id, request_id, url,
     )
-    await websocket.send_json(
-        {
-            "type": "rpc_request",
-            "request_id": request_id,
-            "action": "fetch_browser_payload",
-            "payload": {
-                "url": url,
-                "page_type_hint": page_type_hint,
-            },
-        }
-    )
-    payload = await client_rpc_broker.wait_for_response(request_id)
+    payload = await _rpc_send_and_wait(websocket, request_id, url, page_type_hint)
     logger.info(
         "[RPC] Client %s responded to request_id=%s (payload keys: %s)",
-        target_client_id,
-        request_id,
-        list((payload or {}).keys()),
+        target_client_id, request_id, list(payload.keys()),
     )
-    return dict(payload or {})
+    return payload
+
+
+def _fetch_browser_payload_from_client_sync(
+    *,
+    url: str,
+    page_type_hint: str,
+    client_id: Optional[str],
+) -> Dict[str, Any]:
+    """Thread-safe sync wrapper: schedules RPC on the main event loop and blocks."""
+    if _main_loop is None:
+        raise RuntimeError("Server main event loop not initialized")
+    future = asyncio.run_coroutine_threadsafe(
+        _fetch_browser_payload_from_client(url=url, page_type_hint=page_type_hint, client_id=client_id),
+        _main_loop,
+    )
+    return future.result(timeout=120)
 
 
 browser_provider_service.configure_client_dispatchers(
     availability_fn=_has_available_client,
-    fetch_fn=_fetch_browser_payload_from_client,
+    fetch_fn=_fetch_browser_payload_from_client_sync,
     select_client_fn=_select_available_client_id,
 )
 
@@ -641,6 +669,27 @@ async def api_agent_run(body: AgentRunRequest) -> AgentRunResponse:
         root_logger = logging.getLogger()
         root_logger.addHandler(log_handler)
 
+        accumulated_tokens = 0
+        program_count = 0
+
+        def _event_sink(event: dict[str, Any]) -> None:
+            nonlocal accumulated_tokens, program_count
+            task_manager.add_event(task_id, event)
+
+            # Accumulate token usage from streaming LLM calls
+            if event.get("type") == "token_usage":
+                accumulated_tokens += event.get("total_tokens", 0)
+                task_manager.update_task(task_id, tokens_used=accumulated_tokens)
+
+            # Count persisted programs from tool calls
+            if event.get("type") == "tool_call_finished" and event.get("tool") == "persist_programs_skill":
+                program_count += 1
+                task_manager.update_task(
+                    task_id,
+                    progress=f"Agent running… ({program_count} program(s) saved)",
+                    progress_meta={"event": "program_persisted", "program_count": program_count},
+                )
+
         task_manager.update_task(
             task_id,
             state=TaskState.RUNNING,
@@ -657,19 +706,24 @@ async def api_agent_run(body: AgentRunRequest) -> AgentRunResponse:
                 runtime_mode=body.runtime,
                 autonomous=body.autonomous,
                 dry_run=body.dry_run,
+                event_sink=_event_sink,
                 policy_profile=(
                     body.policy_profile.model_dump(exclude_none=True)
                     if body.policy_profile
                     else None
                 ),
             )
+            if isinstance(result, dict):
+                result["program_count"] = program_count
+                result["tokens_used"] = accumulated_tokens
             task_manager.update_task(
                 task_id,
                 state=TaskState.DONE,
                 progress="Complete",
                 result=result,
+                tokens_used=accumulated_tokens,
                 progress_percent=100.0,
-                progress_meta={"event": "agent_task_succeeded"},
+                progress_meta={"event": "agent_task_succeeded", "program_count": program_count},
             )
         except Exception as exc:
             logger.exception("Agent task %s failed", task_id)
@@ -686,6 +740,78 @@ async def api_agent_run(body: AgentRunRequest) -> AgentRunResponse:
     task_obj = asyncio.create_task(_run_agent_job())
     task_manager.register_task_object(task_id, task_obj)
     return AgentRunResponse(task_id=task_id)
+
+
+@app.post("/agent/chat", response_model=AgentChatResponse)
+async def api_agent_chat(body: AgentChatRequest) -> AgentChatResponse:
+    """Submit a free-form chat message to the agent using the server-side LLM.
+
+    Returns a ``task_id`` immediately.  Subscribe to ``GET /tasks/{task_id}/events``
+    for real-time streaming output (``summary_delta``, tool lifecycle events, etc.).
+    """
+    if not is_agent_enabled():
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Agent runtime is disabled. "
+                "Enable with AGENT_ENABLED=true or start server with --agent."
+            ),
+        )
+
+    try:
+        task_id = task_manager.create_task(
+            params={
+                "mode": "chat",
+                "message": body.message,
+            }
+        )
+    except RuntimeError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+
+    async def _run_chat_job() -> None:
+        log_handler = TaskLogHandler(task_manager, task_id)
+        root_logger = logging.getLogger()
+        root_logger.addHandler(log_handler)
+
+        def _event_sink(event: dict[str, Any]) -> None:
+            task_manager.add_event(task_id, event)
+
+        task_manager.update_task(
+            task_id,
+            state=TaskState.RUNNING,
+            progress="Agent thinking…",
+            progress_percent=3.0,
+            progress_meta={"event": "chat_task_started"},
+        )
+        try:
+            result = await run_agent_chat(
+                message=body.message,
+                context=body.context,
+                event_sink=_event_sink,
+            )
+            task_manager.update_task(
+                task_id,
+                state=TaskState.DONE,
+                progress="Complete",
+                result=result,
+                progress_percent=100.0,
+                progress_meta={"event": "chat_task_succeeded"},
+            )
+        except Exception as exc:
+            logger.exception("Chat task %s failed", task_id)
+            task_manager.update_task(
+                task_id,
+                state=TaskState.FAILED,
+                error=str(exc),
+                progress_percent=100.0,
+                progress_meta={"event": "chat_task_failed"},
+            )
+        finally:
+            root_logger.removeHandler(log_handler)
+
+    task_obj = asyncio.create_task(_run_chat_job())
+    task_manager.register_task_object(task_id, task_obj)
+    return AgentChatResponse(task_id=task_id)
 
 
 def _collect_review_selected_indices(
@@ -849,6 +975,38 @@ async def api_task_status(task_id: str) -> TaskStatusResponse:
     if info is None:
         raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
     return TaskStatusResponse(**info.to_dict())
+
+
+@app.get("/tasks/{task_id}/events")
+async def api_task_events(task_id: str, request: Request) -> StreamingResponse:
+    """Stream stored task events over SSE for agent progress UIs."""
+    info = task_manager.get_task(task_id)
+    if info is None:
+        raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
+
+    async def event_stream():
+        event_index = 0
+        try:
+            while True:
+                current = task_manager.get_task(task_id)
+                if current is None:
+                    break
+
+                while event_index < len(current.events):
+                    event = current.events[event_index]
+                    event_index += 1
+                    yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+
+                if current.state in (TaskState.DONE, TaskState.FAILED):
+                    break
+                if await request.is_disconnected():
+                    break
+
+                await asyncio.sleep(0.05)
+        except asyncio.CancelledError:
+            return
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
 
 
 @app.get("/clients", response_model=List[ClientInfoResponse])
@@ -2203,17 +2361,57 @@ repair:
         LLM: index pages return candidate lists for external review instead
         of auto-crawling.  Set autonomous=True to let the internal runtime
         make all decisions autonomously.
+
+        A ``task_id`` is included in the response so callers can subscribe to
+        ``GET /tasks/{task_id}/events`` for real-time streaming progress.
         """
-        return await run_agent_crawl(
-            url=url,
-            univ_slug=univ_slug,
-            year=year,
-            page_type_hint=page_type_hint,
-            runtime_mode=runtime,
-            policy_profile=policy_profile,
-            client_id=client_id,
-            autonomous=autonomous,
+        task_id = task_manager.create_task(
+            params={
+                "mode": "agent",
+                "url": url,
+                "univ_slug": univ_slug,
+                "year": year,
+                "page_type_hint": page_type_hint,
+            }
         )
+
+        def _event_sink(event: dict[str, Any]) -> None:
+            task_manager.add_event(task_id, event)
+
+        task_manager.update_task(
+            task_id,
+            state=TaskState.RUNNING,
+            progress="Agent running…",
+            progress_percent=3.0,
+        )
+        try:
+            result = await run_agent_crawl(
+                url=url,
+                univ_slug=univ_slug,
+                year=year,
+                page_type_hint=page_type_hint,
+                runtime_mode=runtime,
+                policy_profile=policy_profile,
+                client_id=client_id,
+                autonomous=autonomous,
+                event_sink=_event_sink,
+            )
+            task_manager.update_task(
+                task_id,
+                state=TaskState.DONE,
+                progress="Complete",
+                result=result,
+                progress_percent=100.0,
+            )
+        except Exception as exc:
+            task_manager.update_task(
+                task_id,
+                state=TaskState.FAILED,
+                error=str(exc),
+                progress_percent=100.0,
+            )
+            raise
+        return {**result, "task_id": task_id}
 
     async def mcp_agent_review_confirm(
         task_id: str,

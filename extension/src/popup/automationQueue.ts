@@ -1,8 +1,8 @@
 import type { DetailPageBatchItem } from "./types";
 
-const DEFAULT_CONCURRENCY = 2;
+const DEFAULT_CONCURRENCY = 5;
 const MIN_CONCURRENCY = 1;
-const MAX_CONCURRENCY = 3;
+const MAX_CONCURRENCY = 5;
 const DEFAULT_TAB_TIMEOUT_MS = 25_000;
 const DEFAULT_SETTLE_DELAY_MS = 1_000;
 const DEFAULT_MIN_HTML_LENGTH = 32;

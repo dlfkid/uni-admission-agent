@@ -39,7 +39,7 @@ class TaskInfo:
     __slots__ = (
         "task_id", "state", "progress", "result", "error",
         "logs", "params", "tokens_used", "progress_percent", "progress_meta",
-        "created_at", "completed_at",
+        "events", "created_at", "completed_at",
     )
 
     def __init__(self, task_id: str) -> None:
@@ -53,6 +53,7 @@ class TaskInfo:
         self.tokens_used: int = 0
         self.progress_percent: float = 0.0
         self.progress_meta: Dict[str, Any] = {}
+        self.events: List[Dict[str, Any]] = []
         self.created_at: float = time.monotonic()
         self.completed_at: Optional[float] = None
 
@@ -69,6 +70,7 @@ class TaskInfo:
             "tokens_used": self.tokens_used,
             "progress_percent": self.progress_percent,
             "progress_meta": self.progress_meta,
+            "events": self.events,
         }
 
 
@@ -153,6 +155,12 @@ class TaskManager:
             if len(info.logs) > MAX_LOGS_PER_TASK:
                 # FIFO: discard oldest entries
                 info.logs = info.logs[-MAX_LOGS_PER_TASK:]
+
+    def add_event(self, task_id: str, event: Dict[str, Any]) -> None:
+        """Append a structured event to the task in arrival order."""
+        info = self._task_store.get(task_id)
+        if info:
+            info.events.append(dict(event))
 
     def update_task(
         self,

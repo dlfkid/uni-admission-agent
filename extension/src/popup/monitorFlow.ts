@@ -39,7 +39,15 @@ export function initMonitorFlow(deps: MonitorFlowDeps): {
     } = deps;
 
     let activePollInterval: number | null = null;
+    let activeEventSource: EventSource | null = null;
     let externalBatchLogs: string[] = [];
+    // SSE-streamed event lines (separate from server-side task logs)
+    let streamingLines: string[] = [];
+    let programCounter = 0;
+    let accumulatedTokens = 0;
+    // Accumulates summary_delta tokens until summary_finished
+    let summaryBuffer = "";
+    let summaryLineIndex = -1; // index in streamingLines where summary text lives
 
     function resolveProgressPercent(payload: Record<string, unknown>, state: string): number {
         const raw = payload.progress_percent;
@@ -58,6 +66,165 @@ export function initMonitorFlow(deps: MonitorFlowDeps): {
         return 0;
     }
 
+    // Map an SSE event object to a human-readable log line (or null to skip).
+    function formatEvent(evt: Record<string, unknown>): string | null {
+        const type = String(evt.type || "");
+        const ts = new Date().toLocaleTimeString([], { hour12: false });
+        switch (type) {
+            case "agent_started":
+                return `[${ts}] [Agent] Started`;
+            case "llm_call_started":
+                return `[${ts}] [LLM] Thinking… (iter ${evt.iteration ?? "?"})`;
+            case "llm_call_finished":
+                return `[${ts}] [LLM] Response received`;
+            case "agent_thinking":
+                return `[${ts}] [Think] ${evt.text ?? ""}`;
+            case "agent_thinking_delta": {
+                // Append to the last streaming line instead of creating a new one
+                const chunk = String(evt.text ?? "");
+                if (streamingLines.length > 0 && streamingLines[streamingLines.length - 1].includes("[Think]")) {
+                    streamingLines[streamingLines.length - 1] += chunk;
+                } else {
+                    streamingLines.push(`[${ts}] [Think] ${chunk}`);
+                }
+                renderLogsConsole();
+                return null; // already handled
+            }
+            case "tool_call_started":
+                return `[${ts}] [Tool] → ${evt.tool ?? evt.tool_name ?? evt.name ?? "unknown"}`;
+            case "tool_call_finished": {
+                const toolName = String(evt.tool ?? evt.tool_name ?? evt.name ?? "unknown");
+                if (toolName === "persist_programs_skill") {
+                    programCounter++;
+                    showStatus(`Running… ${programCounter} program(s) saved`, "info");
+                }
+                return `[${ts}] [Tool] ✓ ${toolName}`;
+            }
+            case "token_usage": {
+                const total = Number(evt.total_tokens ?? 0);
+                if (total > 0) {
+                    accumulatedTokens += total;
+                    tokenDisplay.textContent = `Tokens: ${accumulatedTokens.toLocaleString()}`;
+                }
+                return null;
+            }
+            case "persist_started":
+                return `[${ts}] [Persist] Saving programs…`;
+            case "persist_finished":
+                return `[${ts}] [Persist] Done`;
+            case "summary_started":
+                return `[${ts}] [Summary] `;
+            case "summary_finished":
+                return null; // handled inline via summary_delta
+            case "agent_done":
+                return `[${ts}] [Agent] Completed`;
+            case "agent_failed":
+                return `[${ts}] [Agent] Failed: ${evt.error ?? ""}`;
+            case "runtime_fallback":
+                return `[${ts}] [Runtime] Falling back to legacy`;
+            default:
+                return null;
+        }
+    }
+
+    function renderLogsConsole() {
+        const allLines = [...externalBatchLogs, ...streamingLines];
+        const text = allLines.join("\n");
+        const isScrolledToBottom =
+            logsConsole.scrollHeight - logsConsole.scrollTop <= logsConsole.clientHeight + 50;
+        if (logsConsole.textContent !== text) {
+            logsConsole.textContent = text;
+            if (isScrolledToBottom) {
+                logsConsole.scrollTop = logsConsole.scrollHeight;
+            }
+        }
+    }
+
+    function stopEventStream() {
+        if (activeEventSource) {
+            activeEventSource.close();
+            activeEventSource = null;
+        }
+    }
+
+    function startEventStream(taskId: string) {
+        stopEventStream();
+        summaryBuffer = "";
+        summaryLineIndex = -1;
+
+        const url = `${apiBase}/tasks/${taskId}/events`;
+        const es = new EventSource(url);
+        activeEventSource = es;
+
+        es.onmessage = (msgEvt) => {
+            let parsed: Record<string, unknown>;
+            try {
+                parsed = JSON.parse(String(msgEvt.data)) as Record<string, unknown>;
+            } catch {
+                return;
+            }
+
+            const type = String(parsed.type || "");
+
+            if (type === "summary_delta") {
+                const delta = String(parsed.delta ?? "");
+                summaryBuffer += delta;
+                if (summaryLineIndex < 0) {
+                    // First delta — create the summary line
+                    const ts = new Date().toLocaleTimeString([], { hour12: false });
+                    streamingLines.push(`[${ts}] [Summary] ${summaryBuffer}`);
+                    summaryLineIndex = streamingLines.length - 1;
+                } else {
+                    // Update existing summary line in place
+                    streamingLines[summaryLineIndex] =
+                        streamingLines[summaryLineIndex].replace(
+                            / \[Summary\] .*$/,
+                            ` [Summary] ${summaryBuffer}`,
+                        );
+                }
+                renderLogsConsole();
+                return;
+            }
+
+            const line = formatEvent(parsed);
+            if (line !== null) {
+                streamingLines.push(line);
+                // Keep buffer bounded
+                if (streamingLines.length > 200) {
+                    streamingLines = streamingLines.slice(-200);
+                    if (summaryLineIndex >= 0) {
+                        summaryLineIndex = Math.max(0, summaryLineIndex - (streamingLines.length - 200));
+                    }
+                }
+                renderLogsConsole();
+            }
+
+            // Close on terminal events
+            if (type === "agent_done" || type === "agent_failed") {
+                es.close();
+                activeEventSource = null;
+            }
+        };
+
+        es.onerror = () => {
+            // EventSource auto-retries on network errors; close only if task is terminal
+            void (async () => {
+                try {
+                    const res = await fetch(`${apiBase}/tasks/${taskId}`);
+                    if (res.ok) {
+                        const data = await res.json() as { state?: string };
+                        if (data.state === "DONE" || data.state === "FAILED") {
+                            es.close();
+                            activeEventSource = null;
+                        }
+                    }
+                } catch {
+                    // ignore
+                }
+            })();
+        };
+    }
+
     function startMonitoring(taskId: string) {
         switchView("monitor");
         taskIdDisplay.textContent = taskId;
@@ -74,6 +241,17 @@ export function initMonitorFlow(deps: MonitorFlowDeps): {
         progressFill.style.backgroundColor = "var(--accent)";
         progressFill.style.width = "2%";
 
+        // Reset streaming state
+        streamingLines = [];
+        summaryBuffer = "";
+        summaryLineIndex = -1;
+        programCounter = 0;
+        accumulatedTokens = 0;
+
+        // Start SSE stream for real-time events
+        startEventStream(taskId);
+
+        // Keep slow poll for progress bar / token count / terminal state
         void pollTask(taskId);
         if (activePollInterval) {
             clearInterval(activePollInterval);
@@ -88,6 +266,7 @@ export function initMonitorFlow(deps: MonitorFlowDeps): {
             clearInterval(activePollInterval);
             activePollInterval = null;
         }
+        stopEventStream();
     }
 
     function setBatchSummary(summary: string) {
@@ -129,7 +308,7 @@ export function initMonitorFlow(deps: MonitorFlowDeps): {
             }
 
             const data = await res.json();
-            const { state, progress, logs, error, result } = data;
+            const { state, progress, error, result } = data;
 
             progressText.textContent = `${state}: ${progress || "..."}`;
             const progressPercent = resolveProgressPercent(data as Record<string, unknown>, state);
@@ -150,12 +329,12 @@ export function initMonitorFlow(deps: MonitorFlowDeps): {
                 continueBtn.classList.remove("hidden");
             }
 
-            if (logs && Array.isArray(logs)) {
-                const mergedLogs = [...externalBatchLogs, ...logs.map((item) => String(item))];
+            // Server-side task logs (fallback for non-agent tasks or when SSE has no events)
+            if (data.logs && Array.isArray(data.logs) && streamingLines.length === 0) {
+                const mergedLogs = [...externalBatchLogs, ...data.logs.map((item: unknown) => String(item))];
                 const text = mergedLogs.join("\n");
                 const isScrolledToBottom =
                     logsConsole.scrollHeight - logsConsole.scrollTop <= logsConsole.clientHeight + 50;
-
                 if (logsConsole.textContent !== text) {
                     logsConsole.textContent = text;
                     if (isScrolledToBottom) {
@@ -166,7 +345,8 @@ export function initMonitorFlow(deps: MonitorFlowDeps): {
 
             if (state === "DONE") {
                 stopPolling();
-                showStatus(`Completed! Imported: ${result?.imported_count ?? 0}`, "success");
+                const count = result?.program_count ?? result?.imported_count ?? programCounter;
+                showStatus(`Completed! ${count} program(s) saved`, "success");
             } else if (state === "FAILED") {
                 stopPolling();
                 showStatus(`Failed: ${error}`, "error");
