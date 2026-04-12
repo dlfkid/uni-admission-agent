@@ -39,17 +39,20 @@ Entry Points                    Services Layer              Infrastructure
 - [Phase 3: Quality System Seed (golden samples + scoring + CI gate)](docs/changelog_phase3_quality_system.md)
 - [Consolidated Progress Log](change_log.md)
 
-## ✅ Current Optimization Status (2026-03-19)
+## ✅ Current Optimization Status (2026-04-06)
 - Phase 1 complete: versioned requirement data model and evidence chain are in place.
 - Phase 2 complete: crawl flow now runs through staged ingestion pipeline by default, including `--continue > 0` paths.
 - Phase 3 seed complete: golden sample collection, offline quality scoring, and CI regression gate are enabled.
 - Taxonomy-guided name accuracy is enabled for crawl requests (hint injection + optional high-confidence override).
 - Latest benchmark includes 4 cases (UCL/Manchester/Leeds/PolyU) and passes global threshold `0.60`.
 - **Agent Runtime (s01–s12)**: Full LLM-driven agent loop with tool dispatch, task DAG, subagents, team coordination, background execution, context compression, and git worktree isolation.
+- **Schema-based extraction**: agent auto-fetch now learns per-template CSS selectors from the first detail page, reuses them on sibling pages, and falls back to field-level or full-page LLM extraction when coverage drops.
 - Agent streaming boundary:
   - Agent lifecycle progress is available via task events / SSE.
   - Final user-visible agent summary may stream token deltas or fall back to one-shot text.
   - Structured extraction paths remain non-streaming for stability, including cleaner extraction, page-type classification, and name resolution.
+- **Agent chat mode**: free-form server-side agent chat is available via `POST /agent/chat`, with the same `/tasks/{id}/events` SSE channel used for thinking/tool/summary updates.
+- **Automatic file logging**: backend CLI/server runs now emit rotated timestamped `.txt` logs automatically.
 
 ## Production Usage (No Code Required)
 
@@ -488,6 +491,9 @@ curl -X POST http://localhost:8910/analyze \
 # Check task status
 curl http://localhost:8910/tasks/{task_id}
 
+# Stream task events over SSE (agent progress / thinking / summary deltas)
+curl http://localhost:8910/tasks/{task_id}/events
+
 # Run opt-in agent orchestration (requires AGENT_ENABLED=true)
 curl -X POST http://localhost:8910/agent/run \
   -H "Content-Type: application/json" \
@@ -500,6 +506,13 @@ curl -X POST http://localhost:8910/agent/run \
       "batch_size": 4,
       "taxonomy_auto_threshold": 0.92
     }
+  }'
+
+# Start a free-form agent chat task (server-side LLM only)
+curl -X POST http://localhost:8910/agent/chat \
+  -H "Content-Type: application/json" \
+  -d '{
+    "message": "Summarize the current crawl/runtime architecture for me."
   }'
 
 # Confirm low-confidence onhold selections for one finished agent task
@@ -614,6 +627,7 @@ uv run src/cmd/client_cli.py init
 uv run src/cmd/client_cli.py status
 uv run src/cmd/client_cli.py start --continuous
 uv run src/cmd/client_cli.py stop
+uv run src/cmd/client_cli.py chat
 
 # Or run as a background daemon (does not occupy the terminal)
 uv run src/cmd/client_cli.py start-install
@@ -652,6 +666,17 @@ Optional override example:
 ```bash
 export ADM_AGENT_CLIENT_FETCH_CMD='adm-agent-client fetch --url "{url}" --page-type "{page_type_hint}" --json'
 ```
+
+**Interactive agent chat:**
+- `uv run src/cmd/client_cli.py chat`
+- Connects to the configured serve endpoint, submits `POST /agent/chat`, then renders live `/tasks/{task_id}/events` SSE output in the terminal.
+
+### Runtime Logs
+
+- Backend CLI / server commands automatically write rotated timestamped `.txt` logs.
+- In source mode, logs are written to the current working directory.
+- In bundled executable mode, logs are written beside the executable.
+- `adm-agent-client start-install` still writes daemon logs to `~/.adm-agent-client/client.log`.
 
 ### Platform Permissions
 

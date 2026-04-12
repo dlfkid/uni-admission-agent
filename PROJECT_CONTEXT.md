@@ -12,17 +12,20 @@ Build a trusted, self-updating database of university admission requirements.
 - **Phase 2 staged ingestion pipeline** with persisted job/task state and resume-from-stage
 - **Phase 3 golden-sample quality system** with offline scoring + CI regression gate
 - **Taxonomy-guided program-name resolution** (signal matching + conditional hint injection + high-confidence override)
+- **Schema-based detail-page extraction** with selector learning, cached reuse, and field/full-page LLM fallback
 - Stealth browsing with anti-detection mechanisms
 - **Cookie consent auto-dismissal** with JS injection to prevent navigation hijacking
 - **Resilient Pydantic validation** with field validators for LLM response edge cases
 - **Chrome Extension** with interactive control, real-time monitoring, and database preview
 - **Serve ↔ Client browser automation bridge** (`/clients/ws`) for MCP/REST-triggered user-side automation
 - **Opt-in Agent Runtime layer** (`legacy` + `pydanticai`) with default-off safety gate
+- **Agent chat entrypoint** (`POST /agent/chat`) with SSE event streaming on `/tasks/{id}/events`
 - **Typed Agent Bridge contracts** (`src/agent_bridge`) decoupling runtime orchestration from core services
 - **Dual MCP toolsets**: base tools (external-LLM friendly) + conditional `_internal_llm` tools
 - **Runtime-aware MCP metadata**: provider resolution + client selection visibility
 - **Policy profile precedence and normalization** (`request > client > server`) with warning output
 - **Post-persist review-and-patch loop** with stable `program_id` correction path
+- **Automatic rotated file logging** for backend CLI / server runs
 - **Stand-alone Executable** build for easy distribution
 
 ---
@@ -38,6 +41,7 @@ Build a trusted, self-updating database of university admission requirements.
 | **API / Control** | `fastapi`, `uvicorn`, `mcp` (Model Context Protocol) |
 | **Agent Runtime** | LLM-driven loop (s01–s12) + `pydantic` typed contracts + runtime factory (`legacy` / `pydanticai`) |
 | **Client Bridge** | FastAPI WebSocket + `websockets` runtime client |
+| **Logging** | stdlib `logging` + `loguru` rotated file sink |
 | **CLI** | `typer` |
 | **Build** | `pyinstaller` (Backend + Client), `npm` (Extension) |
 | **Migration** | `alembic` |
@@ -64,11 +68,21 @@ L3+: Scout-recommended pages
   ↓ Recurse
 ```
 
+#### 3.1.1 Schema-Based Detail Extraction
+
+For agent-driven index crawls, the system now short-circuits repeated LLM extraction work:
+- page 1 uses the normal LLM cleaner path to obtain structured fields
+- `SchemaLearner` infers reusable CSS selectors and stores a `SelectorSchema` under `.adm-agent/schemas/`
+- sibling detail pages reuse those selectors through `SelectorExtractor`
+- when selector coverage drops, `FallbackHandler` chooses field-level repair or full-page LLM fallback
+- degraded schemas are automatically deprecated and relearned
+
 ### 3.2 Chrome Extension & API
 
 The system exposes a REST API and MCP server for external control.
 -   **Server**: `src/api/server.py` (FastAPI)
 -   **Protocol**: HTTP + SSE (Server-Sent Events) for real-time logs
+-   **Agent chat**: `POST /agent/chat` returns a task id; `GET /tasks/{id}/events` streams thinking/tool/summary events
 -   **Extension**: Vite/TypeScript-based UI in `extension/` directory.
     -   Connects to `http://localhost:8910`
     -   Displays real-time logs and token usage
@@ -187,6 +201,7 @@ Enablement and runtime selection:
 
 Entrypoints:
 - REST: `POST /agent/run`
+- REST chat: `POST /agent/chat`
 - REST confirm: `POST /agent/review/confirm`
 - MCP: `agent_run` and `agent_review_confirm` tools (registered only when `AGENT_ENABLED=true`)
 
@@ -241,6 +256,12 @@ Policy profile behavior:
 - Invalid values are normalized with `warnings` in merge result
 - Client runtime can attach local `policy_profile` to browser RPC payloads
 
+Runtime logging behavior:
+- backend CLI / server startup enables rotated timestamped `.txt` file logs automatically
+- dev/source mode writes logs to the current working directory
+- frozen builds write logs beside the executable
+- `adm-agent-client start-install` separately writes daemon logs to `~/.adm-agent-client/client.log`
+
 ---
 
 ## 4. Build & Distribution System
@@ -276,7 +297,7 @@ uni-admission-agent/
 │   ├── agents/             # LLM logic (Router, Cleaner)
 │   ├── api/                # FastAPI + MCP Server
 │   ├── cmd/                # CLI Entry Points
-│   ├── core/               # Core utilities (paths, env, config)
+│   ├── core/               # Core utilities (paths, env, config, file logging)
 │   ├── models/             # DB & Pydantic schemas
 │   ├── scrapers/           # Crawling logic (Engine, Browser)
 │   ├── services/           # Business logic (Crawler Service)
@@ -325,6 +346,9 @@ uv run src/cmd/cli.py ingestion-resume --job <job_uid> --stage validate_rules
 uv run src/cmd/cli.py golden-collect --overwrite
 uv run src/cmd/cli.py quality-score --threshold 0.60
 uv run src/cmd/cli.py taxonomy-export --output golden_samples/program_names/cleaned_programs_names.json --include-learned --min-confidence 0.90
+
+# Interactive agent chat via server-side LLM
+uv run src/cmd/client_cli.py chat
 ```
 
 Default backend upgrade delivery remains `upgrade` followed by `db-migrate`.
