@@ -115,6 +115,7 @@ class PydanticAIRuntime:
                     univ_slug=str(payload.get("univ_slug", "")),
                     year=int(payload.get("year", 0) or 0),
                     dry_run=bool(request.context.get("dry_run", False)),
+                    auto_paginate=bool(payload.get("auto_paginate", False)),
                 ),
                 timeout=PAGE_TIMEOUT,
             )
