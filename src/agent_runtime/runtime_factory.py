@@ -1,4 +1,4 @@
-"""Runtime factory for opt-in agent orchestration modes."""
+"""Runtime factory for agent orchestration modes."""
 
 from __future__ import annotations
 

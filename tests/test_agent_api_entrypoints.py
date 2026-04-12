@@ -7,8 +7,8 @@ from src.api.server import app
 from src.api.task_manager import TaskManager
 
 
-def test_agent_run_endpoint_disabled_returns_409(monkeypatch) -> None:
-    monkeypatch.delenv("AGENT_ENABLED", raising=False)
+def test_agent_run_endpoint_explicitly_disabled_returns_409(monkeypatch) -> None:
+    monkeypatch.setenv("AGENT_ENABLED", "false")
     monkeypatch.setattr("src.api.server.task_manager", TaskManager())
 
     with (
@@ -28,8 +28,8 @@ def test_agent_run_endpoint_disabled_returns_409(monkeypatch) -> None:
     assert response.status_code == 409
 
 
-def test_agent_run_endpoint_enabled_returns_task_id(monkeypatch) -> None:
-    monkeypatch.setenv("AGENT_ENABLED", "true")
+def test_agent_run_endpoint_enabled_by_default_returns_task_id(monkeypatch) -> None:
+    monkeypatch.delenv("AGENT_ENABLED", raising=False)
     monkeypatch.setattr("src.api.server.task_manager", TaskManager())
 
     with (

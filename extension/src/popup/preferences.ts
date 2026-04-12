@@ -1,5 +1,4 @@
 import {
-    agentModeEnabledCheckbox,
     automationConcurrencyInput,
     browserAutomationCheckbox,
     exportMdCheckbox,
@@ -31,7 +30,6 @@ export const TAXONOMY_HINT_TOP_K_KEY = "crawl_taxonomy_hint_top_k";
 export const TAXONOMY_OVERRIDE_ENABLED_KEY = "crawl_taxonomy_override_enabled";
 export const BROWSER_AUTOMATION_ENABLED_KEY = "crawl_browser_automation_enabled";
 export const BROWSER_AUTOMATION_CONCURRENCY_KEY = "crawl_browser_automation_concurrency";
-export const AGENT_MODE_ENABLED_KEY = "crawl_agent_mode_enabled";
 export const DETAIL_BATCH_SIZE = 10;
 
 // ---------------------------------------------------------------------------
@@ -40,7 +38,6 @@ export const DETAIL_BATCH_SIZE = 10;
 
 export function restoreCachedPreferences(callbacks: {
     updateTaxonomySettingsVisibility: () => void;
-    updateAgentModeSectionVisibility: () => void;
 }): void {
     const cachedPageType = localStorage.getItem(PAGE_TYPE_KEY);
     if (cachedPageType && ["auto", "index", "detail"].includes(cachedPageType)) {
@@ -79,9 +76,6 @@ export function restoreCachedPreferences(callbacks: {
     const cachedConcurrencyRaw = localStorage.getItem(BROWSER_AUTOMATION_CONCURRENCY_KEY);
     const cachedConcurrencyValue = cachedConcurrencyRaw ? parseInt(cachedConcurrencyRaw, 10) : 2;
     automationConcurrencyInput.value = String(clampAutomationConcurrency(cachedConcurrencyValue));
-
-    const cachedAgentModeEnabled = localStorage.getItem(AGENT_MODE_ENABLED_KEY);
-    agentModeEnabledCheckbox.checked = cachedAgentModeEnabled === "true";
 
     callbacks.updateTaxonomySettingsVisibility();
 }
@@ -144,9 +138,5 @@ export function initPreferenceListeners(callbacks: {
         );
         automationConcurrencyInput.value = String(clamped);
         localStorage.setItem(BROWSER_AUTOMATION_CONCURRENCY_KEY, String(clamped));
-    });
-
-    agentModeEnabledCheckbox.addEventListener("change", () => {
-        localStorage.setItem(AGENT_MODE_ENABLED_KEY, String(agentModeEnabledCheckbox.checked));
     });
 }

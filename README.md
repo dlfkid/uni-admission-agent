@@ -141,8 +141,8 @@ The agent needs a database connection.
    # Supported providers: deepseek, gemini, volcengine, custom
    LLM_PRIORITY_LIST=deepseek, gemini, volcengine, custom
 
-   # Agent runtime (opt-in, disabled by default)
-   AGENT_ENABLED=false
+   # Agent runtime (enabled by default; can still be overridden explicitly)
+   AGENT_ENABLED=true
    AGENT_RUNTIME=pydanticai
    AGENT_ALLOW_INTERNAL_LLM=true
    AGENT_ALLOW_EXTERNAL_LLM=true
@@ -389,12 +389,11 @@ upgrade delivery path (`upgrade` → `db-migrate`).
 # Start the API + MCP server (default: 0.0.0.0:8910)
 ./adm-agent serve
 ./adm-agent serve --port 9000
-./adm-agent serve --agent
-./adm-agent serve --agent --dry-run
+./adm-agent serve --dry-run
 
 # Start server as a background daemon (does not occupy the terminal)
 ./adm-agent serve-install
-./adm-agent serve-install --agent --port 9000
+./adm-agent serve-install --port 9000
 
 # Stop a running server (works for both serve and serve-install)
 ./adm-agent serve-stop
@@ -405,12 +404,11 @@ upgrade delivery path (`upgrade` → `db-migrate`).
 # Start the API + MCP server (default: 0.0.0.0:8910)
 .\adm-agent.exe serve
 .\adm-agent.exe serve --port 9000
-.\adm-agent.exe serve --agent
-.\adm-agent.exe serve --agent --dry-run
+.\adm-agent.exe serve --dry-run
 
 # Start server as a background daemon
 .\adm-agent.exe serve-install
-.\adm-agent.exe serve-install --agent --port 9000
+.\adm-agent.exe serve-install --port 9000
 
 # Stop a running server (works for both serve and serve-install)
 .\adm-agent.exe serve-stop
@@ -424,9 +422,10 @@ is not running, `serve-stop` exits cleanly with an informational message.
 `~/.adm-agent/server.log`. The daemon keeps running after the terminal is closed.
 `serve-stop` terminates both foreground and daemon server instances.
 
-Agent runtime is **disabled by default**. Enable explicitly with `--agent` or
-`AGENT_ENABLED=true`. Runtime mode can be selected via `AGENT_RUNTIME=legacy|pydanticai`
-(default `pydanticai`), and `pydanticai` mode automatically falls back to `legacy` on runtime errors.
+Agent runtime is **enabled by default** for normal server startup. You can still
+override it explicitly with `AGENT_ENABLED=false` for compatibility or debugging.
+Runtime mode can be selected via `AGENT_RUNTIME=legacy|pydanticai` (default `pydanticai`),
+and `pydanticai` mode automatically falls back to `legacy` on runtime errors.
 
 #### Agent Capabilities (s01–s12)
 
@@ -494,7 +493,7 @@ curl http://localhost:8910/tasks/{task_id}
 # Stream task events over SSE (agent progress / thinking / summary deltas)
 curl http://localhost:8910/tasks/{task_id}/events
 
-# Run opt-in agent orchestration (requires AGENT_ENABLED=true)
+# Run agent orchestration (enabled by default unless explicitly disabled)
 curl -X POST http://localhost:8910/agent/run \
   -H "Content-Type: application/json" \
   -d '{
@@ -558,7 +557,7 @@ Base toolset (always registered):
 - **`program_patch_batch`** — Batch patch multiple `program_id` items with partial-failure reporting.
 - **`help`** — Return CLI help text and command overview.
 
-Agent toolset (registered only when `AGENT_ENABLED=true`):
+Agent toolset (registered by default unless agent runtime is explicitly disabled):
 - **`agent_run`** — Execute one agent orchestration request (`runtime=legacy|pydanticai`). Supports `autonomous=true` for fully autonomous mode (server-side LLM drives all decisions) or `autonomous=false` (default) for external-LLM-driven mode where the calling LLM controls orchestration. Accepts optional `client_id` to target a specific browser client.
 - **`agent_review_confirm`** — Confirm low-confidence onhold indices for an existing `agent_run` task.
 
@@ -726,7 +725,7 @@ The extension provides a UI to interact with the agent.
 - Configure settings (database URL, LLM keys) via the gear icon.
 - Enter a university slug (e.g., `hku`) and year, then start crawling.
 - Adjust per-task taxonomy overrides in popup (enable, low/high thresholds, top-k hints, override toggle).
-- **Agent Mode toggle**: When the server is started with `--agent`, an agent mode switch appears in the popup. Enable it to let the server-side LLM autonomously handle page analysis and candidate selection via `POST /agent/run` (`autonomous=true`). Preference is persisted across sessions.
+- The popup now defaults to the agent orchestration path via `POST /agent/run`. If agent runtime is explicitly disabled on the server, the popup falls back to the older analyze/manual-selection flow.
 - **Preview Database** (👁 icon): Browse stored programs with filters by university and year.
 - **Export to Excel** (📥 icon): Download program data as XLSX files.
 

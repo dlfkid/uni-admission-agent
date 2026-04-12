@@ -644,13 +644,13 @@ async def api_crawl(body: CrawlRequest) -> CrawlResponse:
 
 @app.post("/agent/run", response_model=AgentRunResponse)
 async def api_agent_run(body: AgentRunRequest) -> AgentRunResponse:
-    """Submit one opt-in agent orchestration job."""
+    """Submit one agent orchestration job."""
     if not is_agent_enabled():
         raise HTTPException(
             status_code=409,
             detail=(
-                "Agent runtime is disabled. "
-                "Enable with AGENT_ENABLED=true or start server with --agent."
+                "Agent runtime is disabled for this server process. "
+                "Set AGENT_ENABLED=true to re-enable it."
             ),
         )
 
@@ -753,8 +753,8 @@ async def api_agent_chat(body: AgentChatRequest) -> AgentChatResponse:
         raise HTTPException(
             status_code=409,
             detail=(
-                "Agent runtime is disabled. "
-                "Enable with AGENT_ENABLED=true or start server with --agent."
+                "Agent runtime is disabled for this server process. "
+                "Set AGENT_ENABLED=true to re-enable it."
             ),
         )
 
@@ -853,8 +853,8 @@ async def api_agent_review_confirm(body: AgentReviewConfirmRequest) -> AgentRevi
         raise HTTPException(
             status_code=409,
             detail=(
-                "Agent runtime is disabled. "
-                "Enable with AGENT_ENABLED=true or start server with --agent."
+                "Agent runtime is disabled for this server process. "
+                "Set AGENT_ENABLED=true to re-enable it."
             ),
         )
 

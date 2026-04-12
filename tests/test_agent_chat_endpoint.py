@@ -40,8 +40,8 @@ def test_agent_chat_response_has_task_id():
 # ---------------------------------------------------------------------------
 
 
-def test_chat_endpoint_disabled_returns_409(monkeypatch) -> None:
-    monkeypatch.delenv("AGENT_ENABLED", raising=False)
+def test_chat_endpoint_explicitly_disabled_returns_409(monkeypatch) -> None:
+    monkeypatch.setenv("AGENT_ENABLED", "false")
     monkeypatch.setattr("src.api.server.task_manager", TaskManager())
 
     with (
@@ -54,8 +54,8 @@ def test_chat_endpoint_disabled_returns_409(monkeypatch) -> None:
     assert resp.status_code == 409
 
 
-def test_chat_endpoint_returns_task_id(monkeypatch) -> None:
-    monkeypatch.setenv("AGENT_ENABLED", "true")
+def test_chat_endpoint_enabled_by_default_returns_task_id(monkeypatch) -> None:
+    monkeypatch.delenv("AGENT_ENABLED", raising=False)
     monkeypatch.setattr("src.api.server.task_manager", TaskManager())
 
     async def _fake_chat(**_kwargs):

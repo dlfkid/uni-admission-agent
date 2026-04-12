@@ -23,4 +23,4 @@ def is_agent_enabled_env(explicit_flag: bool | None = None) -> bool:
     """Resolve whether agent runtime is enabled from explicit flag/env."""
     if explicit_flag is not None:
         return bool(explicit_flag)
-    return is_truthy_env("AGENT_ENABLED", default="false")
+    return is_truthy_env("AGENT_ENABLED", default="true")

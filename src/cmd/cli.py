@@ -730,7 +730,7 @@ def serve(
     agent: bool = typer.Option(
         False,
         "--agent",
-        help="Enable agent runtime for this server process",
+        help="Force-enable agent runtime for this server process (default: enabled)",
     ),
     dry_run: bool = typer.Option(
         False,
@@ -813,7 +813,7 @@ def serve_install(
     agent: bool = typer.Option(
         False,
         "--agent",
-        help="Enable agent runtime for this server process",
+        help="Force-enable agent runtime for this server process (default: enabled)",
     ),
     verbose: bool = typer.Option(False, "--verbose", "-v"),
 ) -> None:

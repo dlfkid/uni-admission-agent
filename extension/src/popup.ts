@@ -16,8 +16,6 @@
  */
 
 import {
-    agentModeSection,
-    agentModeEnabledCheckbox,
     batchSummaryText,
     closeConfigBtn,
     closeExportBtn,
@@ -110,7 +108,7 @@ const API_BASE = "http://localhost:8910";
 
 let currentWindowId: number | null = null;
 let monitorFlow: ReturnType<typeof initMonitorFlow> | null = null;
-let serverAgentEnabled = false;  // Whether server has agent runtime enabled
+let serverAgentEnabled = false;  // Whether server currently allows the default agent path
 
 // ---------------------------------------------------------------------------
 //  UI Helpers
@@ -217,15 +215,6 @@ function switchView(view: "input" | "link-selection" | "monitor") {
     }
 }
 
-function updateAgentModeSectionVisibility(): void {
-    if (serverAgentEnabled) {
-        agentModeSection.classList.remove("hidden");
-    } else {
-        agentModeSection.classList.add("hidden");
-        agentModeEnabledCheckbox.checked = false;
-    }
-}
-
 // ---------------------------------------------------------------------------
 //  Logs toggle
 // ---------------------------------------------------------------------------
@@ -323,7 +312,6 @@ async function init() {
     // Restore cached preferences
     restoreCachedPreferences({
         updateTaxonomySettingsVisibility,
-        updateAgentModeSectionVisibility,
     });
     clearPreflightLogs();
 
@@ -334,18 +322,16 @@ async function init() {
     // Initialize logs toggle state
     initLogsToggle();
 
-    // Check server status to see if agent mode is available
+    // Check server status so the popup can fall back only if agent is explicitly disabled
     try {
         const statusRes = await fetch(`${API_BASE}/status`);
         if (statusRes.ok) {
             const statusData = await statusRes.json();
             serverAgentEnabled = Boolean(statusData.agent_enabled);
-            updateAgentModeSectionVisibility();
         }
     } catch (err) {
         console.warn("Failed to check server agent status:", err);
         serverAgentEnabled = false;
-        updateAgentModeSectionVisibility();
     }
 
     // Load university slugs for autocomplete

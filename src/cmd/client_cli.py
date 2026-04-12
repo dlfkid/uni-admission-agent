@@ -428,7 +428,7 @@ async def _chat_loop(server_override: str) -> None:
     if not status_data.get("agent_enabled"):
         typer.echo(
             "Agent is disabled on the server. "
-            "Start with: adm-agent serve --agent",
+            "Re-enable it with AGENT_ENABLED=true before chatting.",
             err=True,
         )
         raise typer.Exit(code=1)

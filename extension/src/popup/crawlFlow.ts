@@ -1,5 +1,4 @@
 import {
-    agentModeEnabledCheckbox,
     automationConcurrencyInput,
     browserAutomationCheckbox,
     cancelLinksBtn,
@@ -355,7 +354,7 @@ export function initCrawlFlow(deps: CrawlFlowDeps): void {
         const pageType = pageTypeSelect.value;
         const exportMd = exportMdCheckbox.checked;
         const exportPath = exportPathInput.value.trim();
-        const useAgentMode = serverAgentEnabled() && agentModeEnabledCheckbox.checked;
+        const useAgentMode = serverAgentEnabled();
 
         if (!slug || !year || !url || url.startsWith("(")) {
             appendPreflightLog("Input validation failed: invalid slug/year/url.");
@@ -381,7 +380,7 @@ export function initCrawlFlow(deps: CrawlFlowDeps): void {
 
         // Agent mode: use /agent/run with autonomous=true
         if (useAgentMode) {
-            appendPreflightLog("🤖 Agent mode enabled; submitting to /agent/run.");
+            appendPreflightLog("Submitting to /agent/run (default mode).");
             sendBtn.textContent = "Agent running…";
 
             try {

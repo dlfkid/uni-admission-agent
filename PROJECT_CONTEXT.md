@@ -186,14 +186,14 @@ Review-and-correction loop:
 - User corrections are applied via `program_patch` / `program_patch_batch`
 - Batch patch returns partial failures without aborting successful updates
 
-### 3.9 Opt-in Agent Runtime (PydanticAI Evolution)
+### 3.9 Default Agent Runtime (PydanticAI Evolution)
 
-Agent orchestration is integrated as an optional runtime layer and does not replace
+Agent orchestration is the default user-facing runtime layer and does not replace
 existing crawl/analyze entrypoints.
 
 Enablement and runtime selection:
-- Default: disabled (`AGENT_ENABLED=false`)
-- CLI explicit enable: `serve --agent`
+- Default: enabled (`AGENT_ENABLED=true` when unset)
+- CLI startup path: `serve` and `serve-install` run in agent mode by default
 - Runtime mode: `AGENT_RUNTIME=legacy|pydanticai` (default `pydanticai`)
 - Model mode gates:
   - `AGENT_ALLOW_INTERNAL_LLM=true|false`
@@ -203,11 +203,11 @@ Entrypoints:
 - REST: `POST /agent/run`
 - REST chat: `POST /agent/chat`
 - REST confirm: `POST /agent/review/confirm`
-- MCP: `agent_run` and `agent_review_confirm` tools (registered only when `AGENT_ENABLED=true`)
+- MCP: `agent_run` and `agent_review_confirm` tools (registered by default unless agent runtime is explicitly disabled)
 
 Safety and fallback:
 - `PydanticAIRuntime` failure automatically falls back to `LegacyRuntime`
-- Base REST/MCP tools remain unchanged when agent mode is disabled
+- Base REST/MCP tools remain unchanged when agent runtime is explicitly disabled
 - Streaming boundary:
   - `/tasks/{id}/events` provides SSE lifecycle updates for agent tasks.
   - The final user-visible summary may emit `summary_delta` events or gracefully fall back to one-shot text.
