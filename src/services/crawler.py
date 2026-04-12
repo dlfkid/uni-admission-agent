@@ -642,6 +642,8 @@ async def run_agent_crawl(
     autonomous: bool = False,
     dry_run: bool = False,
     event_sink: Any = None,
+    auto_paginate: bool = False,
+    max_pages: Optional[int] = None,
 ) -> dict[str, Any]:
     """Run crawl orchestration via configured agent runtime."""
     # Lazy import: runtime_factory → pydanticai_runtime → crawler forms a
@@ -663,6 +665,10 @@ async def run_agent_crawl(
     }
     if policy_profile:
         request_payload["policy_profile"] = dict(policy_profile)
+    if auto_paginate:
+        request_payload["auto_paginate"] = True
+    if max_pages is not None:
+        request_payload["max_pages"] = int(max_pages)
 
     response = await runtime.run(
         AgentRequest(
