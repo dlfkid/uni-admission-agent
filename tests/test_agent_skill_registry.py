@@ -15,3 +15,8 @@ def test_skill_input_validation_errors_on_bad_payload():
 
     with pytest.raises(ValidationError):
         registry.execute("analyze_page_skill", {"url": ""})
+
+
+def test_paginated_crawl_skill_registered():
+    registry = build_skill_registry()
+    assert "paginated_crawl_skill" in registry

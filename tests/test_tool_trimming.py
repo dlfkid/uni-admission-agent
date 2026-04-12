@@ -8,7 +8,7 @@ def _tool_names(tools: list[dict]) -> set[str]:
     return {t["function"]["name"] for t in tools}
 
 
-_ESSENTIAL_TOOLS = {"browser_automation_skill", "persist_programs_skill", "analyze_page_skill"}
+_ESSENTIAL_TOOLS = {"browser_automation_skill", "persist_programs_skill", "analyze_page_skill", "paginated_crawl_skill"}
 
 
 @pytest.fixture()

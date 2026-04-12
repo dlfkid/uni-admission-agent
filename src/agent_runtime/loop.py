@@ -106,6 +106,19 @@ You are a program crawler.
 CRITICAL: The `extracted_programs` data is already structured with correct field names
 (name_en, faculty, tuition_amount, study_options, deadlines, requirements, etc.).
 NEVER re-extract or reformat this data. Pass it directly to persist_programs_skill.
+
+## For index pages with auto-pagination requested:
+If the user message mentions auto-pagination, paginate, 翻页, all pages,
+or collect all courses:
+1. Call paginated_crawl_skill(url=<given URL>, univ_slug, year).
+2. The skill handles pagination detection, multi-page fetching,
+   quality checks, and extraction internally.
+3. If status is "done": call persist_programs_skill ONCE with the
+   returned programs array AS-IS.
+4. If status is "quality_failed": report the warning to the user.
+   Do NOT call persist_programs_skill — let the user decide.
+5. If status is "pagination_not_supported": inform the user that
+   SPA pagination was detected and auto-pagination is not yet supported.
 """
 
 
@@ -143,6 +156,12 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
         "For index pages (page_type_hint='index'), returns selected_urls — "
         "a list of detected detail page URLs. "
         "For detail pages (page_type_hint='detail'), returns the page HTML."
+    ),
+    "paginated_crawl_skill": (
+        "Crawl a multi-page or large index page with automatic pagination and "
+        "quality checks. Use ONLY when the user explicitly requests auto-pagination "
+        "(e.g. '翻页', 'paginate', 'all pages'). Handles URL-parameter pagination "
+        "and large single-page indexes. Returns extracted programs from all pages."
     ),
 }
 
@@ -729,6 +748,7 @@ def build_openai_tools(
         "browser_automation_skill",
         "persist_programs_skill",
         "analyze_page_skill",
+        "paginated_crawl_skill",
     }
 
     if page_type_hint in ("index", "detail", "auto"):

@@ -169,6 +169,11 @@ class PydanticAIRuntime:
                 f"Academic year: {year}",
                 f"Page type hint: {page_type_hint}",
             ]
+            auto_paginate = payload.get("auto_paginate", False)
+            if auto_paginate:
+                parts.append(
+                    "AUTO-PAGINATE REQUESTED: Use paginated_crawl_skill for this index page."
+                )
             return "\n".join(parts)
 
         if task == "chat":
