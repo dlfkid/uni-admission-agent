@@ -163,6 +163,7 @@ export interface SubmitAgentRunOpts {
     slug: string;
     year: number;
     pageType: string;
+    autoPaginate?: boolean;
 }
 
 export async function submitAgentRun(
@@ -176,6 +177,7 @@ export async function submitAgentRun(
         univ_slug: opts.slug,
         year: opts.year,
         page_type_hint: opts.pageType,
+        auto_paginate: opts.autoPaginate ?? false,
         runtime: "pydanticai",
         autonomous: true,  // Extension uses autonomous mode (server-side LLM drives all decisions)
         policy_profile: {
