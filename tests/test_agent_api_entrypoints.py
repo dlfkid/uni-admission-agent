@@ -111,3 +111,14 @@ def test_agent_run_task_records_events(monkeypatch) -> None:
         "agent_task_succeeded",
     }
     assert final_status["events"]
+
+
+def test_agent_run_request_accepts_auto_paginate():
+    from src.api.schemas import AgentRunRequest
+    req = AgentRunRequest(url="https://example.com", univ_slug="test", year=2026, auto_paginate=True)
+    assert req.auto_paginate is True
+
+def test_agent_run_request_auto_paginate_defaults_false():
+    from src.api.schemas import AgentRunRequest
+    req = AgentRunRequest(url="https://example.com", univ_slug="test", year=2026)
+    assert req.auto_paginate is False

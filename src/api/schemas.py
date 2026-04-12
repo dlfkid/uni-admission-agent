@@ -207,6 +207,10 @@ class AgentRunRequest(BaseModel):
         default=False,
         description="Skip DB persistence; return parsed results only",
     )
+    auto_paginate: bool = Field(
+        default=False,
+        description="When True, agent auto-paginates index pages and collects courses from all pages with quality checks",
+    )
 
 
 class AgentChatRequest(BaseModel):
