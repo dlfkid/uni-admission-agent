@@ -165,6 +165,7 @@ class PaginatedCrawlSkillOutput(BaseModel):
     total_pages_detected: Optional[int] = None
     pages_processed: int = 0
     programs: list[dict[str, Any]] = Field(default_factory=list)
+    extracted_programs: list[dict[str, Any]] = Field(default_factory=list)
     total_programs: int = 0
     quality_scores: list[dict[str, Any]] = Field(default_factory=list)
     warning: Optional[str] = None
