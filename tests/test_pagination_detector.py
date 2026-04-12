@@ -170,3 +170,67 @@ class TestStrategy4NoPagination:
         """
         result = detect_pagination(html, "https://www.polyu.edu.hk/study/pg/taught-postgraduate")
         assert result.pagination_type == "single_page"
+
+
+from pathlib import Path
+
+GOLDEN_DIR = Path(__file__).resolve().parent.parent / "golden_samples" / "cases"
+
+
+class TestGoldenSampleDetection:
+    """Test pagination detection against actual golden sample HTML files."""
+
+    def test_edinburgh_real_html(self):
+        html_path = GOLDEN_DIR / "edinburgh_undergrad_accounting_business" / "index.html"
+        if not html_path.exists():
+            pytest.skip("Golden sample not available")
+        html = html_path.read_text(encoding="utf-8")
+        result = detect_pagination(
+            html, "https://study.ed.ac.uk/programmes/undergraduate?page=0"
+        )
+        assert result.pagination_type == "url_param"
+        assert result.total_pages is not None and result.total_pages >= 70
+        assert len(result.page_urls) >= 70
+        assert result.confidence >= 0.8
+
+    def test_leeds_real_html(self):
+        html_path = GOLDEN_DIR / "leeds_masters_ai_business" / "index.html"
+        if not html_path.exists():
+            pytest.skip("Golden sample not available")
+        html = html_path.read_text(encoding="utf-8")
+        result = detect_pagination(
+            html, "https://courses.leeds.ac.uk/course-search/masters-courses"
+        )
+        assert result.pagination_type == "url_param"
+        assert result.total_pages is not None and result.total_pages >= 15
+        assert result.confidence >= 0.8
+
+    def test_ucl_real_html(self):
+        html_path = GOLDEN_DIR / "ucl_undergrad_anthropology" / "index.html"
+        if not html_path.exists():
+            pytest.skip("Golden sample not available")
+        html = html_path.read_text(encoding="utf-8")
+        result = detect_pagination(
+            html, "https://www.ucl.ac.uk/prospective-students/undergraduate/degrees"
+        )
+        assert result.pagination_type == "single_page"
+
+    def test_polyu_real_html(self):
+        html_path = GOLDEN_DIR / "polyu_masters_asset_wealth" / "index.html"
+        if not html_path.exists():
+            pytest.skip("Golden sample not available")
+        html = html_path.read_text(encoding="utf-8")
+        result = detect_pagination(
+            html, "https://www.polyu.edu.hk/study/pg/taught-postgraduate"
+        )
+        assert result.pagination_type == "single_page"
+
+    def test_manchester_real_html(self):
+        html_path = GOLDEN_DIR / "manchester_masters_business_psychology" / "index.html"
+        if not html_path.exists():
+            pytest.skip("Golden sample not available")
+        html = html_path.read_text(encoding="utf-8")
+        result = detect_pagination(
+            html, "https://www.manchester.ac.uk/study/masters/courses/list/"
+        )
+        assert result.pagination_type == "single_page"

@@ -13,8 +13,11 @@ from urllib.parse import urljoin, urlparse, urlunparse, parse_qs, urlencode
 
 from src.agent_runtime.skills.contracts import PaginationInfo
 
-# Known query parameter names used for page numbering
+# Known query parameter names used for page numbering, ordered by priority.
+# "page", "p", "pg" are canonical page-number params and take precedence over
+# offset-style params like "start_rank" and "offset".
 _PAGE_PARAM_NAMES = {"page", "p", "offset", "start_rank", "pg"}
+_PAGE_PARAM_PRIORITY = ["page", "p", "pg", "offset", "start_rank"]
 
 # Regex to find nav/ul/ol tags with pagination-related class or aria-label.
 # Excludes "swiper-pagination" (image carousel) and "page-nav" (in-page section nav).
@@ -139,21 +142,27 @@ def _strategy1_pagination_container(html_text: str, base_url: str) -> Optional[P
                 representative_hrefs[param_name] = href
             param_values[param_name].add(value)
 
-    # Need at least 2 distinct values for a param
-    for param_name, values in param_values.items():
-        if len(values) >= 2:
-            min_val = min(values)
-            max_val = max(values)
-            template_href = representative_hrefs[param_name]
-            page_urls = _build_page_urls(template_href, base_url, param_name, min_val, max_val)
-            total_pages = max_val - min_val + 1
-            return PaginationInfo(
-                pagination_type="url_param",
-                page_urls=page_urls,
-                total_pages=total_pages,
-                current_page=min_val + 1 if min_val == 0 else 1,
-                confidence=0.9,
-            )
+    # Need at least 2 distinct values for a param.
+    # Pick the highest-priority param that qualifies.
+    qualifying = {p: v for p, v in param_values.items() if len(v) >= 2}
+    param_name = next(
+        (p for p in _PAGE_PARAM_PRIORITY if p in qualifying),
+        next(iter(qualifying), None),
+    )
+    if param_name is not None:
+        values = qualifying[param_name]
+        min_val = min(values)
+        max_val = max(values)
+        template_href = representative_hrefs[param_name]
+        page_urls = _build_page_urls(template_href, base_url, param_name, min_val, max_val)
+        total_pages = max_val - min_val + 1
+        return PaginationInfo(
+            pagination_type="url_param",
+            page_urls=page_urls,
+            total_pages=total_pages,
+            current_page=min_val + 1 if min_val == 0 else 1,
+            confidence=0.9,
+        )
 
     return None
 
@@ -175,20 +184,26 @@ def _strategy2_loose_page_link(html_text: str, base_url: str) -> Optional[Pagina
             representative_hrefs[param_name] = href
         param_values[param_name].add(value)
 
-    for param_name, values in param_values.items():
-        if len(values) >= 3:
-            min_val = min(values)
-            max_val = max(values)
-            template_href = representative_hrefs[param_name]
-            page_urls = _build_page_urls(template_href, base_url, param_name, min_val, max_val)
-            total_pages = max_val - min_val + 1
-            return PaginationInfo(
-                pagination_type="url_param",
-                page_urls=page_urls,
-                total_pages=total_pages,
-                current_page=1,
-                confidence=0.6,
-            )
+    # Pick the highest-priority param that qualifies (>= 3 distinct values).
+    qualifying = {p: v for p, v in param_values.items() if len(v) >= 3}
+    param_name = next(
+        (p for p in _PAGE_PARAM_PRIORITY if p in qualifying),
+        next(iter(qualifying), None),
+    )
+    if param_name is not None:
+        values = qualifying[param_name]
+        min_val = min(values)
+        max_val = max(values)
+        template_href = representative_hrefs[param_name]
+        page_urls = _build_page_urls(template_href, base_url, param_name, min_val, max_val)
+        total_pages = max_val - min_val + 1
+        return PaginationInfo(
+            pagination_type="url_param",
+            page_urls=page_urls,
+            total_pages=total_pages,
+            current_page=1,
+            confidence=0.6,
+        )
 
     return None
 
