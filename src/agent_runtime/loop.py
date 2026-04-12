@@ -113,11 +113,10 @@ or collect all courses:
 1. Call paginated_crawl_skill(url=<given URL>, univ_slug, year).
 2. The skill handles pagination detection, multi-page fetching,
    quality checks, and extraction internally.
-3. If status is "done": call persist_programs_skill ONCE with the
-   returned programs array AS-IS.
-4. If status is "quality_failed": report the warning to the user.
-   Do NOT call persist_programs_skill — let the user decide.
-5. If status is "pagination_not_supported": inform the user that
+3. Programs are auto-persisted. Do NOT call persist_programs_skill yourself.
+4. Respond with a summary of the result (status, pages, programs count).
+5. If status is "quality_failed": report the warning to the user.
+6. If status is "pagination_not_supported": inform the user that
    SPA pagination was detected and auto-pagination is not yet supported.
 """
 
@@ -1416,8 +1415,9 @@ async def agent_loop(
             if fn_name == "browser_automation_skill":
                 browser_fetch_done_this_iteration = True
 
-                # AUTO-PERSIST: If the skill extracted programs, persist them
-                # directly in code — never ask the LLM to relay the data.
+            # AUTO-PERSIST: If the skill extracted programs, persist them
+            # directly in code — never ask the LLM to relay the data.
+            if fn_name in ("browser_automation_skill", "paginated_crawl_skill"):
                 result_str = await _auto_persist_browser_programs(
                     result_str, univ_slug, year, dry_run,
                     registry, collected_programs,
