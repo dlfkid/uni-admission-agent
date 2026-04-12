@@ -16,8 +16,8 @@ from src.agent_runtime.skills.contracts import PaginationInfo
 # Known query parameter names used for page numbering, ordered by priority.
 # "page", "p", "pg" are canonical page-number params and take precedence over
 # offset-style params like "start_rank" and "offset".
-_PAGE_PARAM_NAMES = {"page", "p", "offset", "start_rank", "pg"}
 _PAGE_PARAM_PRIORITY = ["page", "p", "pg", "offset", "start_rank"]
+_PAGE_PARAM_NAMES = set(_PAGE_PARAM_PRIORITY)  # for quick membership checks
 
 # Regex to find nav/ul/ol tags with pagination-related class or aria-label.
 # Excludes "swiper-pagination" (image carousel) and "page-nav" (in-page section nav).
@@ -84,18 +84,19 @@ def _extract_hrefs_from_html(fragment: str) -> list[str]:
     return [html.unescape(m.group(1)) for m in _HREF_RE.finditer(fragment)]
 
 
-def _parse_page_param(href: str, base_url: str) -> Optional[tuple[str, int]]:
-    """Return (param_name, value) if the href contains a known page param, else None."""
-    # Resolve relative URLs
+def _parse_page_params(href: str, base_url: str) -> list[tuple[str, int]]:
+    """Return all (param_name, value) pairs for known page params in the href."""
     full_url = urljoin(base_url, href)
     parsed = urlparse(full_url)
     qs = parse_qs(parsed.query, keep_blank_values=False)
-    for param in _PAGE_PARAM_NAMES:
+    results: list[tuple[str, int]] = []
+    for param in _PAGE_PARAM_PRIORITY:
         if param in qs:
             try:
-                return (param, int(qs[param][0]))
+                results.append((param, int(qs[param][0])))
             except (ValueError, IndexError):
                 continue
+    return results
     return None
 
 
@@ -133,14 +134,11 @@ def _strategy1_pagination_container(html_text: str, base_url: str) -> Optional[P
             # Skip pure fragment anchors (in-page section nav like #content)
             if href.startswith('#'):
                 continue
-            result = _parse_page_param(href, base_url)
-            if result is None:
-                continue
-            param_name, value = result
-            if param_name not in param_values:
-                param_values[param_name] = set()
-                representative_hrefs[param_name] = href
-            param_values[param_name].add(value)
+            for param_name, value in _parse_page_params(href, base_url):
+                if param_name not in param_values:
+                    param_values[param_name] = set()
+                    representative_hrefs[param_name] = href
+                param_values[param_name].add(value)
 
     # Need at least 2 distinct values for a param.
     # Pick the highest-priority param that qualifies.
@@ -175,14 +173,11 @@ def _strategy2_loose_page_link(html_text: str, base_url: str) -> Optional[Pagina
     for href in _extract_hrefs_from_html(html_text):
         if href.startswith('#'):
             continue
-        result = _parse_page_param(href, base_url)
-        if result is None:
-            continue
-        param_name, value = result
-        if param_name not in param_values:
-            param_values[param_name] = set()
-            representative_hrefs[param_name] = href
-        param_values[param_name].add(value)
+        for param_name, value in _parse_page_params(href, base_url):
+            if param_name not in param_values:
+                param_values[param_name] = set()
+                representative_hrefs[param_name] = href
+            param_values[param_name].add(value)
 
     # Pick the highest-priority param that qualifies (>= 3 distinct values).
     qualifying = {p: v for p, v in param_values.items() if len(v) >= 3}

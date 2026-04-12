@@ -171,9 +171,11 @@ class PydanticAIRuntime:
             ]
             auto_paginate = payload.get("auto_paginate", False)
             if auto_paginate:
-                parts.append(
-                    "AUTO-PAGINATE REQUESTED: Use paginated_crawl_skill for this index page."
-                )
+                max_pages = payload.get("max_pages")
+                paginate_msg = "AUTO-PAGINATE REQUESTED: Use paginated_crawl_skill for this index page."
+                if max_pages is not None:
+                    paginate_msg += f" Set max_pages={max_pages}."
+                parts.append(paginate_msg)
             return "\n".join(parts)
 
         if task == "chat":
