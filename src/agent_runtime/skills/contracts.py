@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -123,3 +123,50 @@ class BrowserAutomationSkillOutput(BaseModel):
     selected_urls: list[str] = Field(default_factory=list)
     selected_link_texts: dict[str, str] = Field(default_factory=dict)
     extracted_programs: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class PaginationInfo(BaseModel):
+    """Pagination metadata extracted from an index page."""
+
+    pagination_type: Literal["url_param", "single_page", "spa_button"] = "single_page"
+    page_urls: list[str] = Field(default_factory=list)
+    total_pages: Optional[int] = None
+    current_page: int = 1
+    confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+
+
+class QualityCheckResult(BaseModel):
+    """Result of a quality circuit breaker check on a batch of programs."""
+
+    verdict: Literal["pass", "fail"]
+    heuristic_score: float = Field(ge=0.0, le=1.0)
+    llm_used: bool = False
+    reason: str = ""
+    failed_at_page: Optional[int] = None
+    failed_at_program_count: Optional[int] = None
+
+
+class PaginatedCrawlSkillInput(BaseModel):
+    """Input payload for paginated crawl skill."""
+
+    url: str = Field(min_length=1)
+    univ_slug: str = Field(min_length=1)
+    year: int = Field(gt=0)
+    max_pages: int = Field(default=50, ge=1, le=200)
+    batch_quality_size: int = Field(default=10, ge=5, le=50)
+    client_id: Optional[str] = None
+
+
+class PaginatedCrawlSkillOutput(BaseModel):
+    """Output payload for paginated crawl skill."""
+
+    status: Literal["done", "quality_failed", "pagination_not_supported"] = "done"
+    pagination_type: str = "single_page"
+    total_pages_detected: Optional[int] = None
+    pages_processed: int = 0
+    programs: list[dict[str, Any]] = Field(default_factory=list)
+    extracted_programs: list[dict[str, Any]] = Field(default_factory=list)
+    total_programs: int = 0
+    quality_scores: list[dict[str, Any]] = Field(default_factory=list)
+    warning: Optional[str] = None
+    summary: str = ""

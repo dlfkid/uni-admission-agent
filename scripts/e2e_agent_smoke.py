@@ -1,13 +1,26 @@
 #!/usr/bin/env python3
 """E2E Agent Smoke Test.
 
-Exercises the full agent runtime (pydanticai mode) against a randomly
-selected golden-sample university. Starts a real uvicorn server + browser
-client, then runs detail + index page crawls in dry-run mode and outputs
-results for human quality judgment.
+Exercises the full agent runtime (pydanticai mode) against golden-sample
+universities. Starts a real uvicorn server + browser client, then runs
+detail + index page crawls in dry-run mode and outputs results for human
+quality judgment.
 
 Usage:
+    # Random university, detail + index tests
     uv run python scripts/e2e_agent_smoke.py
+
+    # Specific university
+    uv run python scripts/e2e_agent_smoke.py --case edinburgh
+
+    # Pagination test (auto-selects a paginated university, crawls 2 pages)
+    uv run python scripts/e2e_agent_smoke.py --paginate
+
+    # Pagination-only test on a specific university
+    uv run python scripts/e2e_agent_smoke.py --paginate --paginate-case edinburgh --skip-detail --skip-index
+
+    # List available cases
+    uv run python scripts/e2e_agent_smoke.py --case nonexistent
 """
 
 from __future__ import annotations
@@ -54,15 +67,34 @@ def check_env() -> None:
     print(f"Loaded .env from {env_path}")
 
 
-def pick_golden_case() -> dict[str, Any]:
-    """Randomly select a golden sample case and return its metadata."""
+def pick_golden_case(case_filter: str | None = None) -> dict[str, Any]:
+    """Select a golden sample case and return its metadata.
+
+    Args:
+        case_filter: Optional substring to match against case_id or name.
+            When None, a random case is selected.
+    """
     cases = sorted(GOLDEN_CASES_DIR.iterdir())
     case_dirs = [d for d in cases if (d / "metadata.json").exists()]
     if not case_dirs:
         print("ERROR: No golden sample cases found.")
         sys.exit(1)
 
-    chosen = random.choice(case_dirs)
+    if case_filter:
+        needle = case_filter.lower()
+        matched = [
+            d for d in case_dirs
+            if needle in d.name.lower()
+        ]
+        if not matched:
+            available = [d.name for d in case_dirs]
+            print(f"ERROR: No case matching '{case_filter}'.")
+            print(f"Available: {', '.join(available)}")
+            sys.exit(1)
+        chosen = matched[0]
+    else:
+        chosen = random.choice(case_dirs)
+
     metadata = json.loads((chosen / "metadata.json").read_text())
     print(f"Selected case: {metadata['case_id']} ({metadata['name']})")
     return metadata
@@ -230,6 +262,8 @@ async def run_single_test(
     year: int,
     page_type_hint: str,
     policy_profile: dict[str, Any] | None = None,
+    auto_paginate: bool = False,
+    max_pages: int | None = None,
 ) -> dict[str, Any]:
     """Run one agent test and poll until completion."""
     payload: dict[str, Any] = {
@@ -243,6 +277,10 @@ async def run_single_test(
     }
     if policy_profile:
         payload["policy_profile"] = policy_profile
+    if auto_paginate:
+        payload["auto_paginate"] = True
+    if max_pages is not None:
+        payload["max_pages"] = max_pages
 
     print(f"\n{'=' * 50}")
     print(f"  [{label}] {univ_slug} -- {page_type_hint}")
@@ -410,9 +448,58 @@ async def wait_for_client(base_url: str) -> None:
 # Main
 # ---------------------------------------------------------------------------
 
+def parse_args() -> "argparse.Namespace":
+    """Parse CLI arguments."""
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description="E2E Agent Smoke Test — exercises the full agent runtime against golden samples.",
+    )
+    parser.add_argument(
+        "--case",
+        default=None,
+        help=(
+            "Substring to match a golden sample case_id (e.g. 'edinburgh', 'leeds'). "
+            "When omitted, a random case is selected."
+        ),
+    )
+    parser.add_argument(
+        "--paginate",
+        action="store_true",
+        default=False,
+        help="Run a pagination smoke test: auto-paginate 2 pages and verify quality.",
+    )
+    parser.add_argument(
+        "--paginate-case",
+        default=None,
+        help=(
+            "Case to use for the pagination test (default: auto-select a paginated case). "
+            "Only used when --paginate is set."
+        ),
+    )
+    parser.add_argument(
+        "--skip-detail",
+        action="store_true",
+        default=False,
+        help="Skip the detail page test.",
+    )
+    parser.add_argument(
+        "--skip-index",
+        action="store_true",
+        default=False,
+        help="Skip the normal (non-paginated) index page test.",
+    )
+    return parser.parse_args()
+
+
+# Cases known to have URL-parameter pagination (for --paginate auto-selection)
+_PAGINATED_CASES = ["edinburgh", "leeds"]
+
+
 async def main() -> None:
+    args = parse_args()
     check_env()
-    metadata = pick_golden_case()
+    metadata = pick_golden_case(args.case)
 
     case_id = metadata["case_id"]
     univ_name = metadata["name"]
@@ -420,6 +507,16 @@ async def main() -> None:
     index_url = metadata["index_url"]
     detail_url = metadata["detail_url"]
     year = datetime.now(tz=timezone.utc).year
+
+    # Resolve pagination case (may differ from the main case)
+    paginate_metadata = None
+    if args.paginate:
+        paginate_case_filter = args.paginate_case
+        if not paginate_case_filter:
+            # Auto-select: prefer a known paginated case
+            paginate_case_filter = random.choice(_PAGINATED_CASES)
+        paginate_metadata = pick_golden_case(paginate_case_filter)
+        print(f"  Pagination test case: {paginate_metadata['case_id']}")
 
     # Start real server + client
     port = find_free_port()
@@ -433,30 +530,53 @@ async def main() -> None:
 
     import httpx
 
+    results: dict[str, dict[str, Any]] = {}
+
     try:
         async with httpx.AsyncClient(base_url=base_url, timeout=30.0) as client:
             total_start = time.monotonic()
 
             # Test 1: Detail page
-            detail_result = await run_single_test(
-                client,
-                label="Detail",
-                url=detail_url,
-                univ_slug=univ_slug,
-                year=year,
-                page_type_hint="detail",
-            )
+            if not args.skip_detail:
+                results["detail"] = await run_single_test(
+                    client,
+                    label="Detail",
+                    url=detail_url,
+                    univ_slug=univ_slug,
+                    year=year,
+                    page_type_hint="detail",
+                )
 
-            # Test 2: Index page (max 3 candidates)
-            index_result = await run_single_test(
-                client,
-                label="Index",
-                url=index_url,
-                univ_slug=univ_slug,
-                year=year,
-                page_type_hint="index",
-                policy_profile={"auto_run_max_candidates": 3},
-            )
+            # Test 2: Index page (normal, max 3 candidates)
+            if not args.skip_index:
+                results["index"] = await run_single_test(
+                    client,
+                    label="Index",
+                    url=index_url,
+                    univ_slug=univ_slug,
+                    year=year,
+                    page_type_hint="index",
+                    policy_profile={"auto_run_max_candidates": 3},
+                )
+
+            # Test 3: Pagination test (auto-paginate 2 pages)
+            if paginate_metadata:
+                pg_case_id = paginate_metadata["case_id"]
+                pg_slug = (
+                    pg_case_id.split("_")[0]
+                    if "_" in pg_case_id
+                    else paginate_metadata["name"].lower().replace(" ", "-")
+                )
+                results["pagination"] = await run_single_test(
+                    client,
+                    label="Pagination",
+                    url=paginate_metadata["index_url"],
+                    univ_slug=pg_slug,
+                    year=year,
+                    page_type_hint="index",
+                    auto_paginate=True,
+                    max_pages=2,
+                )
 
             total_duration = time.monotonic() - total_start
     finally:
@@ -471,52 +591,80 @@ async def main() -> None:
     E2E_RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.now(tz=timezone.utc).strftime("%Y-%m-%dT%H-%M-%S")
     result_path = E2E_RESULTS_DIR / f"{timestamp}_{univ_slug}.json"
-    archive = {
+    archive: dict[str, Any] = {
         "timestamp": datetime.now(tz=timezone.utc).isoformat(),
         "case_id": case_id,
         "univ_name": univ_name,
         "year": year,
-        "detail_test": {
-            k: v for k, v in detail_result.items() if k != "raw_result"
-        },
-        "index_test": {
-            k: v for k, v in index_result.items() if k != "raw_result"
-        },
     }
-    archive["index_test"]["auto_run_max_candidates"] = 3
+    for test_name, result in results.items():
+        archive[f"{test_name}_test"] = {
+            k: v for k, v in result.items() if k != "raw_result"
+        }
+    if "index" in results:
+        archive["index_test"]["auto_run_max_candidates"] = 3
+    if "pagination" in results:
+        archive["pagination_test"]["max_pages"] = 2
+        archive["pagination_test"]["paginate_case"] = (
+            paginate_metadata["case_id"] if paginate_metadata else None
+        )
 
     result_path.write_text(
         json.dumps(archive, indent=2, ensure_ascii=False, default=str)
     )
 
     # Final summary
-    detail_status = detail_result.get("status", "?")
-    detail_progs = len(detail_result.get("programs") or [])
-    detail_dur = detail_result.get("duration_sec", 0)
-
-    index_status = index_result.get("status", "?")
-    index_progs = len(index_result.get("programs") or [])
-    index_dur = index_result.get("duration_sec", 0)
-
-    print(f"\n{'=' * 50}")
+    print(f"\n{'=' * 60}")
     print(f"  University: {univ_name} ({case_id})")
-    print(f"  Detail test:  {detail_status} -- {detail_progs} program(s), {detail_dur:.1f}s")
-    print(f"  Index test:   {index_status} -- {index_progs} program(s), {index_dur:.1f}s")
-    print(f"  Total time:   {total_duration:.1f}s")
-    print(f"  Results saved: {result_path.relative_to(PROJECT_ROOT)}")
-    print(f"{'=' * 50}")
 
     failed = False
-    if detail_status != "DONE":
-        print(f"  FAIL: detail test status={detail_status}")
-        failed = True
-    if index_status != "DONE":
-        print(f"  FAIL: index test status={index_status}")
-        failed = True
-    min_index_programs = 2
-    if index_progs < min_index_programs:
-        print(f"  FAIL: index test extracted {index_progs} program(s), expected >= {min_index_programs}")
-        failed = True
+    for test_name, result in results.items():
+        status = result.get("status", "?")
+        progs = len(result.get("programs") or [])
+        dur = result.get("duration_sec", 0)
+        label = test_name.capitalize().ljust(12)
+        print(f"  {label} {status} -- {progs} program(s), {dur:.1f}s")
+
+        if status not in ("DONE",):
+            # quality_failed is acceptable for pagination — it means the breaker worked
+            if test_name == "pagination" and status == "quality_failed":
+                print(f"    (quality breaker triggered — this is informational, not a failure)")
+            else:
+                print(f"  FAIL: {test_name} test status={status}")
+                failed = True
+
+    # Minimum program count checks
+    if "detail" in results:
+        detail_progs = len(results["detail"].get("programs") or [])
+        if detail_progs < 1 and results["detail"].get("status") == "DONE":
+            print(f"  FAIL: detail test extracted 0 programs")
+            failed = True
+
+    if "index" in results:
+        index_progs = len(results["index"].get("programs") or [])
+        if index_progs < 2 and results["index"].get("status") == "DONE":
+            print(f"  FAIL: index test extracted {index_progs} program(s), expected >= 2")
+            failed = True
+
+    if "pagination" in results:
+        pg_result = results["pagination"]
+        pg_status = pg_result.get("status", "?")
+        pg_progs = len(pg_result.get("programs") or [])
+        if pg_status == "DONE" and pg_progs < 2:
+            print(f"  FAIL: pagination test extracted {pg_progs} program(s), expected >= 2 from 2 pages")
+            failed = True
+        if pg_status == "DONE":
+            # Verify programs have quality data
+            quality_ok = sum(
+                1 for p in pg_result.get("programs", [])
+                if p.get("name_en") and len(str(p.get("name_en", ""))) >= 5
+            )
+            print(f"  Pagination quality: {quality_ok}/{pg_progs} programs have valid names")
+
+    print(f"  Total time:   {total_duration:.1f}s")
+    print(f"  Results saved: {result_path.relative_to(PROJECT_ROOT)}")
+    print(f"{'=' * 60}")
+
     if failed:
         sys.exit(1)
 

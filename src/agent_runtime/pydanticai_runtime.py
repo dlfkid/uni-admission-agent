@@ -115,6 +115,7 @@ class PydanticAIRuntime:
                     univ_slug=str(payload.get("univ_slug", "")),
                     year=int(payload.get("year", 0) or 0),
                     dry_run=bool(request.context.get("dry_run", False)),
+                    auto_paginate=bool(payload.get("auto_paginate", False)),
                 ),
                 timeout=PAGE_TIMEOUT,
             )
@@ -169,6 +170,13 @@ class PydanticAIRuntime:
                 f"Academic year: {year}",
                 f"Page type hint: {page_type_hint}",
             ]
+            auto_paginate = payload.get("auto_paginate", False)
+            if auto_paginate:
+                max_pages = payload.get("max_pages")
+                paginate_msg = "AUTO-PAGINATE REQUESTED: Use paginated_crawl_skill for this index page."
+                if max_pages is not None:
+                    paginate_msg += f" Set max_pages={max_pages}."
+                parts.append(paginate_msg)
             return "\n".join(parts)
 
         if task == "chat":

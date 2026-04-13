@@ -106,6 +106,18 @@ You are a program crawler.
 CRITICAL: The `extracted_programs` data is already structured with correct field names
 (name_en, faculty, tuition_amount, study_options, deadlines, requirements, etc.).
 NEVER re-extract or reformat this data. Pass it directly to persist_programs_skill.
+
+## For index pages with auto-pagination requested:
+If the user message mentions auto-pagination, paginate, 翻页, all pages,
+or collect all courses:
+1. Call paginated_crawl_skill(url=<given URL>, univ_slug, year).
+2. The skill handles pagination detection, multi-page fetching,
+   quality checks, and extraction internally.
+3. Programs are auto-persisted. Do NOT call persist_programs_skill yourself.
+4. Respond with a summary of the result (status, pages, programs count).
+5. If status is "quality_failed": report the warning to the user.
+6. If status is "pagination_not_supported": inform the user that
+   SPA pagination was detected and auto-pagination is not yet supported.
 """
 
 
@@ -143,6 +155,12 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
         "For index pages (page_type_hint='index'), returns selected_urls — "
         "a list of detected detail page URLs. "
         "For detail pages (page_type_hint='detail'), returns the page HTML."
+    ),
+    "paginated_crawl_skill": (
+        "Crawl a multi-page or large index page with automatic pagination and "
+        "quality checks. Use ONLY when the user explicitly requests auto-pagination "
+        "(e.g. '翻页', 'paginate', 'all pages'). Handles URL-parameter pagination "
+        "and large single-page indexes. Returns extracted programs from all pages."
     ),
 }
 
@@ -711,6 +729,7 @@ def build_openai_tools(
     *,
     include_task: bool = True,
     page_type_hint: str | None = None,
+    auto_paginate: bool = False,
 ) -> list[dict[str, Any]]:
     """Build OpenAI tool definitions from all registered skills + built-ins.
 
@@ -722,6 +741,8 @@ def build_openai_tools(
             ``"detail"`` — minimal: browser + persist only.
             ``"index"`` or ``"auto"`` — minimal: browser + persist only.
             ``None`` — all tools (backward compatible, e.g. chat mode).
+        auto_paginate: When *True*, replace browser_automation_skill with
+            paginated_crawl_skill to force the LLM to use pagination.
     """
     # For crawl tasks (index/detail/auto), give ONLY essential tools
     # to prevent the LLM from wasting iterations on planning/skills/teams.
@@ -729,7 +750,16 @@ def build_openai_tools(
         "browser_automation_skill",
         "persist_programs_skill",
         "analyze_page_skill",
+        "paginated_crawl_skill",
     }
+
+    # When auto_paginate is requested, exclude browser_automation_skill
+    # so the LLM is forced to use paginated_crawl_skill instead.
+    if auto_paginate:
+        _ESSENTIAL_SKILL_NAMES = {
+            "paginated_crawl_skill",
+            "persist_programs_skill",
+        }
 
     if page_type_hint in ("index", "detail", "auto"):
         tools: list[dict[str, Any]] = []
@@ -1087,6 +1117,7 @@ async def agent_loop(
     univ_slug: str = "",
     year: int = 0,
     dry_run: bool = False,
+    auto_paginate: bool = False,
 ) -> dict[str, Any]:
     """Run the LLM-driven agent loop.
 
@@ -1110,6 +1141,7 @@ async def agent_loop(
         registry,
         include_task=not _is_subagent,
         page_type_hint=page_type_hint,
+        auto_paginate=auto_paginate,
     )
     todo = TodoManager()
     tasks = TaskManager()
@@ -1383,8 +1415,9 @@ async def agent_loop(
             if fn_name == "browser_automation_skill":
                 browser_fetch_done_this_iteration = True
 
-                # AUTO-PERSIST: If the skill extracted programs, persist them
-                # directly in code — never ask the LLM to relay the data.
+            # AUTO-PERSIST: If the skill extracted programs, persist them
+            # directly in code — never ask the LLM to relay the data.
+            if fn_name in ("browser_automation_skill", "paginated_crawl_skill"):
                 result_str = await _auto_persist_browser_programs(
                     result_str, univ_slug, year, dry_run,
                     registry, collected_programs,

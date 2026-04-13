@@ -96,7 +96,8 @@ def test_internal_llm_tools_registered_only_when_available(monkeypatch) -> None:
 
 
 def test_agent_tools_registered_only_when_agent_enabled(monkeypatch) -> None:
-    monkeypatch.delenv("AGENT_ENABLED", raising=False)
+    # Agent defaults to enabled; explicitly disable to test the "off" branch.
+    monkeypatch.setenv("AGENT_ENABLED", "false")
     server_without_agent = _reload_server_with_router_probe(
         monkeypatch,
         router_available=False,
@@ -116,7 +117,8 @@ def test_agent_tools_registered_only_when_agent_enabled(monkeypatch) -> None:
 
 
 def test_agent_tools_can_register_after_env_enabled_post_import(monkeypatch) -> None:
-    monkeypatch.delenv("AGENT_ENABLED", raising=False)
+    # Agent defaults to enabled; explicitly disable so the "before enable" branch is testable.
+    monkeypatch.setenv("AGENT_ENABLED", "false")
     server_module = _reload_server_with_router_probe(
         monkeypatch,
         router_available=False,

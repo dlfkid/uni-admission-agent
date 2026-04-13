@@ -16,6 +16,8 @@ from src.agent_runtime.skills.contracts import (
     BrowserAutomationSkillOutput,
     CrawlDetailBatchSkillInput,
     CrawlDetailBatchSkillOutput,
+    PaginatedCrawlSkillInput,
+    PaginatedCrawlSkillOutput,
     PersistProgramsSkillInput,
     PersistProgramsSkillOutput,
     QueryDbSkillInput,
@@ -29,6 +31,7 @@ from src.agent_runtime.skills.impl import (
     analyze_page_skill_handler,
     browser_automation_skill_handler,
     legacy_crawl_batch_skill_handler,
+    paginated_crawl_skill_handler,
     persist_programs_skill_handler,
     query_db_skill_handler,
     review_patch_skill_handler,
@@ -139,6 +142,12 @@ def build_skill_registry(
             input_model=BrowserAutomationSkillInput,
             output_model=BrowserAutomationSkillOutput,
             handler=lambda payload: browser_automation_skill_handler(payload, client_bridge),
+        ),
+        SkillDef(
+            name="paginated_crawl_skill",
+            input_model=PaginatedCrawlSkillInput,
+            output_model=PaginatedCrawlSkillOutput,
+            handler=lambda payload: paginated_crawl_skill_handler(payload, client_bridge),
         ),
     ]
     return SkillRegistry(skills)

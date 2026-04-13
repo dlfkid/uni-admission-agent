@@ -712,6 +712,8 @@ async def api_agent_run(body: AgentRunRequest) -> AgentRunResponse:
                     if body.policy_profile
                     else None
                 ),
+                auto_paginate=body.auto_paginate,
+                max_pages=body.max_pages,
             )
             if isinstance(result, dict):
                 result["program_count"] = program_count

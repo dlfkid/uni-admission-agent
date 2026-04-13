@@ -1,4 +1,6 @@
 import {
+    autoPaginateCheckbox,
+    autoPaginateField,
     automationConcurrencyInput,
     browserAutomationCheckbox,
     cancelLinksBtn,
@@ -127,6 +129,13 @@ export function initCrawlFlow(deps: CrawlFlowDeps): void {
         getTaxonomyOptions,
         reinit,
     };
+
+    const updateAutoPaginateVisibility = () => {
+        const pageType = pageTypeSelect.value;
+        autoPaginateField.style.display = pageType === "detail" ? "none" : "block";
+    };
+    pageTypeSelect.addEventListener("change", updateAutoPaginateVisibility);
+    updateAutoPaginateVisibility();
 
     function getAutomationConcurrency(): number {
         const clamped = clampAutomationConcurrency(
@@ -385,7 +394,7 @@ export function initCrawlFlow(deps: CrawlFlowDeps): void {
 
             try {
                 const taskId = await submitAgentRun(
-                    { url, slug, year, pageType },
+                    { url, slug, year, pageType, autoPaginate: autoPaginateCheckbox.checked },
                     apiBase,
                     apiCallbacks,
                 );
