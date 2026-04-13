@@ -97,7 +97,6 @@ def _parse_page_params(href: str, base_url: str) -> list[tuple[str, int]]:
             except (ValueError, IndexError):
                 continue
     return results
-    return None
 
 
 def _build_page_urls(template_href: str, base_url: str, param_name: str,
