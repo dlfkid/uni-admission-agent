@@ -73,11 +73,16 @@ Go to the [Releases Page](../../releases) and download the artifact for your OS:
    ```powershell
    # Check environment
    .\adm-agent.exe check
-   
+
    # Install browser (required for crawling, only needed once)
    .\adm-agent.exe browser-install
-   
-   # Start the server
+
+   # Start host + client together (recommended for single-machine use)
+   .\adm-agent.exe up
+   # Press Ctrl+C to stop both processes cleanly.
+
+   # --- Advanced: run host and client separately ---
+   # Start the server only
    .\adm-agent.exe serve
 
    # Stop the running server (from another terminal)
@@ -92,17 +97,22 @@ Go to the [Releases Page](../../releases) and download the artifact for your OS:
    ```
 2. Run via terminal:
    ```bash
-   
+
    # For Mac OS you need run this first to override the safety control
    xattr -cr /path/to/your/adm-agent
 
    # Check environment
    ./adm-agent check
-   
+
    # Install browser (required for crawling, only needed once)
    ./adm-agent browser-install
-   
-   # Start the server
+
+   # Start host + client together (recommended for single-machine use)
+   ./adm-agent up
+   # Press Ctrl+C to stop both processes cleanly.
+
+   # --- Advanced: run host and client separately ---
+   # Start the server only
    ./adm-agent serve
 
    # Stop the running server (from another terminal)
@@ -168,6 +178,13 @@ The agent needs a database connection.
 
 # Install Playwright browser (only needed once)
 ./adm-agent browser-install
+
+# Start host + client together (one-command local launcher; Ctrl+C stops both)
+#   --host           Bind address (default: 127.0.0.1)
+#   --port           Port number (default: 8910)
+#   --health-timeout Seconds to wait for server health (default: 20)
+#   --skip-client    Start only the server (no client)
+./adm-agent up
 
 # Import Excel data
 #   --name: University slug (a-z0-9-)
@@ -241,6 +258,9 @@ The agent needs a database connection.
 
 # Install Playwright browser (only needed once)
 .\adm-agent.exe browser-install
+
+# Start host + client together (one-command local launcher; Ctrl+C stops both)
+.\adm-agent.exe up
 
 # Import Excel data
 .\adm-agent.exe import --name hku --year 2026 --file example/hku-26-27.xlsx

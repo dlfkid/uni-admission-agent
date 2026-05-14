@@ -22,6 +22,7 @@ import re
 import signal
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -95,6 +96,7 @@ LLM CONFIGURATION:
     
     
 SERVER OPERATIONS:
+    up              Start host + client together (one-command local launcher)
     serve           Start API + MCP server (default: 0.0.0.0:8910)
     serve-install   Start the server as a background daemon
     serve-stop      Stop running server instance
@@ -897,6 +899,252 @@ def serve_stop(
     except (ProcessLookupError, PermissionError, OSError) as exc:
         typer.echo(f"❌ Failed to stop server (PID {pid}): {exc}", err=True)
         raise typer.Exit(code=1)
+
+
+# ---------------------------------------------------------------------------
+#  `up` — single-machine launcher (host + client together)
+# ---------------------------------------------------------------------------
+
+
+def _find_client_argv() -> list[str]:
+    """Return argv prefix to invoke the client CLI.
+
+    Handles PyInstaller frozen builds (sibling binary) and dev mode
+    (re-invoke Python on client_cli.py).
+    """
+    if getattr(sys, "frozen", False):
+        exe_name = "adm-agent-client.exe" if os.name == "nt" else "adm-agent-client"
+        exe_dir = Path(sys.executable).parent
+        candidates = [
+            exe_dir / exe_name,
+            exe_dir.parent / "adm-agent-client" / exe_name,
+        ]
+        for candidate in candidates:
+            if candidate.exists():
+                return [str(candidate)]
+        raise FileNotFoundError(
+            "Could not locate adm-agent-client binary. Looked at: "
+            + ", ".join(str(c) for c in candidates)
+        )
+    client_script = Path(__file__).parent / "client_cli.py"
+    return [sys.executable, str(client_script)]
+
+
+def _wait_for_health(url: str, timeout: float) -> bool:
+    """Poll the server's /health endpoint until it responds or timeout."""
+    import urllib.error
+    import urllib.request
+
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            with urllib.request.urlopen(url, timeout=1.0) as resp:
+                if 200 <= resp.status < 300:
+                    return True
+        except (urllib.error.URLError, OSError):
+            pass
+        time.sleep(0.5)
+    return False
+
+
+def _ensure_client_initialized(server_url: str) -> None:
+    """If client config is missing, create a default one pointing at server_url."""
+    from src.client.config import (
+        ClientConfig,
+        ClientPolicyProfile,
+        ensure_client_id,
+        load_client_config,
+        save_client_config,
+    )
+
+    if load_client_config() is not None:
+        return
+
+    import platform as _platform
+
+    name = _platform.node().strip() or "adm-agent-client"
+    config = ClientConfig(
+        server_url=server_url,
+        client_name=name,
+        client_id=ensure_client_id(None),
+        workdir=str(Path.cwd()),
+        policy_profile=ClientPolicyProfile(),
+    )
+    path = save_client_config(config)
+    typer.echo(f"   Auto-initialized client config: {path}")
+    typer.echo(f"   Client ID: {config.client_id}")
+
+
+def _stream_child_output(proc: subprocess.Popen, prefix: str) -> None:
+    """Read child stdout line-by-line and echo with prefix. Blocks until EOF."""
+    if proc.stdout is None:
+        return
+    for raw in proc.stdout:
+        line = raw.rstrip()
+        if line:
+            typer.echo(f"{prefix} {line}")
+
+
+@app.command()
+def up(
+    host: str = typer.Option(
+        "127.0.0.1",
+        help="Bind address for the server (default: 127.0.0.1 for single-machine use)",
+    ),
+    port: int = typer.Option(8910, help="Port number for the server"),
+    health_timeout: float = typer.Option(
+        20.0, help="Seconds to wait for server /health before giving up"
+    ),
+    skip_client: bool = typer.Option(
+        False, "--skip-client", help="Start only the server (do not launch client)"
+    ),
+    verbose: bool = typer.Option(False, "--verbose", "-v"),
+) -> None:
+    """Start host (serve) and client together — one-command launcher for local use.
+
+    Spawns ``adm-agent serve`` and ``adm-agent-client start --continuous`` as
+    managed subprocesses, waits for the server's /health endpoint, then streams
+    both logs with [host]/[client] prefixes. Ctrl+C terminates both cleanly.
+    """
+    import threading
+
+    _setup_logging(verbose)
+
+    # Pre-flight: browser
+    try:
+        from playwright.sync_api import sync_playwright
+
+        with sync_playwright() as p:
+            browser_path = Path(p.chromium.executable_path)
+            if not browser_path.exists():
+                raise FileNotFoundError(f"Browser not found at: {browser_path}")
+            typer.echo(f"✅ Browser ready: {browser_path}")
+    except Exception as exc:  # pylint: disable=broad-except
+        typer.echo("❌ Playwright browser not available.", err=True)
+        typer.echo(f"   {exc}", err=True)
+        typer.echo("👉 Run: adm-agent browser-install", err=True)
+        raise typer.Exit(code=1)
+
+    # Pre-flight: DB
+    _init_db(verbose)
+
+    # Build server URL (use 127.0.0.1 for client even if host bound to 0.0.0.0)
+    probe_host = "127.0.0.1" if host == "0.0.0.0" else host
+    server_url = f"http://{probe_host}:{port}"
+    health_url = f"{server_url}/health"
+    ws_url = f"ws://{probe_host}:{port}"
+
+    # Ensure client config exists
+    if not skip_client:
+        _ensure_client_initialized(server_url)
+
+    # Spawn server
+    server_cmd = _build_base_cmd() + ["serve", "--host", host, "--port", str(port)]
+    if verbose:
+        server_cmd.append("--verbose")
+
+    typer.echo(f"🚀 Starting server: {' '.join(server_cmd)}")
+    server_proc = subprocess.Popen(
+        server_cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        bufsize=1,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+
+    host_thread = threading.Thread(
+        target=_stream_child_output, args=(server_proc, "[host]  "), daemon=True
+    )
+    host_thread.start()
+
+    typer.echo(f"⏳ Waiting for {health_url} ...")
+    if not _wait_for_health(health_url, health_timeout):
+        typer.echo("❌ Server failed to become healthy in time.", err=True)
+        _terminate_children([server_proc])
+        raise typer.Exit(code=1)
+    typer.echo("✅ Server is healthy.")
+
+    client_proc: subprocess.Popen | None = None
+    client_thread: threading.Thread | None = None
+
+    if not skip_client:
+        try:
+            client_argv = _find_client_argv()
+        except FileNotFoundError as exc:
+            typer.echo(f"❌ {exc}", err=True)
+            _terminate_children([server_proc])
+            raise typer.Exit(code=1)
+
+        client_cmd = client_argv + ["start", "--continuous"]
+        typer.echo(f"🚀 Starting client: {' '.join(client_cmd)}")
+        client_proc = subprocess.Popen(
+            client_cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            bufsize=1,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+        client_thread = threading.Thread(
+            target=_stream_child_output, args=(client_proc, "[client]"), daemon=True
+        )
+        client_thread.start()
+        typer.echo(f"📡 Client connecting to {ws_url}/clients/ws")
+
+    children = [server_proc] + ([client_proc] if client_proc else [])
+    stop_requested = threading.Event()
+
+    def _handle_signal(signum, _frame):  # noqa: ARG001
+        if not stop_requested.is_set():
+            typer.echo(f"\n🛑 Received signal {signum}, shutting down...")
+            stop_requested.set()
+
+    signal.signal(signal.SIGINT, _handle_signal)
+    signal.signal(signal.SIGTERM, _handle_signal)
+
+    # Wait loop: exit when any child dies or a stop is requested
+    try:
+        while not stop_requested.is_set():
+            for proc in children:
+                if proc.poll() is not None:
+                    name = "server" if proc is server_proc else "client"
+                    typer.echo(
+                        f"⚠️  {name} exited unexpectedly (code {proc.returncode})",
+                        err=True,
+                    )
+                    stop_requested.set()
+                    break
+            time.sleep(0.5)
+    finally:
+        _terminate_children(children)
+
+    typer.echo("👋 Shutdown complete.")
+
+
+def _terminate_children(children: list[subprocess.Popen]) -> None:
+    """Send SIGTERM to children, wait 3s, escalate to SIGKILL if still alive."""
+    for proc in children:
+        if proc.poll() is None:
+            try:
+                proc.terminate()
+            except OSError:
+                pass
+
+    deadline = time.monotonic() + 3.0
+    while time.monotonic() < deadline:
+        if all(p.poll() is not None for p in children):
+            return
+        time.sleep(0.1)
+
+    for proc in children:
+        if proc.poll() is None:
+            try:
+                proc.kill()
+            except OSError:
+                pass
 
 
 @app.command()
