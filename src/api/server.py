@@ -394,6 +394,12 @@ browser_provider_service.configure_client_dispatchers(
 # ---------------------------------------------------------------------------
 
 
+@app.get("/health")
+async def api_health() -> dict:
+    """Lightweight liveness probe. Does not touch the database."""
+    return {"status": "ok", "agent_enabled": is_agent_enabled()}
+
+
 @app.post("/analyze", response_model=AnalyzeResponse)
 async def api_analyze(body: AnalyzeRequest) -> AnalyzeResponse:
     """Analyze a page to determine its type and extract candidate links.
