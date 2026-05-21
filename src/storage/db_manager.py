@@ -1205,3 +1205,25 @@ class DatabaseManager:
         with self.get_session() as session:
             repo = QuarantineRepo(session)
             return repo.list_for(university_slug=university_slug, year=year)
+
+    def clear_quarantine(
+        self,
+        *,
+        university_slug: Optional[str] = None,
+        source_url: Optional[str] = None,
+        reason=None,
+    ) -> int:
+        """Delete quarantine rows matching filters; returns the count.
+
+        At least one filter is required — full-table deletion is not
+        exposed via this entry point.
+        """
+        from src.storage.quarantine_repo import QuarantineRepo
+
+        with self.get_session() as session:
+            repo = QuarantineRepo(session)
+            return repo.clear(
+                university_slug=university_slug,
+                source_url=source_url,
+                reason=reason,
+            )

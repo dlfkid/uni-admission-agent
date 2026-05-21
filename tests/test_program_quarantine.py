@@ -129,3 +129,65 @@ class TestQuarantineRepo:
 
         all_rows = repo.list_for()
         assert len(all_rows) == 3
+
+
+class TestQuarantineRepoClear:
+    """Cleanup operations on the quarantine table."""
+
+    def _seed(self, session: Session) -> QuarantineRepo:
+        repo = QuarantineRepo(session)
+        repo.record(
+            university_slug="hku",
+            program_data={**_sample_program(name="A"), "source_url": "https://e.edu/a"},
+            reason=QuarantineReason.EMPTY_SHELL,
+            signals={},
+        )
+        repo.record(
+            university_slug="hku",
+            program_data={**_sample_program(name="B"), "source_url": "https://e.edu/b"},
+            reason=QuarantineReason.NOISE_NAME,
+            signals={},
+        )
+        repo.record(
+            university_slug="ust",
+            program_data={**_sample_program(name="C"), "source_url": "https://o.edu/c"},
+            reason=QuarantineReason.EMPTY_SHELL,
+            signals={},
+        )
+        return repo
+
+    def test_clear_by_university(self, session: Session) -> None:
+        repo = self._seed(session)
+        deleted = repo.clear(university_slug="hku")
+        assert deleted == 2
+        remaining = repo.list_for()
+        assert [r.university_slug for r in remaining] == ["ust"]
+
+    def test_clear_by_university_and_reason(self, session: Session) -> None:
+        repo = self._seed(session)
+        deleted = repo.clear(university_slug="hku", reason=QuarantineReason.EMPTY_SHELL)
+        assert deleted == 1
+        remaining = {(r.university_slug, r.quarantine_reason) for r in repo.list_for()}
+        assert remaining == {
+            ("hku", "noise_name"),
+            ("ust", "empty_shell"),
+        }
+
+    def test_clear_by_source_url(self, session: Session) -> None:
+        repo = self._seed(session)
+        deleted = repo.clear(university_slug="hku", source_url="https://e.edu/a")
+        assert deleted == 1
+        remaining = {r.source_url for r in repo.list_for()}
+        assert remaining == {"https://e.edu/b", "https://o.edu/c"}
+
+    def test_clear_nothing_matches_returns_zero(self, session: Session) -> None:
+        repo = self._seed(session)
+        deleted = repo.clear(university_slug="unknown-university")
+        assert deleted == 0
+        assert len(repo.list_for()) == 3
+
+    def test_clear_requires_at_least_one_filter(self, session: Session) -> None:
+        """Refuse to nuke the whole table with no filter."""
+        repo = self._seed(session)
+        with pytest.raises(ValueError):
+            repo.clear()

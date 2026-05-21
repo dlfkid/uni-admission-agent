@@ -145,6 +145,21 @@ def process_page_for_program(
             "%s: %s (%d) [Group: %s]",
             action, program_data['name_en'], year, program_data.get('program_group_code'),
         )
+
+        # Auto-graduate: a URL that now extracts cleanly should not stay
+        # in quarantine. The "current state of this URL" is the
+        # successful upsert; the quarantine row is stale.
+        source_url = str(program_data.get("source_url") or page.url or "").strip()
+        if source_url:
+            try:
+                db_manager.clear_quarantine(
+                    university_slug=univ_slug, source_url=source_url
+                )
+            except Exception:  # pylint: disable=broad-except
+                logger.exception(
+                    "Failed to clear graduated quarantine entry for %s", source_url
+                )
+
         return True, None
     except Exception as e:
         logger.exception("Failed to persist %s", page.url)

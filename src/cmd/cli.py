@@ -1627,6 +1627,46 @@ def quarantine_list(
         )
 
 
+@quarantine_app.command(name="clear")
+def quarantine_clear(
+    university: str = typer.Option(
+        ..., "--university", "-u",
+        help="University slug to clear quarantine for (required).",
+    ),
+    reason: Optional[str] = typer.Option(
+        None, "--reason", "-r",
+        help="Optional reason filter (empty_name, name_too_short, noise_name, empty_shell).",
+    ),
+) -> None:
+    """Delete quarantine entries for one university.
+
+    Without ``--reason``, deletes all entries for the given university.
+    With ``--reason``, deletes only matching entries. The ``--university``
+    flag is required — there is intentionally no way to nuke the whole
+    quarantine table from the CLI.
+    """
+    from src.services.quality_gate import QuarantineReason
+
+    reason_enum = None
+    if reason is not None:
+        try:
+            reason_enum = QuarantineReason(reason)
+        except ValueError:
+            valid = ", ".join(r.value for r in QuarantineReason)
+            typer.echo(
+                f"❌ Invalid reason {reason!r}. Valid values: {valid}",
+                err=True,
+            )
+            raise typer.Exit(code=1)
+
+    db_manager = DatabaseManager()
+    deleted = db_manager.clear_quarantine(
+        university_slug=university, reason=reason_enum
+    )
+    suffix = f" (reason={reason_enum.value})" if reason_enum else ""
+    typer.echo(f"Deleted {deleted} quarantine entries for {university}{suffix}.")
+
+
 # ---------------------------------------------------------------------------
 #  Entry point
 # ---------------------------------------------------------------------------

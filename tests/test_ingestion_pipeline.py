@@ -138,6 +138,37 @@ def test_persist_versioned_routes_empty_shells_to_quarantine() -> None:
     assert reasons == {"empty_shell", "noise_name"}
 
 
+def test_persist_versioned_graduates_prior_quarantine_on_success() -> None:
+    """Successful upsert must clear any prior quarantine entry for the
+    same source_url, so the table reflects current state, not history."""
+    mock_db = MagicMock()
+    mock_db.upsert_program.return_value = (
+        MagicMock(id=1, name_en="MSc Finance", source_url="https://e.edu/fin", extra_metadata=None),
+        True,
+    )
+    pipeline = IngestionPipeline(db_manager=mock_db)
+
+    request_payload = {"univ_slug": "hku"}
+    context = {
+        "validated_programs": [
+            {
+                "name_en": "MSc Finance",
+                "academic_year": 2026,
+                "tuition_amount": 100,
+                "source_url": "https://e.edu/fin",
+            },
+        ],
+        "validated_hash": "h",
+    }
+
+    pipeline._stage_persist_versioned(request_payload, context)
+
+    mock_db.upsert_program.assert_called_once()
+    mock_db.clear_quarantine.assert_called_once_with(
+        university_slug="hku", source_url="https://e.edu/fin"
+    )
+
+
 def test_idempotency_key_is_deterministic() -> None:
     payload = {
         "univ_slug": "hku",

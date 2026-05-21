@@ -123,3 +123,92 @@ class TestQuarantineRestEndpoint:
         fake_db.list_quarantine.assert_called_once_with(
             university_slug=None, year=None
         )
+
+
+class TestQuarantineClearCli:
+    def test_clear_by_university(self, monkeypatch) -> None:
+        fake_db = MagicMock()
+        fake_db.clear_quarantine.return_value = 5
+        monkeypatch.setattr("src.cmd.cli.DatabaseManager", lambda: fake_db)
+
+        runner = CliRunner()
+        result = runner.invoke(
+            cli_app, ["quarantine", "clear", "--university", "hku"]
+        )
+
+        assert result.exit_code == 0
+        assert "5" in result.stdout
+        fake_db.clear_quarantine.assert_called_once_with(
+            university_slug="hku", reason=None
+        )
+
+    def test_clear_with_reason(self, monkeypatch) -> None:
+        fake_db = MagicMock()
+        fake_db.clear_quarantine.return_value = 2
+        monkeypatch.setattr("src.cmd.cli.DatabaseManager", lambda: fake_db)
+
+        runner = CliRunner()
+        result = runner.invoke(
+            cli_app,
+            ["quarantine", "clear", "--university", "hku", "--reason", "empty_shell"],
+        )
+        assert result.exit_code == 0
+        kwargs = fake_db.clear_quarantine.call_args.kwargs
+        assert kwargs["university_slug"] == "hku"
+        assert kwargs["reason"].value == "empty_shell"
+
+    def test_clear_requires_university(self, monkeypatch) -> None:
+        """No --university → refuse; we don't want users nuking the whole
+        table by accident."""
+        fake_db = MagicMock()
+        monkeypatch.setattr("src.cmd.cli.DatabaseManager", lambda: fake_db)
+
+        runner = CliRunner()
+        result = runner.invoke(cli_app, ["quarantine", "clear"])
+        # typer should reject the call without --university.
+        assert result.exit_code != 0
+        fake_db.clear_quarantine.assert_not_called()
+
+
+class TestQuarantineRestDelete:
+    def test_delete_by_university(self, monkeypatch) -> None:
+        fake_db = MagicMock()
+        fake_db.clear_quarantine.return_value = 3
+        monkeypatch.setattr("src.api.server.get_db_manager", lambda: fake_db)
+
+        client = TestClient(fastapi_app)
+        resp = client.delete("/quarantine?university=hku")
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["deleted"] == 3
+        fake_db.clear_quarantine.assert_called_once_with(
+            university_slug="hku", reason=None
+        )
+
+    def test_delete_with_reason(self, monkeypatch) -> None:
+        fake_db = MagicMock()
+        fake_db.clear_quarantine.return_value = 1
+        monkeypatch.setattr("src.api.server.get_db_manager", lambda: fake_db)
+
+        client = TestClient(fastapi_app)
+        resp = client.delete("/quarantine?university=hku&reason=empty_shell")
+        assert resp.status_code == 200
+        assert resp.json()["deleted"] == 1
+
+    def test_delete_without_university_is_rejected(self, monkeypatch) -> None:
+        fake_db = MagicMock()
+        monkeypatch.setattr("src.api.server.get_db_manager", lambda: fake_db)
+
+        client = TestClient(fastapi_app)
+        resp = client.delete("/quarantine")
+        assert resp.status_code == 400
+        fake_db.clear_quarantine.assert_not_called()
+
+    def test_delete_unknown_reason_is_rejected(self, monkeypatch) -> None:
+        fake_db = MagicMock()
+        monkeypatch.setattr("src.api.server.get_db_manager", lambda: fake_db)
+
+        client = TestClient(fastapi_app)
+        resp = client.delete("/quarantine?university=hku&reason=not_a_real_reason")
+        assert resp.status_code == 400

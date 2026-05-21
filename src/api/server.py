@@ -1349,6 +1349,42 @@ async def api_quarantine_list(
     ]
 
 
+@app.delete("/quarantine")
+async def api_quarantine_clear(
+    university: Optional[str] = None,
+    reason: Optional[str] = None,
+) -> Dict[str, int]:
+    """Delete quarantine entries for one university.
+
+    ``university`` is required (no bulk-clear-all from REST).  If
+    ``reason`` is provided, only entries with that quarantine_reason
+    are deleted.
+    """
+    from src.services.quality_gate import QuarantineReason
+
+    if not university:
+        raise HTTPException(
+            status_code=400, detail="university query param is required"
+        )
+
+    reason_enum = None
+    if reason is not None:
+        try:
+            reason_enum = QuarantineReason(reason)
+        except ValueError as exc:
+            valid = ", ".join(r.value for r in QuarantineReason)
+            raise HTTPException(
+                status_code=400,
+                detail=f"invalid reason {reason!r}; valid values: {valid}",
+            ) from exc
+
+    db = get_db_manager()
+    deleted = db.clear_quarantine(
+        university_slug=university, reason=reason_enum
+    )
+    return {"deleted": deleted}
+
+
 @app.get("/universities", response_model=List[UniversityResponse])
 async def api_universities() -> List[UniversityResponse]:
     """Return all universities ordered by most recently updated first."""

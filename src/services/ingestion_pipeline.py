@@ -1377,6 +1377,23 @@ class IngestionPipeline:
                 else:
                     updated_count += 1
 
+                # Auto-graduate any prior quarantine entry for this URL.
+                graduated_url = str(
+                    item_dict.get("source_url")
+                    or getattr(program, "source_url", "")
+                    or ""
+                ).strip()
+                if graduated_url:
+                    try:
+                        self.db_manager.clear_quarantine(
+                            university_slug=univ_slug, source_url=graduated_url
+                        )
+                    except Exception:  # pylint: disable=broad-except
+                        logger.exception(
+                            "Failed to clear graduated quarantine entry for %s",
+                            graduated_url,
+                        )
+
                 extra_metadata = item.get("extra_metadata")
                 taxonomy_trace = (
                     extra_metadata.get("taxonomy_match")

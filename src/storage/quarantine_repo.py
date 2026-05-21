@@ -72,3 +72,34 @@ class QuarantineRepo:
         if year is not None:
             stmt = stmt.where(ProgramQuarantine.academic_year == year)
         return list(self._session.exec(stmt).all())
+
+    def clear(
+        self,
+        *,
+        university_slug: Optional[str] = None,
+        source_url: Optional[str] = None,
+        reason: Optional[QuarantineReason] = None,
+    ) -> int:
+        """Delete quarantine rows matching the given filters.
+
+        At least one filter must be supplied — we refuse to nuke the
+        whole table accidentally. Returns the number of rows deleted.
+        """
+        if not any([university_slug, source_url, reason]):
+            raise ValueError(
+                "clear() requires at least one of university_slug, source_url, reason"
+            )
+
+        stmt = select(ProgramQuarantine)
+        if university_slug is not None:
+            stmt = stmt.where(ProgramQuarantine.university_slug == university_slug)
+        if source_url is not None:
+            stmt = stmt.where(ProgramQuarantine.source_url == source_url)
+        if reason is not None:
+            stmt = stmt.where(ProgramQuarantine.quarantine_reason == reason.value)
+
+        rows = list(self._session.exec(stmt).all())
+        for row in rows:
+            self._session.delete(row)
+        self._session.commit()
+        return len(rows)

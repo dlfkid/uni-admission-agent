@@ -516,3 +516,44 @@ def test_quality_gate_lets_good_program_through() -> None:
     assert error is None
     db.upsert_program.assert_called_once()
     db.upsert_quarantine.assert_not_called()
+
+
+def test_successful_upsert_graduates_prior_quarantine() -> None:
+    """If a page was quarantined previously and now extracts cleanly,
+    the prior quarantine record must be auto-removed."""
+    page = _make_page(url="https://example.com/prog")
+    cleaner = _make_mock_cleaner(_make_parsed_data())
+    db = _make_mock_db()
+    db.upsert_quarantine = MagicMock()
+    db.clear_quarantine = MagicMock(return_value=1)
+
+    with patch("src.scrapers.page_processor.extract_program_name", return_value="MSc Computer Science"):
+        success, error = process_page_for_program(
+            page=page, cleaner=cleaner, db_manager=db,
+            univ_slug="hku", year=2025, current_depth=0,
+        )
+
+    assert success is True
+    db.upsert_program.assert_called_once()
+    db.clear_quarantine.assert_called_once_with(
+        university_slug="hku", source_url="https://example.com/prog"
+    )
+
+
+def test_quarantine_path_does_not_call_clear() -> None:
+    """When the gate rejects, we do NOT call clear_quarantine — the new
+    record IS the (overwriting) quarantine entry via upsert_quarantine."""
+    page = _make_page(markdown="# MSc Computer Science")
+    cleaner = _make_mock_cleaner(_make_empty_shell_parsed())
+    db = _make_mock_db()
+    db.upsert_quarantine = MagicMock()
+    db.clear_quarantine = MagicMock()
+
+    process_page_for_program(
+        page=page, cleaner=cleaner, db_manager=db,
+        univ_slug="hku", year=2025, current_depth=0,
+    )
+
+    db.upsert_program.assert_not_called()
+    db.upsert_quarantine.assert_called_once()
+    db.clear_quarantine.assert_not_called()
