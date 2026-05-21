@@ -226,7 +226,7 @@ def extract_program_data_from_page(
             content_type = "html"
 
     try:
-        parsed: Optional[ParsedProgramData] = cleaner.clean_markdown(
+        parsed: Optional[ParsedProgramData] = cleaner.clean_markdown_with_critique(
             markdown=content_for_llm,
             source_url=page.url,
             name_hints=name_hints,

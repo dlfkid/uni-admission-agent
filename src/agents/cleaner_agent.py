@@ -297,6 +297,108 @@ class LLMCleanerAgent:
         return self._parse_rolling_chunks(markdown, source_url, name_hints, academic_year)
 
     # ------------------------------------------------------------------ #
+    #  Self-critique retry                                                #
+    # ------------------------------------------------------------------ #
+
+    @staticmethod
+    def _parsed_has_content(parsed: Optional[ParsedProgramData]) -> bool:
+        """Cleaner-level "did we extract anything useful?" check.
+
+        Faculty alone doesn't count — a page that returns only a faculty
+        with no tuition/deadlines/requirements is the empty-shell failure
+        mode the gate exists to catch.
+        """
+        if parsed is None:
+            return False
+        return (
+            parsed.tuition is not None
+            or bool(parsed.deadlines)
+            or bool(parsed.requirements)
+        )
+
+    def _build_critique_block(
+        self, previous: Optional[ParsedProgramData]
+    ) -> str:
+        """Build a critique preamble to prepend before re-running extraction.
+
+        Frames the previous output as DATA (not as the LLM's prior message)
+        to reduce cognitive-consistency bias — LLMs are less likely to
+        double down on a wrong answer when it's presented as external input.
+        """
+        if previous is None:
+            previous_block = "(no fields extracted — extraction returned nothing)"
+        else:
+            previous_block = previous.model_dump_json()
+        return (
+            "PREVIOUS EXTRACTION ATTEMPT FAILED QUALITY CHECK\n"
+            "================================================\n"
+            "A previous extraction returned the following data:\n"
+            f"{previous_block}\n\n"
+            "This is incomplete: no tuition amount, no deadlines, and no "
+            "requirements were found. The page below likely DOES contain "
+            "at least one of these — look more carefully for:\n"
+            "  - Any monetary amount + currency (tuition / fee / cost)\n"
+            "  - Any date phrased as deadline / closing / cutoff / round X\n"
+            "  - Any score / GPA / qualification mentioned for admission\n"
+            "\n"
+            "If after a careful re-read these fields are GENUINELY absent "
+            "(e.g. this is an overview / navigation / placeholder page), "
+            "return null fields rather than fabricating values. Do not "
+            "invent data to satisfy this critique.\n"
+            "================================================\n\n"
+        )
+
+    def clean_markdown_with_critique(
+        self,
+        markdown: str,
+        source_url: str = "",
+        name_hints: Optional[List[str]] = None,
+        academic_year: int = 0,
+    ) -> Optional[ParsedProgramData]:
+        """Parse markdown with one self-critique retry on poor results.
+
+        If the first attempt returns no content (None or empty shell),
+        re-call the LLM with a critique preamble that embeds the previous
+        output and asks for a more careful re-read. Returns whichever
+        attempt produced content; if both attempts fail, returns the
+        original (still-empty) result so downstream can quarantine.
+
+        Caps at one retry — no critique chains, to bound cost and avoid
+        the LLM hallucinating data to satisfy escalating critiques.
+        """
+        first = self.clean_markdown(
+            markdown=markdown,
+            source_url=source_url,
+            name_hints=name_hints,
+            academic_year=academic_year,
+        )
+        if self._parsed_has_content(first):
+            return first
+
+        # Retry with critique. Same provider, augmented prompt embedded
+        # as a preamble to the original markdown so the LLM sees the
+        # critique BEFORE the source content.
+        critique_prefix = self._build_critique_block(first)
+        retry_markdown = critique_prefix + markdown
+        logger.info(
+            "Self-critique retry for %s (first attempt had no content)",
+            source_url,
+        )
+        retry = self.clean_markdown(
+            markdown=retry_markdown,
+            source_url=source_url,
+            name_hints=name_hints,
+            academic_year=academic_year,
+        )
+
+        if self._parsed_has_content(retry):
+            return retry
+        # Both empty — return the original so downstream sees the original
+        # failure signal (not the retry which may be different but equally
+        # useless).
+        return first
+
+    # ------------------------------------------------------------------ #
     #  Private helpers                                                     #
     # ------------------------------------------------------------------ #
 

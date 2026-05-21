@@ -63,7 +63,7 @@ def _make_mock_cleaner(
     parsed: Optional[ParsedProgramData] = None,
 ) -> MagicMock:
     cleaner = MagicMock()
-    cleaner.clean_markdown.return_value = parsed
+    cleaner.clean_markdown_with_critique.return_value = parsed
     return cleaner
 
 
@@ -89,7 +89,7 @@ def test_process_page_success() -> None:
 
     assert success is True
     assert error is None
-    cleaner.clean_markdown.assert_called_once()
+    cleaner.clean_markdown_with_critique.assert_called_once()
     db.upsert_program.assert_called_once()
 
     # Check the upsert data
@@ -113,7 +113,7 @@ def test_process_page_no_markdown() -> None:
 
     assert success is False
     assert error == "No markdown content"
-    cleaner.clean_markdown.assert_not_called()
+    cleaner.clean_markdown_with_critique.assert_not_called()
 
 
 def test_process_page_no_parsed_data() -> None:
@@ -147,7 +147,7 @@ def test_process_page_html_fallback() -> None:
 
     assert success is True
     # The HTML should have been passed to clean_markdown instead of short markdown
-    call_args = cleaner.clean_markdown.call_args
+    call_args = cleaner.clean_markdown_with_critique.call_args
     assert call_args[1]["markdown"] == large_html
 
 
@@ -166,7 +166,7 @@ def test_process_page_no_html_fallback_when_md_long_enough() -> None:
     )
 
     # Markdown should be used (not HTML)
-    call_args = cleaner.clean_markdown.call_args
+    call_args = cleaner.clean_markdown_with_critique.call_args
     content_used = call_args[1].get("markdown") or call_args[0][0]
     assert content_used == md
 
@@ -333,7 +333,7 @@ def test_extract_program_data_uses_selected_anchor_text_when_title_is_generic() 
 def test_process_page_llm_exception() -> None:
     page = _make_page()
     cleaner = MagicMock()
-    cleaner.clean_markdown.side_effect = RuntimeError("LLM crashed")
+    cleaner.clean_markdown_with_critique.side_effect = RuntimeError("LLM crashed")
     db = _make_mock_db()
 
     success, error = process_page_for_program(
@@ -397,7 +397,7 @@ def test_process_pages_batch_partial_failure() -> None:
         patch("src.scrapers.page_processor.DatabaseManager") as MockDB,
     ):
         mock_cleaner = MagicMock()
-        mock_cleaner.clean_markdown.side_effect = mock_clean_markdown
+        mock_cleaner.clean_markdown_with_critique.side_effect = mock_clean_markdown
         MockCleaner.return_value = mock_cleaner
         mock_db = _make_mock_db()
         MockDB.return_value = mock_db
@@ -436,7 +436,7 @@ def test_process_pages_batch_skip_empty_markdown() -> None:
 
     # Only 1 processed (the empty one is skipped)
     assert imported == 1
-    assert mock_cleaner.clean_markdown.call_count == 1
+    assert mock_cleaner.clean_markdown_with_critique.call_count == 1
 
 
 # ── Quality gate integration ────────────────────────────────────────
@@ -577,7 +577,7 @@ def test_no_markdown_routes_to_quarantine() -> None:
 
     assert success is False
     assert error is not None
-    cleaner.clean_markdown.assert_not_called()  # markdown empty → never reaches LLM
+    cleaner.clean_markdown_with_critique.assert_not_called()  # markdown empty → never reaches LLM
     db.upsert_program.assert_not_called()
     db.upsert_quarantine.assert_called_once()
     kwargs = db.upsert_quarantine.call_args.kwargs
@@ -602,7 +602,7 @@ def test_cleaner_returns_none_routes_to_quarantine() -> None:
     )
 
     assert success is False
-    cleaner.clean_markdown.assert_called_once()  # we DID try the LLM
+    cleaner.clean_markdown_with_critique.assert_called_once()  # we DID try the LLM
     db.upsert_program.assert_not_called()
     db.upsert_quarantine.assert_called_once()
     kwargs = db.upsert_quarantine.call_args.kwargs
