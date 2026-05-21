@@ -90,6 +90,8 @@ DATABASE & STATUS:
     golden-collect   Collect Phase 3 golden sample snapshots
     quality-score    Run Phase 3 quality scoring and threshold checks
     taxonomy-export  Export canonical taxonomy names to JSON
+    quarantine list  List extractions that failed the quality gate
+    quarantine clear Remove quarantine entries for one university (optional reason filter)
     
 LLM CONFIGURATION:
     llm-config Interactive wizard to configure LLM providers
