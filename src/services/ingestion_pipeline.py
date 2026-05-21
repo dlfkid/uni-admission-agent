@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field, ValidationError, field_validator
 from sqlmodel import col, select
 
 from src.agents.cleaner_agent import LLMCleanerAgent
+from src.agents.factory import make_default_cleaner
 from src.models.ingestion import (
     IngestionJob,
     IngestionJobStatus,
@@ -1033,7 +1034,7 @@ class IngestionPipeline:
         context: Dict[str, Any],
     ) -> Dict[str, Any]:
         raw_pages = context.get("raw_pages") or []
-        cleaner = LLMCleanerAgent()
+        cleaner = make_default_cleaner()
         univ_slug = str(request_payload.get("univ_slug") or "")
         page_type_hint = str(request_payload.get("page_type_hint") or "auto").strip().lower()
         selected_urls_count = len(request_payload.get("selected_urls") or [])

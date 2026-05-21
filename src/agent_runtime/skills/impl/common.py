@@ -452,8 +452,8 @@ def _auto_fetch_and_extract(
     """
     import concurrent.futures
     from typing import Any
-    from src.agents.factory import create_router
-    from src.agents.cleaner_agent import LLMCleanerAgent
+    from src.agents.factory import create_router, make_default_cleaner
+    from src.agents.cleaner_agent import LLMCleanerAgent  # noqa: F401
     from src.models.scraper_models import CrawlPageResult
     from src.scrapers.page_processor import extract_program_data_from_page
     from src.scrapers.schema_extractor import (
@@ -510,7 +510,7 @@ def _auto_fetch_and_extract(
     def _extract_with_llm(page: CrawlPageResult) -> tuple[dict | None, dict[str, Any]]:
         """Full LLM extraction — returns (program_data, raw_extracted_fields)."""
         router = create_router()
-        cleaner = LLMCleanerAgent(router=router)
+        cleaner = make_default_cleaner(router=router)
         anchor_text = link_texts.get(page.url)
         trimmed_md = _strip_boilerplate(page.markdown) if page.markdown else ""
         trimmed_html = _strip_html_boilerplate(page.html) if page.html else ""

@@ -12,7 +12,7 @@ from datetime import datetime
 from typing import Dict, List, Optional, Tuple, Any
 
 from src.agents.cleaner_agent import LLMCleanerAgent, ParsedProgramData
-from src.agents.factory import RouterAgent
+from src.agents.factory import RouterAgent, make_default_cleaner
 from src.models.scraper_models import CrawlPageResult
 from src.scrapers.helpers import extract_program_name, is_noise_program_name
 from src.storage.db_manager import DatabaseManager
@@ -284,7 +284,7 @@ def process_pages_batch(
     Returns:
         Tuple of (imported_count, failed_candidates, failed_urls).
     """
-    cleaner = LLMCleanerAgent(router=router)
+    cleaner = make_default_cleaner(router=router)
     db_manager = DatabaseManager()
     
     total_imported = 0

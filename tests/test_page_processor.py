@@ -357,7 +357,7 @@ def test_process_pages_batch_all_success() -> None:
     mock_parsed = _make_parsed_data()
 
     with (
-        patch("src.scrapers.page_processor.LLMCleanerAgent") as MockCleaner,
+        patch("src.scrapers.page_processor.make_default_cleaner") as MockCleaner,
         patch("src.scrapers.page_processor.DatabaseManager") as MockDB,
     ):
         mock_cleaner = _make_mock_cleaner(mock_parsed)
@@ -393,7 +393,7 @@ def test_process_pages_batch_partial_failure() -> None:
         return None  # Second page fails
 
     with (
-        patch("src.scrapers.page_processor.LLMCleanerAgent") as MockCleaner,
+        patch("src.scrapers.page_processor.make_default_cleaner") as MockCleaner,
         patch("src.scrapers.page_processor.DatabaseManager") as MockDB,
     ):
         mock_cleaner = MagicMock()
@@ -420,7 +420,7 @@ def test_process_pages_batch_skip_empty_markdown() -> None:
     ]
 
     with (
-        patch("src.scrapers.page_processor.LLMCleanerAgent") as MockCleaner,
+        patch("src.scrapers.page_processor.make_default_cleaner") as MockCleaner,
         patch("src.scrapers.page_processor.DatabaseManager") as MockDB,
     ):
         mock_cleaner = _make_mock_cleaner(_make_parsed_data())

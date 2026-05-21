@@ -6,7 +6,8 @@ from typing import Optional, Dict, List, Any, Tuple
 
 import pandas as pd
 
-from src.agents.cleaner_agent import LLMCleanerAgent, ParsedProgramData
+from src.agents.cleaner_agent import ParsedProgramData
+from src.agents.factory import make_default_cleaner
 from src.core.parser import DataCleaner
 from src.storage.db_manager import DatabaseManager
 from src.utils.pdf_processor import PDFProcessor
@@ -44,7 +45,7 @@ class ExcelImporter:
         self.file_path = Path(file_path)
         self.db_manager = DatabaseManager()
         self.use_llm = use_llm
-        self.llm_agent = LLMCleanerAgent() if use_llm else None
+        self.llm_agent = make_default_cleaner() if use_llm else None
 
     def import_data(self, univ_slug: str, year: int) -> None:
         """

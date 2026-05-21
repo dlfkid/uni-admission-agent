@@ -7,7 +7,7 @@ through providers in order, falling back on rate limits or outages.
 
 import logging
 import os
-from typing import List, Type
+from typing import List, Optional, Type
 
 from dotenv import find_dotenv, load_dotenv
 from pydantic import BaseModel
@@ -167,3 +167,40 @@ def create_model_provider_adapter(
         allow_external=allow_external,
         internal_factory=create_router,
     )
+
+
+def make_default_cleaner(
+    *,
+    router: Optional[RouterAgent] = None,
+    cache_engine: Optional[object] = "AUTO",
+):
+    """Build an LLMCleanerAgent pre-wired with the default extraction cache.
+
+    Args:
+        router: optional RouterAgent (created from env if omitted).
+        cache_engine: SQLAlchemy ``Engine`` for the cache backend. Pass
+            ``None`` to disable caching explicitly. The default sentinel
+            ``"AUTO"`` resolves to the project's ``DatabaseManager`` engine,
+            silently falling back to no-cache if the DB is not reachable.
+    """
+    # Lazy imports avoid a circular dependency at module load time.
+    from src.agents.cleaner_agent import LLMCleanerAgent
+    from src.agents.extraction_cache import ExtractionCacheRepo
+
+    repo = None
+    if cache_engine == "AUTO":
+        try:
+            from src.storage.db_manager import DatabaseManager
+
+            manager = DatabaseManager()
+            if not getattr(manager, "engine", None):
+                manager.init_db()
+            repo = ExtractionCacheRepo(manager.engine)
+        except Exception as exc:  # pylint: disable=broad-except
+            logger.warning(
+                "extraction_cache: DB unavailable, caching disabled (%s)", exc
+            )
+    elif cache_engine is not None:
+        repo = ExtractionCacheRepo(cache_engine)
+
+    return LLMCleanerAgent(router=router, cache_repo=repo)

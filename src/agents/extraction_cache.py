@@ -6,12 +6,14 @@ and repeat crawls of the same page.
 """
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import logging
 from datetime import datetime, timezone
-from typing import List, Optional
+from typing import Iterator, List, Optional, Union
 
+from sqlalchemy.engine import Engine
 from sqlmodel import Field, Session, SQLModel, select
 
 
@@ -29,38 +31,54 @@ class ExtractionCacheEntry(SQLModel, table=True):
 
 
 class ExtractionCacheRepo:
-    """Thin repository wrapping ExtractionCacheEntry CRUD."""
+    """Thin repository wrapping ExtractionCacheEntry CRUD.
 
-    def __init__(self, session: Session) -> None:
-        self._session = session
+    Accepts either a long-lived ``Session`` (typically in tests where the
+    caller controls lifecycle) or an ``Engine`` (typical in production —
+    a fresh session is opened and closed per operation, so the repo can
+    safely outlive any single request).
+    """
+
+    def __init__(self, session_or_engine: Union[Session, Engine]) -> None:
+        self._handle = session_or_engine
+
+    @contextlib.contextmanager
+    def _scoped_session(self) -> Iterator[Session]:
+        if isinstance(self._handle, Session):
+            yield self._handle
+        else:
+            with Session(self._handle) as session:
+                yield session
 
     def get(self, cache_key: str) -> Optional["ParsedProgramData"]:  # noqa: F821
         # Import lazily to avoid a circular dependency with cleaner_agent.
         from src.agents.cleaner_agent import ParsedProgramData
 
-        entry = self._session.get(ExtractionCacheEntry, cache_key)
-        if entry is None:
-            return None
-        try:
-            data = json.loads(entry.payload)
-            return ParsedProgramData.model_validate(data)
-        except (json.JSONDecodeError, ValueError) as exc:
-            logger.warning(
-                "extraction_cache: failed to decode entry %s: %s", cache_key, exc
-            )
-            return None
+        with self._scoped_session() as session:
+            entry = session.get(ExtractionCacheEntry, cache_key)
+            if entry is None:
+                return None
+            try:
+                data = json.loads(entry.payload)
+                return ParsedProgramData.model_validate(data)
+            except (json.JSONDecodeError, ValueError) as exc:
+                logger.warning(
+                    "extraction_cache: failed to decode entry %s: %s", cache_key, exc
+                )
+                return None
 
     def put(self, cache_key: str, parsed: "ParsedProgramData") -> None:  # noqa: F821
         payload = parsed.model_dump_json()
-        existing = self._session.get(ExtractionCacheEntry, cache_key)
-        if existing is None:
-            self._session.add(
-                ExtractionCacheEntry(cache_key=cache_key, payload=payload)
-            )
-        else:
-            existing.payload = payload
-            existing.created_at = datetime.now(timezone.utc)
-        self._session.commit()
+        with self._scoped_session() as session:
+            existing = session.get(ExtractionCacheEntry, cache_key)
+            if existing is None:
+                session.add(
+                    ExtractionCacheEntry(cache_key=cache_key, payload=payload)
+                )
+            else:
+                existing.payload = payload
+                existing.created_at = datetime.now(timezone.utc)
+            session.commit()
 
 
 def _normalize_markdown(text: str) -> str:

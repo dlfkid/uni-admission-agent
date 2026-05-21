@@ -264,3 +264,78 @@ class TestCleanerCacheIntegration:
 
         rows = session.exec(sm_select(ExtractionCacheEntry)).all()
         assert rows == []
+
+
+@pytest.fixture(name="engine")
+def fixture_engine():
+    """In-memory SQLite engine with extraction_cache table created."""
+    import src.models.admission  # noqa: F401
+    import src.models.requirement  # noqa: F401
+
+    engine = create_engine("sqlite:///:memory:")
+    SQLModel.metadata.create_all(engine, tables=[
+        SQLModel.metadata.tables["extraction_cache"]
+    ])
+    return engine
+
+
+class TestRepoEngineMode:
+    """ExtractionCacheRepo can wrap an Engine and open per-call sessions."""
+
+    def test_engine_mode_get_then_put_roundtrip(self, engine) -> None:
+        repo = ExtractionCacheRepo(engine)
+        assert repo.get("k1") is None
+        repo.put("k1", _sample_parsed_data(faculty="Faculty of Arts"))
+        loaded = repo.get("k1")
+        assert loaded is not None
+        assert loaded.faculty == "Faculty of Arts"
+
+    def test_engine_mode_persists_across_repo_instances(self, engine) -> None:
+        """A second repo instance over the same engine sees prior writes."""
+        ExtractionCacheRepo(engine).put("k1", _sample_parsed_data())
+        loaded = ExtractionCacheRepo(engine).get("k1")
+        assert loaded is not None
+
+
+class TestMakeDefaultCleaner:
+    """The factory wires a cleaner against a real DB-backed cache."""
+
+    def test_factory_returns_cleaner_with_cache(self, engine) -> None:
+        from unittest.mock import MagicMock
+
+        from src.agents.factory import make_default_cleaner
+
+        cleaner = make_default_cleaner(router=MagicMock(), cache_engine=engine)
+        # The cleaner must have a cache_repo wired in.
+        assert cleaner._cache_repo is not None  # noqa: SLF001
+
+    def test_factory_cleaner_cache_hits_skip_parser(self, engine) -> None:
+        """End-to-end: two calls with identical input → parser called once."""
+        from unittest.mock import MagicMock
+
+        from src.agents.factory import make_default_cleaner
+
+        expected = _sample_parsed_data(faculty="Faculty of Medicine")
+        cleaner = make_default_cleaner(router=MagicMock(), cache_engine=engine)
+        spy = MagicMock(return_value=expected)
+        cleaner._parse_single_pass = spy  # type: ignore[method-assign]
+
+        # First call: parser invoked, result cached.
+        first = cleaner.clean_markdown(markdown="page", source_url="u", academic_year=2026)
+        assert first is not None
+        assert first.faculty == "Faculty of Medicine"
+        assert spy.call_count == 1
+
+        # Second call (same inputs): parser NOT invoked.
+        second = cleaner.clean_markdown(markdown="page", source_url="u", academic_year=2026)
+        assert second is not None
+        assert second.faculty == "Faculty of Medicine"
+        assert spy.call_count == 1, "second identical call must be served from cache"
+
+    def test_factory_cache_engine_none_means_no_caching(self) -> None:
+        from unittest.mock import MagicMock
+
+        from src.agents.factory import make_default_cleaner
+
+        cleaner = make_default_cleaner(router=MagicMock(), cache_engine=None)
+        assert cleaner._cache_repo is None  # noqa: SLF001

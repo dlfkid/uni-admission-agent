@@ -16,7 +16,7 @@ from crawl4ai import AsyncWebCrawler, BrowserConfig, CrawlerRunConfig, CacheMode
 from tenacity import retry, stop_after_attempt, wait_exponential, RetryError
 
 from src.agents.cleaner_agent import LLMCleanerAgent
-from src.agents.factory import RouterAgent, create_router
+from src.agents.factory import RouterAgent, create_router, make_default_cleaner
 from src.core.environment import ScraperError
 from src.models.scraper_models import CrawlPageResult, PageType
 from src.scrapers.helpers import extract_program_name, save_markdown, save_html_debug
@@ -354,7 +354,7 @@ class AdmissionScraper:
         """Process browser-provided HTML as a DETAIL page."""
         logger.info("Processing browser-provided HTML as DETAIL page (skipping URL crawl)")
         
-        cleaner = LLMCleanerAgent(router=self.router)
+        cleaner = make_default_cleaner(router=self.router)
         db_manager = DatabaseManager()
         
         success, _ = process_page_for_program(
