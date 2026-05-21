@@ -93,6 +93,7 @@ DATABASE & STATUS:
     quarantine list  List extractions that failed the quality gate
     quarantine clear Remove quarantine entries for one university (optional reason filter)
     audit list       Inspect index→detail extraction funnel (raw → filtered → extracted)
+    audit drill      Show URLs dropped at each filter stage for one audit row
     
 LLM CONFIGURATION:
     llm-config Interactive wizard to configure LLM providers
@@ -1718,6 +1719,33 @@ def audit_list(
             f"(quarantined={entry.quarantined_count})  "
             f"url={entry.index_url}"
         )
+
+
+@audit_app.command(name="drill")
+def audit_drill(
+    audit_id: int = typer.Argument(..., help="Audit row id (from `audit list`)"),
+) -> None:
+    """Show which specific URLs were dropped at each filter stage.
+
+    Answers "did we miss a real program?" — for a given audit row, lists
+    every link that was filtered out, grouped by the stage that rejected
+    it (llm_filter or taxonomy_filter).
+    """
+    db_manager = DatabaseManager()
+    links = db_manager.list_audit_dropped_links(audit_id=audit_id)
+    if not links:
+        typer.echo("No dropped links recorded for this audit.")
+        return
+
+    grouped: dict = {}
+    for link in links:
+        grouped.setdefault(link.stage_dropped, []).append(link)
+
+    for stage, items in grouped.items():
+        typer.echo(f"\n{stage}  ({len(items)} dropped):")
+        for link in items:
+            anchor = f" [{link.anchor_text}]" if link.anchor_text else ""
+            typer.echo(f"  {link.url}{anchor}")
 
 
 # ---------------------------------------------------------------------------

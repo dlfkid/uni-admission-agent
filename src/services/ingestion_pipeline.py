@@ -1506,6 +1506,7 @@ class IngestionPipeline:
                     extracted_count=persisted_count,
                     quarantined_count=quarantined_count,
                     job_uid=context.get("job_uid") or request_payload.get("job_uid"),
+                    dropped_links=funnel.get("dropped_links"),
                 )
             except Exception:  # pylint: disable=broad-except
                 logger.exception("Failed to record extraction_audit row")
@@ -1699,10 +1700,23 @@ class IngestionPipeline:
         )
         if not detail_urls:
             detail_urls = [u for u, _ in link_pairs]
+        kept_set = {str(u).strip() for u in detail_urls if str(u or "").strip()}
+        dropped_links: List[Dict[str, str]] = []
+        for url, text in link_pairs:
+            url_s = str(url or "").strip()
+            if url_s and url_s not in kept_set:
+                dropped_links.append(
+                    {
+                        "url": url_s,
+                        "anchor_text": str(text or "").strip() or None,
+                        "stage_dropped": "llm_filter",
+                    }
+                )
         if funnel_out is not None:
             funnel_out["index_url"] = page.url
             funnel_out["raw_link_count"] = len(link_pairs)
             funnel_out["llm_filtered_count"] = len(detail_urls)
+            funnel_out["dropped_links"] = dropped_links
 
         seen: set[str] = set()
         deduped: List[str] = []
@@ -1752,6 +1766,21 @@ class IngestionPipeline:
                     candidate_taxonomy_filter_threshold,
                     candidate_taxonomy_filter_top_k,
                 )
+                # Record taxonomy-stage drops for drill-down.
+                if funnel_out is not None:
+                    kept_after_tax = set(filtered_urls)
+                    drops = funnel_out.setdefault("dropped_links", [])
+                    for prior_url in deduped:
+                        if prior_url not in kept_after_tax:
+                            drops.append(
+                                {
+                                    "url": prior_url,
+                                    "anchor_text": (
+                                        url_to_text.get(prior_url) or None
+                                    ),
+                                    "stage_dropped": "taxonomy_filter",
+                                }
+                            )
                 deduped = filtered_urls
                 seen = set(filtered_urls)
             else:

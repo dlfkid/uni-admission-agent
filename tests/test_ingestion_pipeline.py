@@ -179,6 +179,45 @@ def test_persist_versioned_writes_extraction_audit() -> None:
     assert kwargs["job_uid"] == "job-xyz"
 
 
+def test_persist_versioned_forwards_dropped_links_to_audit() -> None:
+    """When fetch_raw recorded dropped links per stage, persist_versioned
+    must forward them to record_extraction_audit so the drill-down works."""
+    mock_db = MagicMock()
+    mock_db.upsert_program.return_value = (
+        MagicMock(id=1, name_en="X", source_url="", extra_metadata=None),
+        True,
+    )
+    pipeline = IngestionPipeline(db_manager=mock_db)
+
+    dropped = [
+        {"url": "https://hku.hk/about", "anchor_text": "About",
+         "stage_dropped": "llm_filter"},
+        {"url": "https://hku.hk/news", "anchor_text": "News",
+         "stage_dropped": "llm_filter"},
+        {"url": "https://hku.hk/events", "anchor_text": "Events",
+         "stage_dropped": "taxonomy_filter"},
+    ]
+
+    context = {
+        "validated_programs": [
+            {"name_en": "MSc Finance", "academic_year": 2026, "tuition_amount": 100},
+        ],
+        "validated_hash": "h",
+        "audit_funnel": {
+            "index_url": "https://www.hku.hk/programs",
+            "raw_link_count": 87,
+            "llm_filtered_count": 23,
+            "candidate_count": 22,
+            "dropped_links": dropped,
+        },
+    }
+    pipeline._stage_persist_versioned({"univ_slug": "hku", "year": 2026}, context)
+
+    mock_db.record_extraction_audit.assert_called_once()
+    kwargs = mock_db.record_extraction_audit.call_args.kwargs
+    assert kwargs["dropped_links"] == dropped
+
+
 def test_persist_versioned_skips_audit_when_no_funnel() -> None:
     """Direct detail-mode crawls (no index page) don't have a funnel —
     audit must not be written in that case."""

@@ -6,11 +6,11 @@ over time. Cleanup, when needed, is by deletion through CLI / REST
 """
 from __future__ import annotations
 
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 from sqlmodel import Session, col, select
 
-from src.models.extraction_audit import ExtractionAudit
+from src.models.extraction_audit import ExtractionAudit, ExtractionAuditLink
 
 
 class ExtractionAuditRepo:
@@ -29,6 +29,7 @@ class ExtractionAuditRepo:
         extracted_count: int,
         quarantined_count: int,
         job_uid: Optional[str] = None,
+        dropped_links: Optional[List[Dict[str, Any]]] = None,
     ) -> ExtractionAudit:
         entry = ExtractionAudit(
             university_slug=university_slug,
@@ -44,7 +45,32 @@ class ExtractionAuditRepo:
         self._session.add(entry)
         self._session.commit()
         self._session.refresh(entry)
+
+        # Fan out dropped-link rows. Empty / None lists write nothing.
+        for link in dropped_links or []:
+            url = str(link.get("url") or "").strip()
+            if not url:
+                continue
+            self._session.add(
+                ExtractionAuditLink(
+                    audit_id=entry.id,
+                    url=url,
+                    anchor_text=link.get("anchor_text") or None,
+                    stage_dropped=str(link.get("stage_dropped") or "unknown"),
+                )
+            )
+        if dropped_links:
+            self._session.commit()
+
         return entry
+
+    def list_dropped_links(self, *, audit_id: int) -> List[ExtractionAuditLink]:
+        stmt = (
+            select(ExtractionAuditLink)
+            .where(ExtractionAuditLink.audit_id == audit_id)
+            .order_by(col(ExtractionAuditLink.id).asc())
+        )
+        return list(self._session.exec(stmt).all())
 
     def list_for(
         self,

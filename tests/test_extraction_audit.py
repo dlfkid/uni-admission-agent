@@ -108,3 +108,98 @@ class TestExtractionAuditRepo:
             repo.record(**_sample_funnel(extracted_count=i))
         rows = repo.list_for(university_slug="hku", limit=3)
         assert len(rows) == 3
+
+
+@pytest.fixture(name="full_session")
+def fixture_full_session():
+    """In-memory SQLite session with both audit + audit_link tables."""
+    import src.models.admission  # noqa: F401
+    import src.models.requirement  # noqa: F401
+    import src.models.extraction_audit  # noqa: F401
+
+    engine = create_engine("sqlite:///:memory:")
+    SQLModel.metadata.create_all(
+        engine,
+        tables=[
+            SQLModel.metadata.tables["extraction_audit"],
+            SQLModel.metadata.tables["extraction_audit_link"],
+        ],
+    )
+    with Session(engine) as session:
+        yield session
+
+
+class TestExtractionAuditLinkModel:
+    def test_model_persists(self, full_session: Session) -> None:
+        from src.models.extraction_audit import ExtractionAuditLink
+
+        # Need a parent audit row first.
+        repo = ExtractionAuditRepo(full_session)
+        parent = repo.record(**_sample_funnel())
+
+        link = ExtractionAuditLink(
+            audit_id=parent.id,
+            url="https://www.hku.hk/about",
+            anchor_text="About HKU",
+            stage_dropped="llm_filter",
+        )
+        full_session.add(link)
+        full_session.commit()
+
+        rows = full_session.exec(select(ExtractionAuditLink)).all()
+        assert len(rows) == 1
+        assert rows[0].url == "https://www.hku.hk/about"
+        assert rows[0].stage_dropped == "llm_filter"
+
+
+class TestAuditRepoDroppedLinks:
+    def test_record_with_dropped_links_inserts_link_rows(
+        self, full_session: Session
+    ) -> None:
+        """When recording an audit, any dropped_links payload should be
+        stored as separate audit_link rows."""
+        from src.models.extraction_audit import ExtractionAuditLink
+
+        repo = ExtractionAuditRepo(full_session)
+        dropped = [
+            {"url": "https://hku.hk/about", "anchor_text": "About",
+             "stage_dropped": "llm_filter"},
+            {"url": "https://hku.hk/contact", "anchor_text": "Contact",
+             "stage_dropped": "llm_filter"},
+            {"url": "https://hku.hk/news", "anchor_text": "News",
+             "stage_dropped": "taxonomy_filter"},
+        ]
+        repo.record(**_sample_funnel(), dropped_links=dropped)
+
+        link_rows = full_session.exec(select(ExtractionAuditLink)).all()
+        assert len(link_rows) == 3
+        assert {r.stage_dropped for r in link_rows} == {"llm_filter", "taxonomy_filter"}
+
+    def test_list_dropped_links_returns_grouped(
+        self, full_session: Session
+    ) -> None:
+        repo = ExtractionAuditRepo(full_session)
+        audit = repo.record(
+            **_sample_funnel(),
+            dropped_links=[
+                {"url": "https://a", "anchor_text": "A",
+                 "stage_dropped": "llm_filter"},
+                {"url": "https://b", "anchor_text": "B",
+                 "stage_dropped": "taxonomy_filter"},
+            ],
+        )
+
+        links = repo.list_dropped_links(audit_id=audit.id)
+        assert len(links) == 2
+        assert {l.url for l in links} == {"https://a", "https://b"}
+
+    def test_record_with_empty_dropped_links_writes_no_link_rows(
+        self, full_session: Session
+    ) -> None:
+        from src.models.extraction_audit import ExtractionAuditLink
+
+        repo = ExtractionAuditRepo(full_session)
+        repo.record(**_sample_funnel(), dropped_links=[])
+
+        rows = full_session.exec(select(ExtractionAuditLink)).all()
+        assert rows == []

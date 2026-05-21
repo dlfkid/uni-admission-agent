@@ -53,8 +53,35 @@ def upgrade() -> None:
         ["created_at"],
     )
 
+    op.create_table(
+        "extraction_audit_link",
+        sa.Column("id", sa.Integer(), primary_key=True, autoincrement=True),
+        sa.Column(
+            "audit_id",
+            sa.Integer(),
+            sa.ForeignKey("extraction_audit.id"),
+            nullable=False,
+        ),
+        sa.Column("url", sa.String(length=1024), nullable=False),
+        sa.Column("anchor_text", sa.String(length=512), nullable=True),
+        sa.Column("stage_dropped", sa.String(length=32), nullable=False),
+    )
+    op.create_index(
+        "ix_extraction_audit_link_audit_id",
+        "extraction_audit_link",
+        ["audit_id"],
+    )
+    op.create_index(
+        "ix_extraction_audit_link_stage_dropped",
+        "extraction_audit_link",
+        ["stage_dropped"],
+    )
+
 
 def downgrade() -> None:
+    op.drop_index("ix_extraction_audit_link_stage_dropped", table_name="extraction_audit_link")
+    op.drop_index("ix_extraction_audit_link_audit_id", table_name="extraction_audit_link")
+    op.drop_table("extraction_audit_link")
     op.drop_index("ix_extraction_audit_created_at", table_name="extraction_audit")
     op.drop_index("ix_extraction_audit_academic_year", table_name="extraction_audit")
     op.drop_index("ix_extraction_audit_university_slug", table_name="extraction_audit")

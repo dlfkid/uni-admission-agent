@@ -1244,8 +1244,9 @@ class DatabaseManager:
         extracted_count: int,
         quarantined_count: int,
         job_uid: Optional[str] = None,
+        dropped_links: Optional[list] = None,
     ):
-        """Persist one index→detail funnel record."""
+        """Persist one index→detail funnel record (with optional dropped links)."""
         from src.storage.audit_repo import ExtractionAuditRepo
 
         with self.get_session() as session:
@@ -1260,7 +1261,16 @@ class DatabaseManager:
                 extracted_count=extracted_count,
                 quarantined_count=quarantined_count,
                 job_uid=job_uid,
+                dropped_links=dropped_links,
             )
+
+    def list_audit_dropped_links(self, *, audit_id: int):
+        """Return per-link dropped records for one audit row."""
+        from src.storage.audit_repo import ExtractionAuditRepo
+
+        with self.get_session() as session:
+            repo = ExtractionAuditRepo(session)
+            return repo.list_dropped_links(audit_id=audit_id)
 
     def list_extraction_audit(
         self,

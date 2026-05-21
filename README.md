@@ -252,6 +252,9 @@ The agent needs a database connection.
 #   exactly where in the funnel programs were lost.
 ./adm-agent audit list --university hku --year 2026 --limit 10
 
+# Drill into one audit row to see WHICH URLs got filtered at each stage
+./adm-agent audit drill 42
+
 # Show current version
 ./adm-agent version
 
@@ -330,6 +333,9 @@ The agent needs a database connection.
 
 # Inspect index→detail funnel records
 .\adm-agent.exe audit list --university hku --year 2026 --limit 10
+
+# Drill into one audit row to see WHICH URLs got filtered at each stage
+.\adm-agent.exe audit drill 42
 
 # Show current version
 .\adm-agent.exe version

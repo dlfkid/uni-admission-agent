@@ -1419,6 +1419,26 @@ async def api_audit_list(
     ]
 
 
+@app.get("/audit/{audit_id}/dropped")
+async def api_audit_dropped(audit_id: int) -> Dict[str, List[Dict[str, Any]]]:
+    """Return URLs dropped at each filter stage for one audit row.
+
+    Grouped by stage: ``llm_filter`` (links the LLM said weren't programs)
+    and ``taxonomy_filter`` (links the taxonomy-score filter rejected).
+    """
+    db = get_db_manager()
+    links = db.list_audit_dropped_links(audit_id=audit_id)
+    grouped: Dict[str, List[Dict[str, Any]]] = {}
+    for link in links:
+        grouped.setdefault(link.stage_dropped, []).append(
+            {
+                "url": link.url,
+                "anchor_text": link.anchor_text,
+            }
+        )
+    return grouped
+
+
 @app.get("/universities", response_model=List[UniversityResponse])
 async def api_universities() -> List[UniversityResponse]:
     """Return all universities ordered by most recently updated first."""

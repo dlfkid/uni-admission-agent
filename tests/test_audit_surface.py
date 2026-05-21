@@ -117,3 +117,75 @@ class TestAuditRestEndpoint:
         fake_db.list_extraction_audit.assert_called_once_with(
             university_slug=None, year=None, limit=5
         )
+
+
+def _fake_link(*, audit_id: int, url: str, anchor: str, stage: str):
+    from src.models.extraction_audit import ExtractionAuditLink
+    return ExtractionAuditLink(
+        id=hash(url) & 0xFFFFFF,
+        audit_id=audit_id,
+        url=url,
+        anchor_text=anchor,
+        stage_dropped=stage,
+    )
+
+
+class TestAuditDrillCli:
+    def test_drill_shows_dropped_links_grouped_by_stage(self, monkeypatch) -> None:
+        fake_db = MagicMock()
+        fake_db.list_audit_dropped_links.return_value = [
+            _fake_link(audit_id=1, url="https://hku.hk/about", anchor="About",
+                       stage="llm_filter"),
+            _fake_link(audit_id=1, url="https://hku.hk/news", anchor="News",
+                       stage="llm_filter"),
+            _fake_link(audit_id=1, url="https://hku.hk/events", anchor="Events",
+                       stage="taxonomy_filter"),
+        ]
+        monkeypatch.setattr("src.cmd.cli.DatabaseManager", lambda: fake_db)
+
+        runner = CliRunner()
+        result = runner.invoke(cli_app, ["audit", "drill", "1"])
+
+        assert result.exit_code == 0
+        assert "llm_filter" in result.stdout
+        assert "taxonomy_filter" in result.stdout
+        assert "https://hku.hk/about" in result.stdout
+        assert "https://hku.hk/news" in result.stdout
+        assert "https://hku.hk/events" in result.stdout
+        fake_db.list_audit_dropped_links.assert_called_once_with(audit_id=1)
+
+    def test_drill_empty_message(self, monkeypatch) -> None:
+        fake_db = MagicMock()
+        fake_db.list_audit_dropped_links.return_value = []
+        monkeypatch.setattr("src.cmd.cli.DatabaseManager", lambda: fake_db)
+
+        runner = CliRunner()
+        result = runner.invoke(cli_app, ["audit", "drill", "1"])
+        assert result.exit_code == 0
+        assert "no dropped" in result.stdout.lower()
+
+
+class TestAuditDrillRestEndpoint:
+    def test_get_returns_dropped_grouped(self, monkeypatch) -> None:
+        fake_db = MagicMock()
+        fake_db.list_audit_dropped_links.return_value = [
+            _fake_link(audit_id=1, url="https://hku.hk/about", anchor="About",
+                       stage="llm_filter"),
+            _fake_link(audit_id=1, url="https://hku.hk/events", anchor="Events",
+                       stage="taxonomy_filter"),
+        ]
+        monkeypatch.setattr("src.api.server.get_db_manager", lambda: fake_db)
+
+        client = TestClient(fastapi_app)
+        resp = client.get("/audit/1/dropped")
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert isinstance(body, dict)
+        assert "llm_filter" in body
+        assert "taxonomy_filter" in body
+        assert len(body["llm_filter"]) == 1
+        assert body["llm_filter"][0]["url"] == "https://hku.hk/about"
+        assert body["llm_filter"][0]["anchor_text"] == "About"
+        assert len(body["taxonomy_filter"]) == 1
+        fake_db.list_audit_dropped_links.assert_called_once_with(audit_id=1)
