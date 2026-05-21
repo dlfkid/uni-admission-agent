@@ -28,6 +28,7 @@ from src.scrapers.link_parser import extract_links_with_text, filter_links_by_ll
 from src.scrapers.page_processor import extract_program_data_from_page
 from src.scrapers.scout import run_scout
 from src.services.program_name_resolution import resolve_program_name
+from src.services.quality_gate import evaluate_extraction
 from src.services.subject_taxonomy import get_subject_taxonomy_service, normalize_name as normalize_taxonomy_name
 from src.storage.db_manager import DatabaseManager
 from src.utils.text import generate_program_group_code
@@ -1338,13 +1339,36 @@ class IngestionPipeline:
         persisted_count = 0
         created_count = 0
         updated_count = 0
+        quarantined_count = 0
         persisted_program_ids: List[int] = []
         failed_records: List[Dict[str, str]] = []
         taxonomy_learn_records: List[Dict[str, Any]] = []
 
         for item in validated_programs:
+            item_dict = dict(item)
+            verdict = evaluate_extraction(item_dict)
+            if not verdict.passed:
+                reason_value = verdict.reason.value if verdict.reason else "unknown"
+                logger.warning(
+                    "Quality gate rejected %s (reason=%s, signals=%s)",
+                    item_dict.get("source_url") or item_dict.get("name_en"),
+                    reason_value,
+                    verdict.signals,
+                )
+                try:
+                    self.db_manager.upsert_quarantine(
+                        university_slug=univ_slug,
+                        program_data=item_dict,
+                        reason=verdict.reason,
+                        signals=verdict.signals,
+                    )
+                    quarantined_count += 1
+                except Exception:  # pylint: disable=broad-except
+                    logger.exception("Failed to record quarantine for ingestion item")
+                continue
+
             try:
-                program, created = self.db_manager.upsert_program(dict(item), univ_slug)
+                program, created = self.db_manager.upsert_program(item_dict, univ_slug)
                 persisted_count += 1
                 if program.id is not None:
                     persisted_program_ids.append(int(program.id))
@@ -1418,12 +1442,14 @@ class IngestionPipeline:
             "persisted_count": persisted_count,
             "created_count": created_count,
             "updated_count": updated_count,
+            "quarantined_count": quarantined_count,
             "persisted_program_ids": persisted_program_ids,
             "persisted_hash": _hash_payload(
                 {
                     "count": persisted_count,
                     "created": created_count,
                     "updated": updated_count,
+                    "quarantined": quarantined_count,
                     "program_ids": persisted_program_ids,
                     "validated_hash": context.get("validated_hash"),
                 }

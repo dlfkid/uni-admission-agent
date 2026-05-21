@@ -15,6 +15,7 @@ from src.agents.cleaner_agent import LLMCleanerAgent, ParsedProgramData
 from src.agents.factory import RouterAgent
 from src.models.scraper_models import CrawlPageResult
 from src.scrapers.helpers import extract_program_name, is_noise_program_name
+from src.services.quality_gate import evaluate_extraction
 from src.storage.db_manager import DatabaseManager
 from src.utils.text import generate_program_group_code
 
@@ -115,6 +116,24 @@ def process_page_for_program(
     )
     if not program_data:
         return False, error
+
+    verdict = evaluate_extraction(program_data)
+    if not verdict.passed:
+        reason_value = verdict.reason.value if verdict.reason else "unknown"
+        logger.warning(
+            "Quality gate rejected %s (reason=%s, signals=%s)",
+            page.url, reason_value, verdict.signals,
+        )
+        try:
+            db_manager.upsert_quarantine(
+                university_slug=univ_slug,
+                program_data=program_data,
+                reason=verdict.reason,
+                signals=verdict.signals,
+            )
+        except Exception:  # pylint: disable=broad-except
+            logger.exception("Failed to record quarantine for %s", page.url)
+        return False, f"quarantine: {reason_value}"
 
     try:
         _, created = db_manager.upsert_program(

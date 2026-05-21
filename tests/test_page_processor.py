@@ -437,3 +437,82 @@ def test_process_pages_batch_skip_empty_markdown() -> None:
     # Only 1 processed (the empty one is skipped)
     assert imported == 1
     assert mock_cleaner.clean_markdown.call_count == 1
+
+
+# ── Quality gate integration ────────────────────────────────────────
+
+
+def _make_empty_shell_parsed() -> ParsedProgramData:
+    """ParsedProgramData with a faculty but no tuition/deadline/requirement.
+
+    This represents the "LLM returned only structure, no actual data"
+    failure mode that the quality gate is designed to catch.
+    """
+    return ParsedProgramData(faculty="Faculty of Engineering")
+
+
+def test_quality_gate_routes_empty_shell_to_quarantine() -> None:
+    """Empty-shell extraction must NOT hit upsert_program, but MUST hit
+    upsert_quarantine."""
+    page = _make_page(markdown="# MSc Computer Science\n\n(empty page body)")
+    cleaner = _make_mock_cleaner(_make_empty_shell_parsed())
+    db = _make_mock_db()
+    db.upsert_quarantine = MagicMock()
+
+    success, error = process_page_for_program(
+        page=page, cleaner=cleaner, db_manager=db,
+        univ_slug="hku", year=2025, current_depth=0,
+    )
+
+    assert success is False
+    assert error is not None
+    assert "quarantine" in error.lower()
+    db.upsert_program.assert_not_called()
+    db.upsert_quarantine.assert_called_once()
+
+    # Quarantine signals must include diagnostic data.
+    kwargs = db.upsert_quarantine.call_args.kwargs
+    assert kwargs["university_slug"] == "hku"
+    assert kwargs["reason"].value == "empty_shell"
+    assert kwargs["signals"]["deadline_count"] == 0
+    assert kwargs["signals"]["has_tuition"] is False
+
+
+def test_quality_gate_routes_noise_name_to_quarantine() -> None:
+    """A name that matches the noise filter must be quarantined even when
+    the page has tuition/deadline data."""
+    page = _make_page(markdown="# Course Search\n\nFind your programme here")
+    parsed = _make_parsed_data()  # has tuition + deadline
+    cleaner = _make_mock_cleaner(parsed)
+    db = _make_mock_db()
+    db.upsert_quarantine = MagicMock()
+
+    with patch("src.scrapers.page_processor.extract_program_name", return_value="Course Search"):
+        success, error = process_page_for_program(
+            page=page, cleaner=cleaner, db_manager=db,
+            univ_slug="hku", year=2025, current_depth=0,
+        )
+
+    assert success is False
+    db.upsert_program.assert_not_called()
+    db.upsert_quarantine.assert_called_once()
+    assert db.upsert_quarantine.call_args.kwargs["reason"].value == "noise_name"
+
+
+def test_quality_gate_lets_good_program_through() -> None:
+    """Sanity: a complete program with a real name still hits upsert_program."""
+    page = _make_page()
+    cleaner = _make_mock_cleaner(_make_parsed_data())
+    db = _make_mock_db()
+    db.upsert_quarantine = MagicMock()
+
+    with patch("src.scrapers.page_processor.extract_program_name", return_value="MSc Computer Science"):
+        success, error = process_page_for_program(
+            page=page, cleaner=cleaner, db_manager=db,
+            univ_slug="hku", year=2025, current_depth=0,
+        )
+
+    assert success is True
+    assert error is None
+    db.upsert_program.assert_called_once()
+    db.upsert_quarantine.assert_not_called()

@@ -46,8 +46,8 @@ def test_persist_versioned_counts_create_and_update() -> None:
     request_payload = {"univ_slug": "hku"}
     context = {
         "validated_programs": [
-            {"name_en": "MSc A", "academic_year": 2026},
-            {"name_en": "MSc B", "academic_year": 2026},
+            {"name_en": "MSc Finance", "academic_year": 2026, "tuition_amount": 100},
+            {"name_en": "MSc Economics", "academic_year": 2026, "tuition_amount": 100},
         ],
         "validated_hash": "abc123",
     }
@@ -81,6 +81,7 @@ def test_persist_versioned_learns_taxonomy_from_persisted_names() -> None:
                 "name_en": "Master of Science in Finance",
                 "academic_year": 2026,
                 "source_url": "https://example.edu/finance",
+                "tuition_amount": 100,
                 "extra_metadata": {"taxonomy_match": {"best_score": 0.96}},
             }
         ],
@@ -100,12 +101,41 @@ def test_persist_versioned_raises_when_any_record_fails() -> None:
     request_payload = {"univ_slug": "hku"}
     context = {
         "validated_programs": [
-            {"name_en": "MSc A", "academic_year": 2026},
+            {"name_en": "MSc Finance", "academic_year": 2026, "tuition_amount": 100},
         ]
     }
 
     with pytest.raises(StageExecutionError):
         pipeline._stage_persist_versioned(request_payload, context)
+
+
+def test_persist_versioned_routes_empty_shells_to_quarantine() -> None:
+    """Quality-gate failures must skip upsert_program and call upsert_quarantine."""
+    mock_db = MagicMock()
+    mock_db.upsert_program.return_value = (MagicMock(id=1, name_en="OK", source_url="", extra_metadata=None), True)
+    pipeline = IngestionPipeline(db_manager=mock_db)
+
+    request_payload = {"univ_slug": "hku"}
+    context = {
+        "validated_programs": [
+            # Good record — should persist.
+            {"name_en": "MSc Finance", "academic_year": 2026, "tuition_amount": 100},
+            # Empty shell — should be quarantined.
+            {"name_en": "MSc Economics", "academic_year": 2026},
+            # Noise name — should be quarantined.
+            {"name_en": "Course Search", "academic_year": 2026, "tuition_amount": 100},
+        ],
+        "validated_hash": "h",
+    }
+
+    result = pipeline._stage_persist_versioned(request_payload, context)
+
+    assert result["persisted_count"] == 1
+    assert result["quarantined_count"] == 2
+    assert mock_db.upsert_program.call_count == 1
+    assert mock_db.upsert_quarantine.call_count == 2
+    reasons = {c.kwargs["reason"].value for c in mock_db.upsert_quarantine.call_args_list}
+    assert reasons == {"empty_shell", "noise_name"}
 
 
 def test_idempotency_key_is_deterministic() -> None:

@@ -89,6 +89,11 @@ from src.storage.db_manager import DatabaseManager
 
 logger = logging.getLogger(__name__)
 
+
+def get_db_manager() -> DatabaseManager:
+    """Indirection so tests can monkeypatch the DB without touching globals."""
+    return DatabaseManager()
+
 # Stage progress mapping for frontend progress bars
 STAGE_PROGRESS_RANGES: dict[str, tuple[float, float]] = {
     "fetch_raw": (10.0, 45.0),
@@ -1314,6 +1319,34 @@ async def api_patch_program(
     if not updated:
         raise HTTPException(status_code=404, detail=f"Program {program_id} not found.")
     return ProgramResponse(**updated.model_dump())
+
+
+@app.get("/quarantine")
+async def api_quarantine_list(
+    university: Optional[str] = None,
+    year: Optional[int] = None,
+) -> List[Dict[str, Any]]:
+    """List quarantined program extractions (failed the quality gate).
+
+    Filter by ``university`` slug and/or academic ``year``. Each entry
+    includes the diagnostic ``quarantine_signals`` blob useful for
+    deciding whether to manually re-run or repair the extraction.
+    """
+    db = get_db_manager()
+    entries = db.list_quarantine(university_slug=university, year=year)
+    return [
+        {
+            "id": entry.id,
+            "university_slug": entry.university_slug,
+            "academic_year": entry.academic_year,
+            "source_url": entry.source_url,
+            "extracted_name": entry.extracted_name,
+            "quarantine_reason": entry.quarantine_reason,
+            "quarantine_signals": entry.quarantine_signals,
+            "created_at": entry.created_at.isoformat() if entry.created_at else None,
+        }
+        for entry in entries
+    ]
 
 
 @app.get("/universities", response_model=List[UniversityResponse])

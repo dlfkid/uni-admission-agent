@@ -1586,6 +1586,48 @@ upgrade:
 
 
 # ---------------------------------------------------------------------------
+#  Quarantine subcommands
+# ---------------------------------------------------------------------------
+
+quarantine_app = typer.Typer(
+    name="quarantine",
+    help="Inspect extraction results that failed the quality gate.",
+    add_completion=False,
+)
+app.add_typer(quarantine_app)
+
+
+@quarantine_app.command(name="list")
+def quarantine_list(
+    university: Optional[str] = typer.Option(
+        None, "--university", "-u", help="University slug filter"
+    ),
+    year: Optional[int] = typer.Option(
+        None, "--year", "-y", help="Academic year filter"
+    ),
+) -> None:
+    """List quarantined program extractions.
+
+    Quarantine entries are extracted programs that failed the quality
+    gate (empty shells, noise names, missing identifying content) and
+    therefore did NOT make it into the main `program` table.
+    """
+    db_manager = DatabaseManager()
+    entries = db_manager.list_quarantine(university_slug=university, year=year)
+    if not entries:
+        typer.echo("No quarantine entries.")
+        return
+
+    for entry in entries:
+        typer.echo(
+            f"[{entry.id}] {entry.university_slug} {entry.academic_year} "
+            f"reason={entry.quarantine_reason} "
+            f"name={entry.extracted_name!r} "
+            f"url={entry.source_url}"
+        )
+
+
+# ---------------------------------------------------------------------------
 #  Entry point
 # ---------------------------------------------------------------------------
 
