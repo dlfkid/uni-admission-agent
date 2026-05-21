@@ -1385,6 +1385,84 @@ async def api_quarantine_clear(
     return {"deleted": deleted}
 
 
+@app.get("/audit")
+async def api_audit_list(
+    university: Optional[str] = None,
+    year: Optional[int] = None,
+    limit: int = 20,
+) -> List[Dict[str, Any]]:
+    """List index→detail extraction funnel records (newest first).
+
+    Each entry exposes the full funnel: raw links on the index page,
+    LLM/heuristic-filtered subset, final candidate set, and how many
+    became committed programs vs. quarantined.
+    """
+    db = get_db_manager()
+    entries = db.list_extraction_audit(
+        university_slug=university, year=year, limit=int(limit)
+    )
+    return [
+        {
+            "id": e.id,
+            "university_slug": e.university_slug,
+            "academic_year": e.academic_year,
+            "index_url": e.index_url,
+            "raw_link_count": e.raw_link_count,
+            "llm_filtered_count": e.llm_filtered_count,
+            "candidate_count": e.candidate_count,
+            "extracted_count": e.extracted_count,
+            "quarantined_count": e.quarantined_count,
+            "recovered_count": e.recovered_count,
+            "job_uid": e.job_uid,
+            "created_at": e.created_at.isoformat() if e.created_at else None,
+        }
+        for e in entries
+    ]
+
+
+@app.delete("/diagnostics")
+async def api_diagnostics_clear(
+    university: Optional[str] = None,
+    year: Optional[int] = None,
+) -> Dict[str, int]:
+    """Wipe all diagnostic records (quarantine + audit + audit_link) for one
+    university. ``university`` query param is required.
+
+    Optionally scope to a single academic year via ``year``. Returns the
+    structured count of rows deleted by table.
+    """
+    if not university:
+        raise HTTPException(
+            status_code=400, detail="university query param is required"
+        )
+
+    db = get_db_manager()
+    return db.clear_diagnostics(
+        university_slug=university,
+        year=int(year) if year is not None else None,
+    )
+
+
+@app.get("/audit/{audit_id}/dropped")
+async def api_audit_dropped(audit_id: int) -> Dict[str, List[Dict[str, Any]]]:
+    """Return URLs dropped at each filter stage for one audit row.
+
+    Grouped by stage: ``llm_filter`` (links the LLM said weren't programs)
+    and ``taxonomy_filter`` (links the taxonomy-score filter rejected).
+    """
+    db = get_db_manager()
+    links = db.list_audit_dropped_links(audit_id=audit_id)
+    grouped: Dict[str, List[Dict[str, Any]]] = {}
+    for link in links:
+        grouped.setdefault(link.stage_dropped, []).append(
+            {
+                "url": link.url,
+                "anchor_text": link.anchor_text,
+            }
+        )
+    return grouped
+
+
 @app.get("/universities", response_model=List[UniversityResponse])
 async def api_universities() -> List[UniversityResponse]:
     """Return all universities ordered by most recently updated first."""

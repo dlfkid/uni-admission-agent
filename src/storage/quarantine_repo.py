@@ -79,15 +79,16 @@ class QuarantineRepo:
         university_slug: Optional[str] = None,
         source_url: Optional[str] = None,
         reason: Optional[QuarantineReason] = None,
+        year: Optional[int] = None,
     ) -> int:
         """Delete quarantine rows matching the given filters.
 
         At least one filter must be supplied — we refuse to nuke the
         whole table accidentally. Returns the number of rows deleted.
         """
-        if not any([university_slug, source_url, reason]):
+        if not any([university_slug, source_url, reason, year]):
             raise ValueError(
-                "clear() requires at least one of university_slug, source_url, reason"
+                "clear() requires at least one of university_slug, source_url, reason, year"
             )
 
         stmt = select(ProgramQuarantine)
@@ -97,6 +98,8 @@ class QuarantineRepo:
             stmt = stmt.where(ProgramQuarantine.source_url == source_url)
         if reason is not None:
             stmt = stmt.where(ProgramQuarantine.quarantine_reason == reason.value)
+        if year is not None:
+            stmt = stmt.where(ProgramQuarantine.academic_year == int(year))
 
         rows = list(self._session.exec(stmt).all())
         for row in rows:

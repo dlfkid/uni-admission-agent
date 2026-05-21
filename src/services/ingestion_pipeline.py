@@ -24,7 +24,11 @@ from src.models.ingestion import (
 from src.models.scraper_models import CrawlPageResult
 from src.scrapers.helpers import build_url_name_signal, extract_program_name, is_noise_program_name
 from src.scrapers.engine import AdmissionScraper
-from src.scrapers.link_parser import extract_links_with_text, filter_links_by_llm
+from src.scrapers.link_parser import (
+    extract_links_with_text,
+    filter_links_by_llm,
+    filter_links_critique_retry,
+)
 from src.scrapers.page_processor import extract_program_data_from_page
 from src.scrapers.scout import run_scout
 from src.services.program_name_resolution import resolve_program_name
@@ -35,6 +39,12 @@ from src.utils.text import generate_program_group_code
 
 logger = logging.getLogger(__name__)
 _HTML_TITLE_RE = re.compile(r"<title[^>]*>(.*?)</title>", re.IGNORECASE | re.DOTALL)
+
+# Link-filter critique retry — automatic recovery for suspiciously aggressive
+# filtering. Fires only when the page is large enough that low retention is a
+# real signal (not just noise from a tiny page).
+_RECOVERY_MIN_RAW_LINKS = 20
+_RECOVERY_RETENTION_THRESHOLD = 0.30
 
 STAGE_ORDER = [
     IngestionStage.FETCH_RAW,
@@ -618,6 +628,9 @@ class IngestionPipeline:
 
         continue_depth = max(0, int(request_payload.get("continue_depth") or 0))
         selected_urls = [u for u in (request_payload.get("selected_urls") or []) if u]
+        # Funnel accumulator — populated only when an index→detail flow runs.
+        # Detail-only crawls leave this empty, and the audit row is skipped.
+        audit_funnel: Dict[str, Any] = {}
         detail_pages_batch = [
             item
             for item in (request_payload.get("detail_pages_batch") or [])
@@ -722,6 +735,7 @@ class IngestionPipeline:
                 "scouted_links": serialized_scout_links,
                 "scout_call_count": scout_call_count,
                 "source_content_hash": source_content_hash,
+                "audit_funnel": dict(audit_funnel) if audit_funnel else None,
             }
 
         _emit_fetch_event(
@@ -893,6 +907,7 @@ class IngestionPipeline:
                     candidate_taxonomy_filter_enabled=candidate_taxonomy_filter_enabled,
                     candidate_taxonomy_filter_threshold=candidate_taxonomy_filter_threshold,
                     candidate_taxonomy_filter_top_k=candidate_taxonomy_filter_top_k,
+                    funnel_out=audit_funnel,
                 )
                 selected_link_texts.update(detail_link_texts)
                 crawl_urls = self._dedupe_urls(detail_urls, visited_urls)
@@ -952,6 +967,7 @@ class IngestionPipeline:
                     candidate_taxonomy_filter_enabled=candidate_taxonomy_filter_enabled,
                     candidate_taxonomy_filter_threshold=candidate_taxonomy_filter_threshold,
                     candidate_taxonomy_filter_top_k=candidate_taxonomy_filter_top_k,
+                    funnel_out=audit_funnel,
                 )
                 selected_link_texts.update(detail_link_texts)
                 crawl_urls = self._dedupe_urls(detail_urls, visited_urls)
@@ -1483,6 +1499,29 @@ class IngestionPipeline:
             except Exception as exc:  # pylint: disable=broad-except
                 logger.warning("taxonomy learning skipped after persist_versioned: %s", exc)
 
+        # Funnel audit: when fetch_raw recorded an index→detail funnel, finalize
+        # an extraction_audit row combining the funnel counts with the final
+        # persisted / quarantined tally. Detail-only crawls (no index page) have
+        # no funnel and produce no audit row.
+        funnel = context.get("audit_funnel")
+        if isinstance(funnel, dict) and funnel.get("index_url"):
+            try:
+                self.db_manager.record_extraction_audit(
+                    university_slug=univ_slug,
+                    academic_year=int(request_payload.get("year") or 0),
+                    index_url=str(funnel.get("index_url") or ""),
+                    raw_link_count=int(funnel.get("raw_link_count") or 0),
+                    llm_filtered_count=int(funnel.get("llm_filtered_count") or 0),
+                    candidate_count=int(funnel.get("candidate_count") or 0),
+                    extracted_count=persisted_count,
+                    quarantined_count=quarantined_count,
+                    recovered_count=int(funnel.get("recovered_count") or 0),
+                    job_uid=context.get("job_uid") or request_payload.get("job_uid"),
+                    dropped_links=funnel.get("dropped_links"),
+                )
+            except Exception:  # pylint: disable=broad-except
+                logger.exception("Failed to record extraction_audit row")
+
         return {
             "persisted_count": persisted_count,
             "created_count": created_count,
@@ -1641,12 +1680,27 @@ class IngestionPipeline:
         candidate_taxonomy_filter_enabled: bool = False,
         candidate_taxonomy_filter_threshold: float = 0.75,
         candidate_taxonomy_filter_top_k: int = 30,
+        funnel_out: Optional[Dict[str, Any]] = None,
     ) -> tuple[List[str], Dict[str, str]]:
         if not page.markdown:
+            if funnel_out is not None:
+                funnel_out.update({
+                    "index_url": page.url,
+                    "raw_link_count": 0,
+                    "llm_filtered_count": 0,
+                    "candidate_count": 0,
+                })
             return [], {}
 
         link_pairs = extract_links_with_text(page.markdown, page.url)
         if not link_pairs:
+            if funnel_out is not None:
+                funnel_out.update({
+                    "index_url": page.url,
+                    "raw_link_count": 0,
+                    "llm_filtered_count": 0,
+                    "candidate_count": 0,
+                })
             return [], {}
 
         detail_urls = await asyncio.to_thread(
@@ -1657,6 +1711,53 @@ class IngestionPipeline:
         )
         if not detail_urls:
             detail_urls = [u for u, _ in link_pairs]
+
+        # Auto-recovery: if retention is suspiciously low on a non-trivial
+        # page, re-ask the LLM with a critique prompt that names the problem
+        # and shows the rejected URLs. Mirrors PR #24's cleaner self-critique
+        # pattern. Uses the data that audit collects rather than leaving it
+        # for a human to inspect.
+        recovered_count = 0
+        if (
+            len(link_pairs) >= _RECOVERY_MIN_RAW_LINKS
+            and (len(detail_urls) / len(link_pairs)) < _RECOVERY_RETENTION_THRESHOLD
+        ):
+            logger.info(
+                "[LinkFilter] Retention %d/%d below %.0f%% on %s — triggering critique retry",
+                len(detail_urls), len(link_pairs),
+                _RECOVERY_RETENTION_THRESHOLD * 100, page.url,
+            )
+            rescued = await asyncio.to_thread(
+                filter_links_critique_retry,
+                scraper.router,
+                link_pairs=link_pairs,
+                kept_urls=detail_urls,
+                source_url=page.url,
+            )
+            if rescued:
+                existing = set(detail_urls)
+                additions = [r for r in rescued if r not in existing]
+                detail_urls = detail_urls + additions
+                recovered_count = len(additions)
+
+        kept_set = {str(u).strip() for u in detail_urls if str(u or "").strip()}
+        dropped_links: List[Dict[str, str]] = []
+        for url, text in link_pairs:
+            url_s = str(url or "").strip()
+            if url_s and url_s not in kept_set:
+                dropped_links.append(
+                    {
+                        "url": url_s,
+                        "anchor_text": str(text or "").strip() or None,
+                        "stage_dropped": "llm_filter",
+                    }
+                )
+        if funnel_out is not None:
+            funnel_out["index_url"] = page.url
+            funnel_out["raw_link_count"] = len(link_pairs)
+            funnel_out["llm_filtered_count"] = len(detail_urls)
+            funnel_out["dropped_links"] = dropped_links
+            funnel_out["recovered_count"] = recovered_count
 
         seen: set[str] = set()
         deduped: List[str] = []
@@ -1706,6 +1807,21 @@ class IngestionPipeline:
                     candidate_taxonomy_filter_threshold,
                     candidate_taxonomy_filter_top_k,
                 )
+                # Record taxonomy-stage drops for drill-down.
+                if funnel_out is not None:
+                    kept_after_tax = set(filtered_urls)
+                    drops = funnel_out.setdefault("dropped_links", [])
+                    for prior_url in deduped:
+                        if prior_url not in kept_after_tax:
+                            drops.append(
+                                {
+                                    "url": prior_url,
+                                    "anchor_text": (
+                                        url_to_text.get(prior_url) or None
+                                    ),
+                                    "stage_dropped": "taxonomy_filter",
+                                }
+                            )
                 deduped = filtered_urls
                 seen = set(filtered_urls)
             else:
@@ -1720,6 +1836,8 @@ class IngestionPipeline:
             for url, text in link_pairs
             if str(url).strip() and str(text).strip() and str(url).strip() in seen
         }
+        if funnel_out is not None:
+            funnel_out["candidate_count"] = len(deduped)
         return deduped, text_map
 
     async def _crawl_urls_with_failures(

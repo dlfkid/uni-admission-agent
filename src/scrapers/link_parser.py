@@ -331,6 +331,113 @@ def filter_links_by_llm(
     return deduped
 
 
+def filter_links_critique_retry(
+    router: RouterAgent,
+    *,
+    link_pairs: List[Tuple[str, str]],
+    kept_urls: List[str],
+    source_url: str,
+    max_sample: int = 50,
+) -> List[str]:
+    """Re-examine links the LLM previously rejected, return any it now wants back.
+
+    Mirrors the cleaner-level self-critique pattern (PR #24): when the
+    first pass produced a suspiciously poor result, give the LLM a second
+    look with a critique prompt that names the problem and shows the data.
+
+    Trigger condition is handled by the caller; this function just runs
+    the retry given a kept/dropped split. Returns ONLY URLs that were
+    originally dropped (intersection with the original link set) — so
+    hallucinated URLs cannot leak in.
+
+    Args:
+        router: LLM router.
+        link_pairs: original ``(url, anchor_text)`` list from the index.
+        kept_urls: URLs that survived the first-pass filter.
+        source_url: index page URL (for prompt context).
+        max_sample: cap on how many dropped URLs to feed the LLM. Protects
+            against giant prompts on heavily-rejected pages.
+
+    Returns:
+        Deduped list of URLs from the dropped set that the LLM now thinks
+        are real program pages. Empty list if there's nothing to rescue
+        or if the LLM call fails.
+    """
+    kept_set = {str(u).strip() for u in kept_urls if str(u or "").strip()}
+    dropped = [
+        (url, text)
+        for url, text in link_pairs
+        if str(url or "").strip() and str(url).strip() not in kept_set
+    ]
+    if not dropped:
+        return []
+
+    sample = dropped[:max_sample]
+    total = len(link_pairs)
+    retention_pct = (len(kept_set) / total * 100) if total else 0
+
+    sample_lines = "\n".join(
+        f"{idx}. [{text or '(no anchor)'}]({url})"
+        for idx, (url, text) in enumerate(sample, start=1)
+    )
+
+    prompt = (
+        "PREVIOUS LINK FILTER MAY HAVE BEEN TOO AGGRESSIVE\n"
+        "==================================================\n"
+        f"Source index page: {source_url}\n"
+        f"You kept {len(kept_set)} out of {total} links "
+        f"({retention_pct:.1f}% retention, i.e. {len(kept_set)}/{total}).\n"
+        "This is suspiciously low for a university course-listing page —\n"
+        "you may have rejected real program detail pages.\n\n"
+        f"Re-examine these previously-rejected links (showing up to {len(sample)}):\n"
+        f"{sample_lines}\n\n"
+        "Return ONLY URLs from the list above that you now believe ARE program\n"
+        "detail or program-listing pages (degree-specific URLs like\n"
+        "'/msc-finance', '/accounting-bsc', '/postgraduate-taught/business').\n"
+        "Do NOT return navigation pages, application help, news, about pages,\n"
+        "or generic content. If unsure, LEAVE IT OUT — quality over recall.\n"
+        "If after careful re-examination none of these are real program pages,\n"
+        "return an empty list."
+    )
+
+    try:
+        response = router.generate(prompt, FilteredLinks)
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.warning(
+            "Link filter critique retry failed (%s); recovering 0 links", exc
+        )
+        return []
+
+    if not response.text:
+        return []
+
+    try:
+        parsed = FilteredLinks.model_validate_json(response.text)
+    except Exception as exc:  # pylint: disable=broad-except
+        logger.warning(
+            "Link filter critique retry: invalid JSON response (%s)", exc
+        )
+        return []
+
+    dropped_urls = {str(u or "").strip() for u, _ in dropped if str(u or "").strip()}
+    seen: set[str] = set()
+    rescued: List[str] = []
+    for url in parsed.urls:
+        url_s = str(url or "").strip()
+        if not url_s or url_s in seen:
+            continue
+        if url_s not in dropped_urls:
+            continue  # hallucinated — discard
+        seen.add(url_s)
+        rescued.append(url_s)
+
+    logger.info(
+        "[LLM Filter Critique] Rescued %d previously-dropped links on %s",
+        len(rescued), source_url,
+    )
+    return rescued
+
+
 def _filter_link_batch_by_llm(
     router: RouterAgent,
     link_pairs: List[Tuple[str, str]],

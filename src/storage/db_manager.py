@@ -1227,3 +1227,105 @@ class DatabaseManager:
                 source_url=source_url,
                 reason=reason,
             )
+
+    # ------------------------------------------------------------------
+    #  Extraction audit — index → detail funnel tracking
+    # ------------------------------------------------------------------
+
+    def record_extraction_audit(
+        self,
+        *,
+        university_slug: str,
+        academic_year: int,
+        index_url: str,
+        raw_link_count: int,
+        llm_filtered_count: int,
+        candidate_count: int,
+        extracted_count: int,
+        quarantined_count: int,
+        recovered_count: int = 0,
+        job_uid: Optional[str] = None,
+        dropped_links: Optional[list] = None,
+    ):
+        """Persist one index→detail funnel record (with optional dropped links)."""
+        from src.storage.audit_repo import ExtractionAuditRepo
+
+        with self.get_session() as session:
+            repo = ExtractionAuditRepo(session)
+            return repo.record(
+                university_slug=university_slug,
+                academic_year=academic_year,
+                index_url=index_url,
+                raw_link_count=raw_link_count,
+                llm_filtered_count=llm_filtered_count,
+                candidate_count=candidate_count,
+                extracted_count=extracted_count,
+                quarantined_count=quarantined_count,
+                recovered_count=recovered_count,
+                job_uid=job_uid,
+                dropped_links=dropped_links,
+            )
+
+    def list_audit_dropped_links(self, *, audit_id: int):
+        """Return per-link dropped records for one audit row."""
+        from src.storage.audit_repo import ExtractionAuditRepo
+
+        with self.get_session() as session:
+            repo = ExtractionAuditRepo(session)
+            return repo.list_dropped_links(audit_id=audit_id)
+
+    # ------------------------------------------------------------------
+    #  Unified diagnostics cleanup — wipes quarantine + audit (+ links)
+    #  for one university, optionally scoped to a single academic year.
+    # ------------------------------------------------------------------
+
+    def clear_diagnostics(
+        self,
+        *,
+        university_slug: str,
+        year: Optional[int] = None,
+    ) -> dict:
+        """Clear all diagnostic records (quarantine + audit + audit_link)
+        for one university. Optional year filter scopes the delete.
+
+        Returns a structured count: ``{"quarantine_deleted": N,
+        "audits_deleted": M, "links_deleted": L}``.
+        """
+        if not university_slug:
+            raise ValueError("clear_diagnostics requires a non-empty university_slug")
+
+        from src.storage.audit_repo import ExtractionAuditRepo
+        from src.storage.quarantine_repo import QuarantineRepo
+
+        with self.get_session() as session:
+            q_repo = QuarantineRepo(session)
+            quarantine_deleted = q_repo.clear(
+                university_slug=university_slug,
+                year=year,
+            )
+            a_repo = ExtractionAuditRepo(session)
+            audit_result = a_repo.clear_for_university(
+                university_slug=university_slug,
+                year=year,
+            )
+            return {
+                "quarantine_deleted": quarantine_deleted,
+                "audits_deleted": audit_result["audits_deleted"],
+                "links_deleted": audit_result["links_deleted"],
+            }
+
+    def list_extraction_audit(
+        self,
+        *,
+        university_slug: Optional[str] = None,
+        year: Optional[int] = None,
+        limit: Optional[int] = None,
+    ):
+        """List funnel records (newest first) filtered by university/year."""
+        from src.storage.audit_repo import ExtractionAuditRepo
+
+        with self.get_session() as session:
+            repo = ExtractionAuditRepo(session)
+            return repo.list_for(
+                university_slug=university_slug, year=year, limit=limit
+            )

@@ -138,6 +138,253 @@ def test_persist_versioned_routes_empty_shells_to_quarantine() -> None:
     assert reasons == {"empty_shell", "noise_name"}
 
 
+def test_persist_versioned_writes_extraction_audit() -> None:
+    """When fetch_raw recorded a funnel, persist_versioned must finalize
+    an extraction_audit row combining funnel + final counts."""
+    mock_db = MagicMock()
+    mock_db.upsert_program.return_value = (
+        MagicMock(id=1, name_en="MSc Finance", source_url="https://e.edu/fin", extra_metadata=None),
+        True,
+    )
+    pipeline = IngestionPipeline(db_manager=mock_db)
+
+    request_payload = {"univ_slug": "hku", "year": 2026}
+    context = {
+        "validated_programs": [
+            {"name_en": "MSc Finance", "academic_year": 2026, "tuition_amount": 100},
+            {"name_en": "MSc Empty", "academic_year": 2026},  # empty shell → quarantine
+        ],
+        "validated_hash": "h",
+        "audit_funnel": {
+            "index_url": "https://www.hku.hk/programs",
+            "raw_link_count": 87,
+            "llm_filtered_count": 23,
+            "candidate_count": 22,
+        },
+        "job_uid": "job-xyz",
+    }
+
+    pipeline._stage_persist_versioned(request_payload, context)
+
+    mock_db.record_extraction_audit.assert_called_once()
+    kwargs = mock_db.record_extraction_audit.call_args.kwargs
+    assert kwargs["university_slug"] == "hku"
+    assert kwargs["academic_year"] == 2026
+    assert kwargs["index_url"] == "https://www.hku.hk/programs"
+    assert kwargs["raw_link_count"] == 87
+    assert kwargs["llm_filtered_count"] == 23
+    assert kwargs["candidate_count"] == 22
+    assert kwargs["extracted_count"] == 1
+    assert kwargs["quarantined_count"] == 1
+    assert kwargs["job_uid"] == "job-xyz"
+
+
+@pytest.mark.asyncio
+async def test_select_detail_urls_triggers_recovery_when_retention_low(
+    monkeypatch,
+) -> None:
+    """When the first-pass filter retains < 30% on a page with >= 20 raw
+    links, the critique retry fires and rescued URLs join the candidate
+    set."""
+    from src.models.scraper_models import CrawlPageResult
+    from src.services.ingestion_pipeline import IngestionPipeline
+
+    pipeline = IngestionPipeline(db_manager=MagicMock())
+    pipeline.taxonomy_service = MagicMock()
+    pipeline.taxonomy_service.match_signals.return_value = []
+
+    # Mock the link extractors at module level.
+    raw_pairs = [(f"https://uni.edu/p{i}", f"Anchor {i}") for i in range(50)]
+    monkeypatch.setattr(
+        "src.services.ingestion_pipeline.extract_links_with_text",
+        lambda md, base: raw_pairs,
+    )
+    kept = [raw_pairs[0][0], raw_pairs[1][0]]  # 2/50 = 4% retention
+    monkeypatch.setattr(
+        "src.services.ingestion_pipeline.filter_links_by_llm",
+        lambda router, pairs, src: kept,
+    )
+    rescued = [raw_pairs[5][0], raw_pairs[6][0], raw_pairs[7][0]]
+    critique_mock = MagicMock(return_value=rescued)
+    monkeypatch.setattr(
+        "src.services.ingestion_pipeline.filter_links_critique_retry",
+        critique_mock,
+    )
+
+    scraper = MagicMock()
+    scraper.router = MagicMock()
+    page = CrawlPageResult(
+        url="https://uni.edu/index",
+        markdown="# Programs",
+        char_count=10,
+        links=[],
+    )
+    funnel: dict = {}
+    urls, _ = await pipeline._select_detail_urls(
+        scraper, page, funnel_out=funnel
+    )
+
+    # Critique was actually invoked.
+    critique_mock.assert_called_once()
+    # Rescued URLs are now in the candidate list.
+    for r in rescued:
+        assert r in urls
+    # Funnel reflects the rescue.
+    assert funnel["recovered_count"] == 3
+    # Rescued URLs should NOT remain in dropped_links — they were brought back.
+    dropped_urls_now = {d["url"] for d in funnel["dropped_links"]}
+    for r in rescued:
+        assert r not in dropped_urls_now
+
+
+@pytest.mark.asyncio
+async def test_select_detail_urls_skips_recovery_when_retention_healthy(
+    monkeypatch,
+) -> None:
+    """If the filter kept a healthy fraction (>= 30%), don't waste tokens
+    on critique retry."""
+    from src.models.scraper_models import CrawlPageResult
+    from src.services.ingestion_pipeline import IngestionPipeline
+
+    pipeline = IngestionPipeline(db_manager=MagicMock())
+    pipeline.taxonomy_service = MagicMock()
+    pipeline.taxonomy_service.match_signals.return_value = []
+
+    raw_pairs = [(f"https://uni.edu/p{i}", f"Anchor {i}") for i in range(50)]
+    monkeypatch.setattr(
+        "src.services.ingestion_pipeline.extract_links_with_text",
+        lambda md, base: raw_pairs,
+    )
+    kept = [p[0] for p in raw_pairs[:25]]  # 25/50 = 50% retention
+    monkeypatch.setattr(
+        "src.services.ingestion_pipeline.filter_links_by_llm",
+        lambda router, pairs, src: kept,
+    )
+    critique_mock = MagicMock(return_value=[])
+    monkeypatch.setattr(
+        "src.services.ingestion_pipeline.filter_links_critique_retry",
+        critique_mock,
+    )
+
+    scraper = MagicMock()
+    scraper.router = MagicMock()
+    page = CrawlPageResult(
+        url="https://uni.edu/index",
+        markdown="# Programs",
+        char_count=10,
+        links=[],
+    )
+    funnel: dict = {}
+    await pipeline._select_detail_urls(scraper, page, funnel_out=funnel)
+
+    critique_mock.assert_not_called()
+    assert funnel.get("recovered_count", 0) == 0
+
+
+@pytest.mark.asyncio
+async def test_select_detail_urls_skips_recovery_on_small_pages(
+    monkeypatch,
+) -> None:
+    """On a page with few raw links, low retention is normal — don't fire."""
+    from src.models.scraper_models import CrawlPageResult
+    from src.services.ingestion_pipeline import IngestionPipeline
+
+    pipeline = IngestionPipeline(db_manager=MagicMock())
+    pipeline.taxonomy_service = MagicMock()
+    pipeline.taxonomy_service.match_signals.return_value = []
+
+    raw_pairs = [(f"https://uni.edu/p{i}", f"Anchor {i}") for i in range(10)]
+    monkeypatch.setattr(
+        "src.services.ingestion_pipeline.extract_links_with_text",
+        lambda md, base: raw_pairs,
+    )
+    kept = [raw_pairs[0][0]]  # 1/10 = 10% retention but only 10 raw links
+    monkeypatch.setattr(
+        "src.services.ingestion_pipeline.filter_links_by_llm",
+        lambda router, pairs, src: kept,
+    )
+    critique_mock = MagicMock(return_value=[])
+    monkeypatch.setattr(
+        "src.services.ingestion_pipeline.filter_links_critique_retry",
+        critique_mock,
+    )
+
+    scraper = MagicMock()
+    scraper.router = MagicMock()
+    page = CrawlPageResult(
+        url="https://uni.edu/index",
+        markdown="# Programs",
+        char_count=10,
+        links=[],
+    )
+    funnel: dict = {}
+    await pipeline._select_detail_urls(scraper, page, funnel_out=funnel)
+
+    critique_mock.assert_not_called()
+
+
+def test_persist_versioned_forwards_dropped_links_to_audit() -> None:
+    """When fetch_raw recorded dropped links per stage, persist_versioned
+    must forward them to record_extraction_audit so the drill-down works."""
+    mock_db = MagicMock()
+    mock_db.upsert_program.return_value = (
+        MagicMock(id=1, name_en="X", source_url="", extra_metadata=None),
+        True,
+    )
+    pipeline = IngestionPipeline(db_manager=mock_db)
+
+    dropped = [
+        {"url": "https://hku.hk/about", "anchor_text": "About",
+         "stage_dropped": "llm_filter"},
+        {"url": "https://hku.hk/news", "anchor_text": "News",
+         "stage_dropped": "llm_filter"},
+        {"url": "https://hku.hk/events", "anchor_text": "Events",
+         "stage_dropped": "taxonomy_filter"},
+    ]
+
+    context = {
+        "validated_programs": [
+            {"name_en": "MSc Finance", "academic_year": 2026, "tuition_amount": 100},
+        ],
+        "validated_hash": "h",
+        "audit_funnel": {
+            "index_url": "https://www.hku.hk/programs",
+            "raw_link_count": 87,
+            "llm_filtered_count": 23,
+            "candidate_count": 22,
+            "dropped_links": dropped,
+        },
+    }
+    pipeline._stage_persist_versioned({"univ_slug": "hku", "year": 2026}, context)
+
+    mock_db.record_extraction_audit.assert_called_once()
+    kwargs = mock_db.record_extraction_audit.call_args.kwargs
+    assert kwargs["dropped_links"] == dropped
+
+
+def test_persist_versioned_skips_audit_when_no_funnel() -> None:
+    """Direct detail-mode crawls (no index page) don't have a funnel —
+    audit must not be written in that case."""
+    mock_db = MagicMock()
+    mock_db.upsert_program.return_value = (
+        MagicMock(id=1, name_en="X", source_url="", extra_metadata=None),
+        True,
+    )
+    pipeline = IngestionPipeline(db_manager=mock_db)
+
+    request_payload = {"univ_slug": "hku", "year": 2026}
+    context = {
+        "validated_programs": [
+            {"name_en": "MSc Finance", "academic_year": 2026, "tuition_amount": 100},
+        ],
+        "validated_hash": "h",
+    }
+
+    pipeline._stage_persist_versioned(request_payload, context)
+
+    mock_db.record_extraction_audit.assert_not_called()
+
+
 def test_persist_versioned_graduates_prior_quarantine_on_success() -> None:
     """Successful upsert must clear any prior quarantine entry for the
     same source_url, so the table reflects current state, not history."""

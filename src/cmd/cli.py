@@ -92,6 +92,9 @@ DATABASE & STATUS:
     taxonomy-export  Export canonical taxonomy names to JSON
     quarantine list  List extractions that failed the quality gate
     quarantine clear Remove quarantine entries for one university (optional reason filter)
+    audit list       Inspect index→detail extraction funnel (raw → filtered → extracted)
+    audit drill      Show URLs dropped at each filter stage for one audit row
+    diagnostics clear One-shot wipe of quarantine + audit data for one university
     
 LLM CONFIGURATION:
     llm-config Interactive wizard to configure LLM providers
@@ -1667,6 +1670,129 @@ def quarantine_clear(
     )
     suffix = f" (reason={reason_enum.value})" if reason_enum else ""
     typer.echo(f"Deleted {deleted} quarantine entries for {university}{suffix}.")
+
+
+# ---------------------------------------------------------------------------
+#  Audit subcommands — index → detail funnel diagnostics
+# ---------------------------------------------------------------------------
+
+audit_app = typer.Typer(
+    name="audit",
+    help="Inspect index→detail extraction funnel records.",
+    add_completion=False,
+)
+app.add_typer(audit_app)
+
+
+@audit_app.command(name="list")
+def audit_list(
+    university: Optional[str] = typer.Option(
+        None, "--university", "-u", help="University slug filter"
+    ),
+    year: Optional[int] = typer.Option(
+        None, "--year", "-y", help="Academic year filter"
+    ),
+    limit: int = typer.Option(
+        20, "--limit", "-n", min=1, max=200,
+        help="Maximum rows to show (newest first)",
+    ),
+) -> None:
+    """Show index→detail funnel rows: raw links → filtered → extracted.
+
+    Useful for answering "the index had 10 programs, why did only 3 land
+    in the DB?" — each row shows where in the funnel programs were lost.
+    """
+    db_manager = DatabaseManager()
+    entries = db_manager.list_extraction_audit(
+        university_slug=university, year=year, limit=limit
+    )
+    if not entries:
+        typer.echo("No audit records.")
+        return
+
+    for entry in entries:
+        recovered_note = (
+            f" rescued={entry.recovered_count}" if entry.recovered_count else ""
+        )
+        typer.echo(
+            f"[{entry.id}] {entry.university_slug} {entry.academic_year}  "
+            f"raw={entry.raw_link_count} → "
+            f"filtered={entry.llm_filtered_count}{recovered_note} → "
+            f"candidates={entry.candidate_count} → "
+            f"extracted={entry.extracted_count} "
+            f"(quarantined={entry.quarantined_count})  "
+            f"url={entry.index_url}"
+        )
+
+
+@audit_app.command(name="drill")
+def audit_drill(
+    audit_id: int = typer.Argument(..., help="Audit row id (from `audit list`)"),
+) -> None:
+    """Show which specific URLs were dropped at each filter stage.
+
+    Answers "did we miss a real program?" — for a given audit row, lists
+    every link that was filtered out, grouped by the stage that rejected
+    it (llm_filter or taxonomy_filter).
+    """
+    db_manager = DatabaseManager()
+    links = db_manager.list_audit_dropped_links(audit_id=audit_id)
+    if not links:
+        typer.echo("No dropped links recorded for this audit.")
+        return
+
+    grouped: dict = {}
+    for link in links:
+        grouped.setdefault(link.stage_dropped, []).append(link)
+
+    for stage, items in grouped.items():
+        typer.echo(f"\n{stage}  ({len(items)} dropped):")
+        for link in items:
+            anchor = f" [{link.anchor_text}]" if link.anchor_text else ""
+            typer.echo(f"  {link.url}{anchor}")
+
+
+# ---------------------------------------------------------------------------
+#  Diagnostics subcommands — unified cleanup for one university
+# ---------------------------------------------------------------------------
+
+diagnostics_app = typer.Typer(
+    name="diagnostics",
+    help="Bulk diagnostic-data operations spanning quarantine + audit.",
+    add_completion=False,
+)
+app.add_typer(diagnostics_app)
+
+
+@diagnostics_app.command(name="clear")
+def diagnostics_clear(
+    university: str = typer.Option(
+        ..., "--university", "-u",
+        help="University slug to clear all diagnostic data for (required).",
+    ),
+    year: Optional[int] = typer.Option(
+        None, "--year", "-y",
+        help="Optional academic year filter. If omitted, ALL years are cleared.",
+    ),
+) -> None:
+    """Clear quarantine entries + audit funnel rows for one university.
+
+    One command to give a university a clean diagnostic slate — wipes
+    both `program_quarantine` AND `extraction_audit` (with cascade
+    delete of `extraction_audit_link`). The main `program` table is
+    NOT touched — this affects diagnostic data only.
+
+    `--university` is required (no bulk clear-all from the CLI).
+    """
+    db_manager = DatabaseManager()
+    result = db_manager.clear_diagnostics(university_slug=university, year=year)
+    year_note = f" year={year}" if year else ""
+    typer.echo(
+        f"Cleared diagnostics for {university}{year_note}:\n"
+        f"  quarantine entries deleted: {result['quarantine_deleted']}\n"
+        f"  audit rows deleted:         {result['audits_deleted']}\n"
+        f"  audit link rows deleted:    {result['links_deleted']}"
+    )
 
 
 # ---------------------------------------------------------------------------
