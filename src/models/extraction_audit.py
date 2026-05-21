@@ -1,0 +1,50 @@
+"""ExtractionAudit: per-crawl funnel record for index→detail extraction.
+
+Captures how many links were on the source index page, how many survived
+filtering, and how many ended up as committed / quarantined programs.
+Without this, "I crawled HKU and only got 5 programs" is invisible noise;
+with it, the user can see exactly where in the funnel programs were lost.
+"""
+from __future__ import annotations
+
+from datetime import datetime, timezone
+from typing import Optional
+
+from sqlmodel import Field, SQLModel
+
+
+class ExtractionAudit(SQLModel, table=True):
+    """One row per index-page crawl event."""
+
+    __tablename__ = "extraction_audit"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    university_slug: str = Field(index=True, max_length=120)
+    academic_year: int = Field(index=True)
+    index_url: str = Field(max_length=1024)
+
+    raw_link_count: int = Field(
+        description="Total <a href> found on the index page before any filtering"
+    )
+    llm_filtered_count: int = Field(
+        description="Links retained after the LLM/heuristic link filter"
+    )
+    candidate_count: int = Field(
+        description=(
+            "Final list of detail URLs to crawl after dedupe and any "
+            "taxonomy-score filtering"
+        )
+    )
+    extracted_count: int = Field(
+        description="Programs successfully committed to the program table"
+    )
+    quarantined_count: int = Field(
+        description="Detail crawls that failed the quality gate"
+    )
+    job_uid: Optional[str] = Field(
+        default=None, max_length=64,
+        description="Optional link back to the originating ingestion_job",
+    )
+    created_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc), index=True
+    )

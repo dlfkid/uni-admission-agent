@@ -242,9 +242,15 @@ The agent needs a database connection.
 ./adm-agent quarantine list --university hku --year 2026
 
 # Clear quarantine entries for one university (optionally filter by reason)
-#   Reasons: empty_name, name_too_short, noise_name, empty_shell
+#   Reasons: empty_name, name_too_short, noise_name, empty_shell,
+#            no_markdown, extraction_failed
 ./adm-agent quarantine clear --university hku
 ./adm-agent quarantine clear --university hku --reason empty_shell
+
+# Inspect index→detail funnel records (raw → filtered → extracted)
+#   Useful when "index had 10 programs but only 3 made it into the DB" — shows
+#   exactly where in the funnel programs were lost.
+./adm-agent audit list --university hku --year 2026 --limit 10
 
 # Show current version
 ./adm-agent version
@@ -321,6 +327,9 @@ The agent needs a database connection.
 # Clear quarantine entries for one university (optionally filter by reason)
 .\adm-agent.exe quarantine clear --university hku
 .\adm-agent.exe quarantine clear --university hku --reason empty_shell
+
+# Inspect index→detail funnel records
+.\adm-agent.exe audit list --university hku --year 2026 --limit 10
 
 # Show current version
 .\adm-agent.exe version

@@ -1227,3 +1227,53 @@ class DatabaseManager:
                 source_url=source_url,
                 reason=reason,
             )
+
+    # ------------------------------------------------------------------
+    #  Extraction audit — index → detail funnel tracking
+    # ------------------------------------------------------------------
+
+    def record_extraction_audit(
+        self,
+        *,
+        university_slug: str,
+        academic_year: int,
+        index_url: str,
+        raw_link_count: int,
+        llm_filtered_count: int,
+        candidate_count: int,
+        extracted_count: int,
+        quarantined_count: int,
+        job_uid: Optional[str] = None,
+    ):
+        """Persist one index→detail funnel record."""
+        from src.storage.audit_repo import ExtractionAuditRepo
+
+        with self.get_session() as session:
+            repo = ExtractionAuditRepo(session)
+            return repo.record(
+                university_slug=university_slug,
+                academic_year=academic_year,
+                index_url=index_url,
+                raw_link_count=raw_link_count,
+                llm_filtered_count=llm_filtered_count,
+                candidate_count=candidate_count,
+                extracted_count=extracted_count,
+                quarantined_count=quarantined_count,
+                job_uid=job_uid,
+            )
+
+    def list_extraction_audit(
+        self,
+        *,
+        university_slug: Optional[str] = None,
+        year: Optional[int] = None,
+        limit: Optional[int] = None,
+    ):
+        """List funnel records (newest first) filtered by university/year."""
+        from src.storage.audit_repo import ExtractionAuditRepo
+
+        with self.get_session() as session:
+            repo = ExtractionAuditRepo(session)
+            return repo.list_for(
+                university_slug=university_slug, year=year, limit=limit
+            )

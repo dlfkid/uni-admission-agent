@@ -92,6 +92,7 @@ DATABASE & STATUS:
     taxonomy-export  Export canonical taxonomy names to JSON
     quarantine list  List extractions that failed the quality gate
     quarantine clear Remove quarantine entries for one university (optional reason filter)
+    audit list       Inspect index→detail extraction funnel (raw → filtered → extracted)
     
 LLM CONFIGURATION:
     llm-config Interactive wizard to configure LLM providers
@@ -1667,6 +1668,56 @@ def quarantine_clear(
     )
     suffix = f" (reason={reason_enum.value})" if reason_enum else ""
     typer.echo(f"Deleted {deleted} quarantine entries for {university}{suffix}.")
+
+
+# ---------------------------------------------------------------------------
+#  Audit subcommands — index → detail funnel diagnostics
+# ---------------------------------------------------------------------------
+
+audit_app = typer.Typer(
+    name="audit",
+    help="Inspect index→detail extraction funnel records.",
+    add_completion=False,
+)
+app.add_typer(audit_app)
+
+
+@audit_app.command(name="list")
+def audit_list(
+    university: Optional[str] = typer.Option(
+        None, "--university", "-u", help="University slug filter"
+    ),
+    year: Optional[int] = typer.Option(
+        None, "--year", "-y", help="Academic year filter"
+    ),
+    limit: int = typer.Option(
+        20, "--limit", "-n", min=1, max=200,
+        help="Maximum rows to show (newest first)",
+    ),
+) -> None:
+    """Show index→detail funnel rows: raw links → filtered → extracted.
+
+    Useful for answering "the index had 10 programs, why did only 3 land
+    in the DB?" — each row shows where in the funnel programs were lost.
+    """
+    db_manager = DatabaseManager()
+    entries = db_manager.list_extraction_audit(
+        university_slug=university, year=year, limit=limit
+    )
+    if not entries:
+        typer.echo("No audit records.")
+        return
+
+    for entry in entries:
+        typer.echo(
+            f"[{entry.id}] {entry.university_slug} {entry.academic_year}  "
+            f"raw={entry.raw_link_count} → "
+            f"filtered={entry.llm_filtered_count} → "
+            f"candidates={entry.candidate_count} → "
+            f"extracted={entry.extracted_count} "
+            f"(quarantined={entry.quarantined_count})  "
+            f"url={entry.index_url}"
+        )
 
 
 # ---------------------------------------------------------------------------

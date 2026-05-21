@@ -1385,6 +1385,40 @@ async def api_quarantine_clear(
     return {"deleted": deleted}
 
 
+@app.get("/audit")
+async def api_audit_list(
+    university: Optional[str] = None,
+    year: Optional[int] = None,
+    limit: int = 20,
+) -> List[Dict[str, Any]]:
+    """List index→detail extraction funnel records (newest first).
+
+    Each entry exposes the full funnel: raw links on the index page,
+    LLM/heuristic-filtered subset, final candidate set, and how many
+    became committed programs vs. quarantined.
+    """
+    db = get_db_manager()
+    entries = db.list_extraction_audit(
+        university_slug=university, year=year, limit=int(limit)
+    )
+    return [
+        {
+            "id": e.id,
+            "university_slug": e.university_slug,
+            "academic_year": e.academic_year,
+            "index_url": e.index_url,
+            "raw_link_count": e.raw_link_count,
+            "llm_filtered_count": e.llm_filtered_count,
+            "candidate_count": e.candidate_count,
+            "extracted_count": e.extracted_count,
+            "quarantined_count": e.quarantined_count,
+            "job_uid": e.job_uid,
+            "created_at": e.created_at.isoformat() if e.created_at else None,
+        }
+        for e in entries
+    ]
+
+
 @app.get("/universities", response_model=List[UniversityResponse])
 async def api_universities() -> List[UniversityResponse]:
     """Return all universities ordered by most recently updated first."""
