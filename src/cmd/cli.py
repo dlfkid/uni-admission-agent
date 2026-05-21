@@ -94,6 +94,7 @@ DATABASE & STATUS:
     quarantine clear Remove quarantine entries for one university (optional reason filter)
     audit list       Inspect index→detail extraction funnel (raw → filtered → extracted)
     audit drill      Show URLs dropped at each filter stage for one audit row
+    diagnostics clear One-shot wipe of quarantine + audit data for one university
     
 LLM CONFIGURATION:
     llm-config Interactive wizard to configure LLM providers
@@ -1749,6 +1750,49 @@ def audit_drill(
         for link in items:
             anchor = f" [{link.anchor_text}]" if link.anchor_text else ""
             typer.echo(f"  {link.url}{anchor}")
+
+
+# ---------------------------------------------------------------------------
+#  Diagnostics subcommands — unified cleanup for one university
+# ---------------------------------------------------------------------------
+
+diagnostics_app = typer.Typer(
+    name="diagnostics",
+    help="Bulk diagnostic-data operations spanning quarantine + audit.",
+    add_completion=False,
+)
+app.add_typer(diagnostics_app)
+
+
+@diagnostics_app.command(name="clear")
+def diagnostics_clear(
+    university: str = typer.Option(
+        ..., "--university", "-u",
+        help="University slug to clear all diagnostic data for (required).",
+    ),
+    year: Optional[int] = typer.Option(
+        None, "--year", "-y",
+        help="Optional academic year filter. If omitted, ALL years are cleared.",
+    ),
+) -> None:
+    """Clear quarantine entries + audit funnel rows for one university.
+
+    One command to give a university a clean diagnostic slate — wipes
+    both `program_quarantine` AND `extraction_audit` (with cascade
+    delete of `extraction_audit_link`). The main `program` table is
+    NOT touched — this affects diagnostic data only.
+
+    `--university` is required (no bulk clear-all from the CLI).
+    """
+    db_manager = DatabaseManager()
+    result = db_manager.clear_diagnostics(university_slug=university, year=year)
+    year_note = f" year={year}" if year else ""
+    typer.echo(
+        f"Cleared diagnostics for {university}{year_note}:\n"
+        f"  quarantine entries deleted: {result['quarantine_deleted']}\n"
+        f"  audit rows deleted:         {result['audits_deleted']}\n"
+        f"  audit link rows deleted:    {result['links_deleted']}"
+    )
 
 
 # ---------------------------------------------------------------------------

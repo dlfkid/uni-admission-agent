@@ -1420,6 +1420,29 @@ async def api_audit_list(
     ]
 
 
+@app.delete("/diagnostics")
+async def api_diagnostics_clear(
+    university: Optional[str] = None,
+    year: Optional[int] = None,
+) -> Dict[str, int]:
+    """Wipe all diagnostic records (quarantine + audit + audit_link) for one
+    university. ``university`` query param is required.
+
+    Optionally scope to a single academic year via ``year``. Returns the
+    structured count of rows deleted by table.
+    """
+    if not university:
+        raise HTTPException(
+            status_code=400, detail="university query param is required"
+        )
+
+    db = get_db_manager()
+    return db.clear_diagnostics(
+        university_slug=university,
+        year=int(year) if year is not None else None,
+    )
+
+
 @app.get("/audit/{audit_id}/dropped")
 async def api_audit_dropped(audit_id: int) -> Dict[str, List[Dict[str, Any]]]:
     """Return URLs dropped at each filter stage for one audit row.

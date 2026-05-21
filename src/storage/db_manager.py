@@ -1274,6 +1274,46 @@ class DatabaseManager:
             repo = ExtractionAuditRepo(session)
             return repo.list_dropped_links(audit_id=audit_id)
 
+    # ------------------------------------------------------------------
+    #  Unified diagnostics cleanup — wipes quarantine + audit (+ links)
+    #  for one university, optionally scoped to a single academic year.
+    # ------------------------------------------------------------------
+
+    def clear_diagnostics(
+        self,
+        *,
+        university_slug: str,
+        year: Optional[int] = None,
+    ) -> dict:
+        """Clear all diagnostic records (quarantine + audit + audit_link)
+        for one university. Optional year filter scopes the delete.
+
+        Returns a structured count: ``{"quarantine_deleted": N,
+        "audits_deleted": M, "links_deleted": L}``.
+        """
+        if not university_slug:
+            raise ValueError("clear_diagnostics requires a non-empty university_slug")
+
+        from src.storage.audit_repo import ExtractionAuditRepo
+        from src.storage.quarantine_repo import QuarantineRepo
+
+        with self.get_session() as session:
+            q_repo = QuarantineRepo(session)
+            quarantine_deleted = q_repo.clear(
+                university_slug=university_slug,
+                year=year,
+            )
+            a_repo = ExtractionAuditRepo(session)
+            audit_result = a_repo.clear_for_university(
+                university_slug=university_slug,
+                year=year,
+            )
+            return {
+                "quarantine_deleted": quarantine_deleted,
+                "audits_deleted": audit_result["audits_deleted"],
+                "links_deleted": audit_result["links_deleted"],
+            }
+
     def list_extraction_audit(
         self,
         *,

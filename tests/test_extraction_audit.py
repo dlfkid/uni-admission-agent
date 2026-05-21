@@ -209,3 +209,72 @@ class TestAuditRepoDroppedLinks:
         repo = ExtractionAuditRepo(full_session)
         entry = repo.record(**_sample_funnel(recovered_count=4))
         assert entry.recovered_count == 4
+
+
+class TestAuditRepoClearForUniversity:
+    """Cleanup operations that match the quarantine `clear` pattern."""
+
+    def _seed(self, session: Session) -> ExtractionAuditRepo:
+        repo = ExtractionAuditRepo(session)
+        repo.record(
+            **_sample_funnel(university_slug="hku", academic_year=2026),
+            dropped_links=[
+                {"url": "https://a", "anchor_text": "A", "stage_dropped": "llm_filter"},
+                {"url": "https://b", "anchor_text": "B", "stage_dropped": "llm_filter"},
+            ],
+        )
+        repo.record(
+            **_sample_funnel(university_slug="hku", academic_year=2027),
+            dropped_links=[
+                {"url": "https://c", "anchor_text": "C", "stage_dropped": "llm_filter"},
+            ],
+        )
+        repo.record(
+            **_sample_funnel(university_slug="ust", academic_year=2026),
+            dropped_links=[],
+        )
+        return repo
+
+    def test_clear_by_university_cascades_to_link_rows(self, full_session: Session) -> None:
+        from src.models.extraction_audit import ExtractionAuditLink
+
+        repo = self._seed(full_session)
+        result = repo.clear_for_university(university_slug="hku")
+
+        assert result["audits_deleted"] == 2
+        assert result["links_deleted"] == 3  # 2 + 1 from the two hku audits
+
+        # ust audit + its links (none) are untouched.
+        remaining = full_session.exec(select(ExtractionAudit)).all()
+        assert [r.university_slug for r in remaining] == ["ust"]
+        all_links = full_session.exec(select(ExtractionAuditLink)).all()
+        assert all_links == []  # ust had no links to begin with
+
+    def test_clear_by_university_and_year(self, full_session: Session) -> None:
+        from src.models.extraction_audit import ExtractionAuditLink
+
+        repo = self._seed(full_session)
+        result = repo.clear_for_university(university_slug="hku", year=2026)
+
+        assert result["audits_deleted"] == 1
+        assert result["links_deleted"] == 2  # only the 2026 audit's links
+
+        remaining = full_session.exec(select(ExtractionAudit)).all()
+        years = {r.academic_year for r in remaining}
+        assert years == {2027, 2026}  # 2027 hku and 2026 ust preserved
+        link_audit_ids = {
+            l.audit_id for l in full_session.exec(select(ExtractionAuditLink)).all()
+        }
+        # Only the hku-2027 audit's link should remain.
+        remaining_audit_ids = {r.id for r in remaining if r.university_slug == "hku"}
+        assert link_audit_ids.issubset(remaining_audit_ids)
+
+    def test_clear_nothing_matches_returns_zero(self, full_session: Session) -> None:
+        repo = self._seed(full_session)
+        result = repo.clear_for_university(university_slug="nonexistent")
+        assert result == {"audits_deleted": 0, "links_deleted": 0}
+
+    def test_clear_requires_university(self, full_session: Session) -> None:
+        repo = self._seed(full_session)
+        with pytest.raises(ValueError):
+            repo.clear_for_university(university_slug="")

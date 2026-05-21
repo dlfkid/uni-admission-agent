@@ -191,3 +191,27 @@ class TestQuarantineRepoClear:
         repo = self._seed(session)
         with pytest.raises(ValueError):
             repo.clear()
+
+    def test_clear_filters_by_academic_year(self, session: Session) -> None:
+        """Year filter scopes the delete so other years' diagnostic
+        history is preserved."""
+        repo = QuarantineRepo(session)
+        repo.record(
+            university_slug="hku",
+            program_data={**_sample_program(name="A"),
+                          "academic_year": 2026, "source_url": "https://e.edu/a26"},
+            reason=QuarantineReason.EMPTY_SHELL,
+            signals={},
+        )
+        repo.record(
+            university_slug="hku",
+            program_data={**_sample_program(name="B"),
+                          "academic_year": 2027, "source_url": "https://e.edu/b27"},
+            reason=QuarantineReason.EMPTY_SHELL,
+            signals={},
+        )
+
+        deleted = repo.clear(university_slug="hku", year=2026)
+        assert deleted == 1
+        remaining = repo.list_for(university_slug="hku")
+        assert [r.academic_year for r in remaining] == [2027]

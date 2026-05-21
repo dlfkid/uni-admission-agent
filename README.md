@@ -255,6 +255,12 @@ The agent needs a database connection.
 # Drill into one audit row to see WHICH URLs got filtered at each stage
 ./adm-agent audit drill 42
 
+# One-shot wipe of ALL diagnostic data (quarantine + audit + audit links)
+# for one university. Use --year to scope to a single academic year.
+# The main `program` table is NOT touched — only diagnostic records.
+./adm-agent diagnostics clear --university hku
+./adm-agent diagnostics clear --university hku --year 2026
+
 # Show current version
 ./adm-agent version
 
@@ -336,6 +342,10 @@ The agent needs a database connection.
 
 # Drill into one audit row to see WHICH URLs got filtered at each stage
 .\adm-agent.exe audit drill 42
+
+# One-shot wipe of ALL diagnostic data for one university (quarantine + audit)
+.\adm-agent.exe diagnostics clear --university hku
+.\adm-agent.exe diagnostics clear --university hku --year 2026
 
 # Show current version
 .\adm-agent.exe version

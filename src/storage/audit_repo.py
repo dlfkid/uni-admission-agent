@@ -74,6 +74,51 @@ class ExtractionAuditRepo:
         )
         return list(self._session.exec(stmt).all())
 
+    def clear_for_university(
+        self,
+        *,
+        university_slug: str,
+        year: Optional[int] = None,
+    ) -> Dict[str, int]:
+        """Delete audit rows + their child link rows for one university.
+
+        Requires ``university_slug`` so a typo can't wipe the whole table.
+        Returns counts of audits and links deleted.
+        """
+        if not university_slug:
+            raise ValueError("clear_for_university requires a non-empty university_slug")
+
+        stmt = select(ExtractionAudit).where(
+            ExtractionAudit.university_slug == university_slug
+        )
+        if year is not None:
+            stmt = stmt.where(ExtractionAudit.academic_year == int(year))
+
+        audits = list(self._session.exec(stmt).all())
+        if not audits:
+            return {"audits_deleted": 0, "links_deleted": 0}
+
+        audit_ids = [a.id for a in audits]
+        # Delete link rows first — there's no ON DELETE CASCADE on the FK,
+        # so audit-row deletion would fail if links still pointed to it.
+        link_rows = list(
+            self._session.exec(
+                select(ExtractionAuditLink).where(
+                    col(ExtractionAuditLink.audit_id).in_(audit_ids)
+                )
+            ).all()
+        )
+        for link in link_rows:
+            self._session.delete(link)
+        for audit in audits:
+            self._session.delete(audit)
+        self._session.commit()
+
+        return {
+            "audits_deleted": len(audits),
+            "links_deleted": len(link_rows),
+        }
+
     def list_for(
         self,
         *,
