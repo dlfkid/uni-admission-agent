@@ -65,6 +65,14 @@ class ExtractionAudit(SQLModel, table=True):
     quarantined_count: int = Field(
         description="Detail crawls that failed the quality gate"
     )
+    recovered_count: int = Field(
+        default=0,
+        description=(
+            "URLs the LLM filter critique retry rescued back into the candidate "
+            "set after the first-pass filter rejected them. Non-zero means the "
+            "auto-recovery mechanism kicked in for this crawl."
+        ),
+    )
     job_uid: Optional[str] = Field(
         default=None, max_length=64,
         description="Optional link back to the originating ingestion_job",

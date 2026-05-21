@@ -1710,10 +1710,13 @@ def audit_list(
         return
 
     for entry in entries:
+        recovered_note = (
+            f" rescued={entry.recovered_count}" if entry.recovered_count else ""
+        )
         typer.echo(
             f"[{entry.id}] {entry.university_slug} {entry.academic_year}  "
             f"raw={entry.raw_link_count} → "
-            f"filtered={entry.llm_filtered_count} → "
+            f"filtered={entry.llm_filtered_count}{recovered_note} → "
             f"candidates={entry.candidate_count} → "
             f"extracted={entry.extracted_count} "
             f"(quarantined={entry.quarantined_count})  "

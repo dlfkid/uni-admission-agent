@@ -24,7 +24,11 @@ from src.models.ingestion import (
 from src.models.scraper_models import CrawlPageResult
 from src.scrapers.helpers import build_url_name_signal, extract_program_name, is_noise_program_name
 from src.scrapers.engine import AdmissionScraper
-from src.scrapers.link_parser import extract_links_with_text, filter_links_by_llm
+from src.scrapers.link_parser import (
+    extract_links_with_text,
+    filter_links_by_llm,
+    filter_links_critique_retry,
+)
 from src.scrapers.page_processor import extract_program_data_from_page
 from src.scrapers.scout import run_scout
 from src.services.program_name_resolution import resolve_program_name
@@ -35,6 +39,12 @@ from src.utils.text import generate_program_group_code
 
 logger = logging.getLogger(__name__)
 _HTML_TITLE_RE = re.compile(r"<title[^>]*>(.*?)</title>", re.IGNORECASE | re.DOTALL)
+
+# Link-filter critique retry — automatic recovery for suspiciously aggressive
+# filtering. Fires only when the page is large enough that low retention is a
+# real signal (not just noise from a tiny page).
+_RECOVERY_MIN_RAW_LINKS = 20
+_RECOVERY_RETENTION_THRESHOLD = 0.30
 
 STAGE_ORDER = [
     IngestionStage.FETCH_RAW,
@@ -1505,6 +1515,7 @@ class IngestionPipeline:
                     candidate_count=int(funnel.get("candidate_count") or 0),
                     extracted_count=persisted_count,
                     quarantined_count=quarantined_count,
+                    recovered_count=int(funnel.get("recovered_count") or 0),
                     job_uid=context.get("job_uid") or request_payload.get("job_uid"),
                     dropped_links=funnel.get("dropped_links"),
                 )
@@ -1700,6 +1711,35 @@ class IngestionPipeline:
         )
         if not detail_urls:
             detail_urls = [u for u, _ in link_pairs]
+
+        # Auto-recovery: if retention is suspiciously low on a non-trivial
+        # page, re-ask the LLM with a critique prompt that names the problem
+        # and shows the rejected URLs. Mirrors PR #24's cleaner self-critique
+        # pattern. Uses the data that audit collects rather than leaving it
+        # for a human to inspect.
+        recovered_count = 0
+        if (
+            len(link_pairs) >= _RECOVERY_MIN_RAW_LINKS
+            and (len(detail_urls) / len(link_pairs)) < _RECOVERY_RETENTION_THRESHOLD
+        ):
+            logger.info(
+                "[LinkFilter] Retention %d/%d below %.0f%% on %s — triggering critique retry",
+                len(detail_urls), len(link_pairs),
+                _RECOVERY_RETENTION_THRESHOLD * 100, page.url,
+            )
+            rescued = await asyncio.to_thread(
+                filter_links_critique_retry,
+                scraper.router,
+                link_pairs=link_pairs,
+                kept_urls=detail_urls,
+                source_url=page.url,
+            )
+            if rescued:
+                existing = set(detail_urls)
+                additions = [r for r in rescued if r not in existing]
+                detail_urls = detail_urls + additions
+                recovered_count = len(additions)
+
         kept_set = {str(u).strip() for u in detail_urls if str(u or "").strip()}
         dropped_links: List[Dict[str, str]] = []
         for url, text in link_pairs:
@@ -1717,6 +1757,7 @@ class IngestionPipeline:
             funnel_out["raw_link_count"] = len(link_pairs)
             funnel_out["llm_filtered_count"] = len(detail_urls)
             funnel_out["dropped_links"] = dropped_links
+            funnel_out["recovered_count"] = recovered_count
 
         seen: set[str] = set()
         deduped: List[str] = []

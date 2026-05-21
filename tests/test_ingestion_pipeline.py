@@ -179,6 +179,150 @@ def test_persist_versioned_writes_extraction_audit() -> None:
     assert kwargs["job_uid"] == "job-xyz"
 
 
+@pytest.mark.asyncio
+async def test_select_detail_urls_triggers_recovery_when_retention_low(
+    monkeypatch,
+) -> None:
+    """When the first-pass filter retains < 30% on a page with >= 20 raw
+    links, the critique retry fires and rescued URLs join the candidate
+    set."""
+    from src.models.scraper_models import CrawlPageResult
+    from src.services.ingestion_pipeline import IngestionPipeline
+
+    pipeline = IngestionPipeline(db_manager=MagicMock())
+    pipeline.taxonomy_service = MagicMock()
+    pipeline.taxonomy_service.match_signals.return_value = []
+
+    # Mock the link extractors at module level.
+    raw_pairs = [(f"https://uni.edu/p{i}", f"Anchor {i}") for i in range(50)]
+    monkeypatch.setattr(
+        "src.services.ingestion_pipeline.extract_links_with_text",
+        lambda md, base: raw_pairs,
+    )
+    kept = [raw_pairs[0][0], raw_pairs[1][0]]  # 2/50 = 4% retention
+    monkeypatch.setattr(
+        "src.services.ingestion_pipeline.filter_links_by_llm",
+        lambda router, pairs, src: kept,
+    )
+    rescued = [raw_pairs[5][0], raw_pairs[6][0], raw_pairs[7][0]]
+    critique_mock = MagicMock(return_value=rescued)
+    monkeypatch.setattr(
+        "src.services.ingestion_pipeline.filter_links_critique_retry",
+        critique_mock,
+    )
+
+    scraper = MagicMock()
+    scraper.router = MagicMock()
+    page = CrawlPageResult(
+        url="https://uni.edu/index",
+        markdown="# Programs",
+        char_count=10,
+        links=[],
+    )
+    funnel: dict = {}
+    urls, _ = await pipeline._select_detail_urls(
+        scraper, page, funnel_out=funnel
+    )
+
+    # Critique was actually invoked.
+    critique_mock.assert_called_once()
+    # Rescued URLs are now in the candidate list.
+    for r in rescued:
+        assert r in urls
+    # Funnel reflects the rescue.
+    assert funnel["recovered_count"] == 3
+    # Rescued URLs should NOT remain in dropped_links — they were brought back.
+    dropped_urls_now = {d["url"] for d in funnel["dropped_links"]}
+    for r in rescued:
+        assert r not in dropped_urls_now
+
+
+@pytest.mark.asyncio
+async def test_select_detail_urls_skips_recovery_when_retention_healthy(
+    monkeypatch,
+) -> None:
+    """If the filter kept a healthy fraction (>= 30%), don't waste tokens
+    on critique retry."""
+    from src.models.scraper_models import CrawlPageResult
+    from src.services.ingestion_pipeline import IngestionPipeline
+
+    pipeline = IngestionPipeline(db_manager=MagicMock())
+    pipeline.taxonomy_service = MagicMock()
+    pipeline.taxonomy_service.match_signals.return_value = []
+
+    raw_pairs = [(f"https://uni.edu/p{i}", f"Anchor {i}") for i in range(50)]
+    monkeypatch.setattr(
+        "src.services.ingestion_pipeline.extract_links_with_text",
+        lambda md, base: raw_pairs,
+    )
+    kept = [p[0] for p in raw_pairs[:25]]  # 25/50 = 50% retention
+    monkeypatch.setattr(
+        "src.services.ingestion_pipeline.filter_links_by_llm",
+        lambda router, pairs, src: kept,
+    )
+    critique_mock = MagicMock(return_value=[])
+    monkeypatch.setattr(
+        "src.services.ingestion_pipeline.filter_links_critique_retry",
+        critique_mock,
+    )
+
+    scraper = MagicMock()
+    scraper.router = MagicMock()
+    page = CrawlPageResult(
+        url="https://uni.edu/index",
+        markdown="# Programs",
+        char_count=10,
+        links=[],
+    )
+    funnel: dict = {}
+    await pipeline._select_detail_urls(scraper, page, funnel_out=funnel)
+
+    critique_mock.assert_not_called()
+    assert funnel.get("recovered_count", 0) == 0
+
+
+@pytest.mark.asyncio
+async def test_select_detail_urls_skips_recovery_on_small_pages(
+    monkeypatch,
+) -> None:
+    """On a page with few raw links, low retention is normal — don't fire."""
+    from src.models.scraper_models import CrawlPageResult
+    from src.services.ingestion_pipeline import IngestionPipeline
+
+    pipeline = IngestionPipeline(db_manager=MagicMock())
+    pipeline.taxonomy_service = MagicMock()
+    pipeline.taxonomy_service.match_signals.return_value = []
+
+    raw_pairs = [(f"https://uni.edu/p{i}", f"Anchor {i}") for i in range(10)]
+    monkeypatch.setattr(
+        "src.services.ingestion_pipeline.extract_links_with_text",
+        lambda md, base: raw_pairs,
+    )
+    kept = [raw_pairs[0][0]]  # 1/10 = 10% retention but only 10 raw links
+    monkeypatch.setattr(
+        "src.services.ingestion_pipeline.filter_links_by_llm",
+        lambda router, pairs, src: kept,
+    )
+    critique_mock = MagicMock(return_value=[])
+    monkeypatch.setattr(
+        "src.services.ingestion_pipeline.filter_links_critique_retry",
+        critique_mock,
+    )
+
+    scraper = MagicMock()
+    scraper.router = MagicMock()
+    page = CrawlPageResult(
+        url="https://uni.edu/index",
+        markdown="# Programs",
+        char_count=10,
+        links=[],
+    )
+    funnel: dict = {}
+    await pipeline._select_detail_urls(scraper, page, funnel_out=funnel)
+
+    critique_mock.assert_not_called()
+
+
 def test_persist_versioned_forwards_dropped_links_to_audit() -> None:
     """When fetch_raw recorded dropped links per stage, persist_versioned
     must forward them to record_extraction_audit so the drill-down works."""

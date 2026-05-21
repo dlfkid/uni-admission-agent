@@ -39,6 +39,7 @@ def _sample_funnel(**overrides) -> dict:
         "candidate_count": 22,
         "extracted_count": 11,
         "quarantined_count": 6,
+        "recovered_count": 0,
         "job_uid": "job-abc-123",
     }
     base.update(overrides)
@@ -203,3 +204,8 @@ class TestAuditRepoDroppedLinks:
 
         rows = full_session.exec(select(ExtractionAuditLink)).all()
         assert rows == []
+
+    def test_recovered_count_is_persisted(self, full_session: Session) -> None:
+        repo = ExtractionAuditRepo(full_session)
+        entry = repo.record(**_sample_funnel(recovered_count=4))
+        assert entry.recovered_count == 4

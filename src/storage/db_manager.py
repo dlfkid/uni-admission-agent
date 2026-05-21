@@ -1243,6 +1243,7 @@ class DatabaseManager:
         candidate_count: int,
         extracted_count: int,
         quarantined_count: int,
+        recovered_count: int = 0,
         job_uid: Optional[str] = None,
         dropped_links: Optional[list] = None,
     ):
@@ -1260,6 +1261,7 @@ class DatabaseManager:
                 candidate_count=candidate_count,
                 extracted_count=extracted_count,
                 quarantined_count=quarantined_count,
+                recovered_count=recovered_count,
                 job_uid=job_uid,
                 dropped_links=dropped_links,
             )

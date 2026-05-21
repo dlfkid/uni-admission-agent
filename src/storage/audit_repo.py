@@ -28,6 +28,7 @@ class ExtractionAuditRepo:
         candidate_count: int,
         extracted_count: int,
         quarantined_count: int,
+        recovered_count: int = 0,
         job_uid: Optional[str] = None,
         dropped_links: Optional[List[Dict[str, Any]]] = None,
     ) -> ExtractionAudit:
@@ -40,6 +41,7 @@ class ExtractionAuditRepo:
             candidate_count=int(candidate_count),
             extracted_count=int(extracted_count),
             quarantined_count=int(quarantined_count),
+            recovered_count=int(recovered_count),
             job_uid=job_uid,
         )
         self._session.add(entry)

@@ -1412,6 +1412,7 @@ async def api_audit_list(
             "candidate_count": e.candidate_count,
             "extracted_count": e.extracted_count,
             "quarantined_count": e.quarantined_count,
+            "recovered_count": e.recovered_count,
             "job_uid": e.job_uid,
             "created_at": e.created_at.isoformat() if e.created_at else None,
         }

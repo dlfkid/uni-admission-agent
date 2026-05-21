@@ -29,6 +29,12 @@ def upgrade() -> None:
         sa.Column("candidate_count", sa.Integer(), nullable=False),
         sa.Column("extracted_count", sa.Integer(), nullable=False),
         sa.Column("quarantined_count", sa.Integer(), nullable=False),
+        sa.Column(
+            "recovered_count",
+            sa.Integer(),
+            nullable=False,
+            server_default=sa.text("0"),
+        ),
         sa.Column("job_uid", sa.String(length=64), nullable=True),
         sa.Column(
             "created_at",
