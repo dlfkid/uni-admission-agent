@@ -1209,12 +1209,40 @@ class IngestionPipeline:
                 )
                 candidates.append(_json_safe(program_data))
             else:
+                err_text = str(error or "No structured data extracted")
                 extract_errors.append(
                     {
                         "url": page.url,
-                        "error": str(error or "No structured data extracted"),
+                        "error": err_text,
                     }
                 )
+                # Silent-failure quarantine: a URL that the cleaner could
+                # not produce anything for must still appear in quarantine
+                # so users can see the attempt. Distinguish "page had no
+                # markdown" from "cleaner returned None".
+                from src.services.quality_gate import QuarantineReason
+
+                fail_reason = (
+                    QuarantineReason.NO_MARKDOWN
+                    if not page.markdown
+                    else QuarantineReason.EXTRACTION_FAILED
+                )
+                stub = {
+                    "academic_year": int(request_payload.get("year") or 0),
+                    "name_en": None,
+                    "source_url": page.url,
+                }
+                try:
+                    self.db_manager.upsert_quarantine(
+                        university_slug=univ_slug,
+                        program_data=stub,
+                        reason=fail_reason,
+                        signals={"error": err_text},
+                    )
+                except Exception:  # pylint: disable=broad-except
+                    logger.exception(
+                        "Failed to record silent-failure quarantine for %s", page.url
+                    )
 
         return {
             "program_candidates": candidates,

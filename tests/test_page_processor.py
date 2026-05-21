@@ -557,3 +557,54 @@ def test_quarantine_path_does_not_call_clear() -> None:
     db.upsert_program.assert_not_called()
     db.upsert_quarantine.assert_called_once()
     db.clear_quarantine.assert_not_called()
+
+
+# ── Silent-failure quarantine: routes that previously bypassed the gate ──
+
+
+def test_no_markdown_routes_to_quarantine() -> None:
+    """A page with empty markdown must produce a quarantine entry so the
+    URL is visible — not silently dropped with `0 programs imported`."""
+    page = _make_page(url="https://e.edu/blocked", markdown="")
+    cleaner = _make_mock_cleaner()
+    db = _make_mock_db()
+    db.upsert_quarantine = MagicMock()
+
+    success, error = process_page_for_program(
+        page=page, cleaner=cleaner, db_manager=db,
+        univ_slug="hku", year=2025, current_depth=0,
+    )
+
+    assert success is False
+    assert error is not None
+    cleaner.clean_markdown.assert_not_called()  # markdown empty → never reaches LLM
+    db.upsert_program.assert_not_called()
+    db.upsert_quarantine.assert_called_once()
+    kwargs = db.upsert_quarantine.call_args.kwargs
+    assert kwargs["university_slug"] == "hku"
+    assert kwargs["reason"].value == "no_markdown"
+    assert kwargs["program_data"]["source_url"] == "https://e.edu/blocked"
+    assert kwargs["program_data"]["academic_year"] == 2025
+
+
+def test_cleaner_returns_none_routes_to_quarantine() -> None:
+    """When the cleaner returns None (LLM said 'nothing to extract'), the
+    URL must appear in quarantine with EXTRACTION_FAILED — this is the
+    exact bug surfaced by smoke-testing Edinburgh accounting."""
+    page = _make_page(url="https://e.edu/needs-interaction")
+    cleaner = _make_mock_cleaner(parsed=None)  # LLM returned no data
+    db = _make_mock_db()
+    db.upsert_quarantine = MagicMock()
+
+    success, error = process_page_for_program(
+        page=page, cleaner=cleaner, db_manager=db,
+        univ_slug="hku", year=2025, current_depth=0,
+    )
+
+    assert success is False
+    cleaner.clean_markdown.assert_called_once()  # we DID try the LLM
+    db.upsert_program.assert_not_called()
+    db.upsert_quarantine.assert_called_once()
+    kwargs = db.upsert_quarantine.call_args.kwargs
+    assert kwargs["reason"].value == "extraction_failed"
+    assert kwargs["program_data"]["source_url"] == "https://e.edu/needs-interaction"

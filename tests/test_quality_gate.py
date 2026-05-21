@@ -13,6 +13,16 @@ from src.services.quality_gate import (
 )
 
 
+class TestQuarantineReasonValues:
+    """The full set of reasons must include silent-failure cases."""
+
+    def test_extraction_failed_reason_exists(self) -> None:
+        assert QuarantineReason.EXTRACTION_FAILED.value == "extraction_failed"
+
+    def test_no_markdown_reason_exists(self) -> None:
+        assert QuarantineReason.NO_MARKDOWN.value == "no_markdown"
+
+
 def _good_program() -> dict:
     """A program that should pass the gate cleanly."""
     return {

@@ -106,6 +106,11 @@ def process_page_for_program(
     Returns:
         Tuple of (success: bool, error_message: Optional[str]).
     """
+    # Determine "no markdown" up-front; the downstream extract helper
+    # returns the same (None, error) shape for empty markdown and for
+    # cleaner-returned-None, so we disambiguate here for quarantine.
+    has_markdown = bool(page.markdown)
+
     program_data, error = extract_program_data_from_page(
         page=page,
         cleaner=cleaner,
@@ -115,6 +120,32 @@ def process_page_for_program(
         from_browser=from_browser,
     )
     if not program_data:
+        # Silent-failure path: extraction produced nothing. Record a
+        # quarantine entry so the URL is visible instead of vanishing
+        # into "0 programs imported".
+        from src.services.quality_gate import QuarantineReason
+
+        fail_reason = (
+            QuarantineReason.NO_MARKDOWN
+            if not has_markdown
+            else QuarantineReason.EXTRACTION_FAILED
+        )
+        stub = {
+            "academic_year": year,
+            "name_en": None,
+            "source_url": page.url,
+        }
+        try:
+            db_manager.upsert_quarantine(
+                university_slug=univ_slug,
+                program_data=stub,
+                reason=fail_reason,
+                signals={"error": str(error or "")},
+            )
+        except Exception:  # pylint: disable=broad-except
+            logger.exception(
+                "Failed to record silent-failure quarantine for %s", page.url
+            )
         return False, error
 
     verdict = evaluate_extraction(program_data)

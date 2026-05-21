@@ -23,10 +23,16 @@ MIN_NAME_LENGTH = 3
 
 
 class QuarantineReason(str, Enum):
+    # Bad data made it to the gate but failed validation.
     EMPTY_NAME = "empty_name"
     NAME_TOO_SHORT = "name_too_short"
     NOISE_NAME = "noise_name"
     EMPTY_SHELL = "empty_shell"
+    # Extraction failed before producing any data — used when the page
+    # had no usable markdown or the cleaner returned None outright. These
+    # paths used to fail silently with no DB trace.
+    NO_MARKDOWN = "no_markdown"
+    EXTRACTION_FAILED = "extraction_failed"
 
 
 @dataclass(frozen=True)

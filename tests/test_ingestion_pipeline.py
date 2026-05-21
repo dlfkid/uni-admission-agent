@@ -661,3 +661,53 @@ async def test_select_detail_urls_taxonomy_filter_falls_back_when_all_rejected(m
         "https://example.edu/programmes/msc-data-analytics",
     ]
     assert set(text_map.keys()) == set(urls)
+
+
+def test_extract_structured_quarantines_silent_failures(monkeypatch) -> None:
+    """When extract_program_data_from_page returns None for a URL (cleaner
+    found nothing), the URL must be recorded in quarantine — not silently
+    dropped to extract_errors with no DB trace.
+
+    This was the bug surfaced by smoke-testing the Edinburgh accounting
+    page: LLM returned nothing → 0 programs imported → quarantine empty.
+    """
+    monkeypatch.setattr(
+        "src.services.ingestion_pipeline.LLMCleanerAgent",
+        MagicMock,
+    )
+    mock_db = MagicMock()
+    pipeline = IngestionPipeline(db_manager=mock_db)
+
+    # Simulate LLM returning nothing usable for this URL.
+    monkeypatch.setattr(
+        "src.services.ingestion_pipeline.extract_program_data_from_page",
+        MagicMock(return_value=(None, "No structured data extracted")),
+    )
+
+    request_payload = {"univ_slug": "edinburgh", "year": 2026}
+    context = {
+        "raw_pages": [
+            {
+                "url": "https://study.ed.ac.uk/programmes/undergraduate/189",
+                "markdown": "# Accounting and Business",
+                "char_count": 100,
+                "links": [],
+                "status_code": 200,
+                "html": "<html><body>page</body></html>",
+                "crawl_depth": 0,
+                "from_browser": False,
+            }
+        ]
+    }
+
+    pipeline._stage_extract_structured(request_payload, context)
+
+    mock_db.upsert_quarantine.assert_called_once()
+    kwargs = mock_db.upsert_quarantine.call_args.kwargs
+    assert kwargs["university_slug"] == "edinburgh"
+    assert kwargs["reason"].value == "extraction_failed"
+    assert (
+        kwargs["program_data"]["source_url"]
+        == "https://study.ed.ac.uk/programmes/undergraduate/189"
+    )
+    assert kwargs["program_data"]["academic_year"] == 2026
