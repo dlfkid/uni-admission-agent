@@ -12,6 +12,7 @@ from datetime import datetime
 from decimal import Decimal
 from pydantic import BaseModel, Field, field_validator
 
+from src.agents.extraction_cache import ExtractionCacheRepo, compute_cache_key
 from src.agents.factory import RouterAgent, create_router
 from src.core.paths import get_prompts_dir
 from src.models.admission import CurrencyCode, StudyMode
@@ -181,17 +182,28 @@ class LLMCleanerAgent:
     unstructured admission data into strictly structured formats.
     """
 
-    def __init__(self, router: Optional[RouterAgent] = None) -> None:
+    # Bump this when prompt/schema changes would invalidate cached outputs.
+    CACHE_VERSION = "v1"
+
+    def __init__(
+        self,
+        router: Optional[RouterAgent] = None,
+        cache_repo: Optional["ExtractionCacheRepo"] = None,
+    ) -> None:
         """
         Initialize the cleaner agent.
 
         Args:
             router: RouterAgent instance. If None, creates one from env config.
+            cache_repo: Optional persistent cache for extraction results. When
+                provided, identical inputs reuse the stored ParsedProgramData
+                and skip the LLM call entirely.
         """
         if router is not None:
             self.router = router
         else:
             self.router = create_router()
+        self._cache_repo = cache_repo
 
     def clean_row(
         self,
@@ -284,6 +296,9 @@ class LLMCleanerAgent:
         For large pages, splits into chunks and processes **sequentially**
         with a rolling context summary to preserve cross-chunk context.
 
+        When ``cache_repo`` is configured, identical inputs short-circuit
+        the LLM call by returning a previously-computed ParsedProgramData.
+
         Args:
             markdown: Full Markdown content of the detail page.
             source_url: Source URL for logging.
@@ -291,10 +306,30 @@ class LLMCleanerAgent:
         Returns:
             ParsedProgramData or None if parsing fails entirely.
         """
-        if len(markdown) <= MAX_DETAIL_CHARS:
-            return self._parse_single_pass(markdown, source_url, name_hints, academic_year)
+        cache_key: Optional[str] = None
+        if self._cache_repo is not None:
+            cache_key = compute_cache_key(
+                markdown=markdown,
+                name_hints=name_hints,
+                academic_year=academic_year,
+                version=self.CACHE_VERSION,
+            )
+            cached = self._cache_repo.get(cache_key)
+            if cached is not None:
+                return cached
 
-        return self._parse_rolling_chunks(markdown, source_url, name_hints, academic_year)
+        if len(markdown) <= MAX_DETAIL_CHARS:
+            result = self._parse_single_pass(markdown, source_url, name_hints, academic_year)
+        else:
+            result = self._parse_rolling_chunks(markdown, source_url, name_hints, academic_year)
+
+        if result is not None and self._cache_repo is not None and cache_key is not None:
+            try:
+                self._cache_repo.put(cache_key, result)
+            except Exception:  # pylint: disable=broad-except
+                logger.warning("extraction_cache: failed to store entry", exc_info=True)
+
+        return result
 
     # ------------------------------------------------------------------ #
     #  Private helpers                                                     #
