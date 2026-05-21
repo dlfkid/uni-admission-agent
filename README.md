@@ -238,6 +238,14 @@ The agent needs a database connection.
 # Export current taxonomy snapshot (optionally include learned names)
 ./adm-agent taxonomy-export --output golden_samples/program_names/cleaned_programs_names.json --include-learned --min-confidence 0.90
 
+# List extractions that failed the quality gate (per-university diagnostic)
+./adm-agent quarantine list --university hku --year 2026
+
+# Clear quarantine entries for one university (optionally filter by reason)
+#   Reasons: empty_name, name_too_short, noise_name, empty_shell
+./adm-agent quarantine clear --university hku
+./adm-agent quarantine clear --university hku --reason empty_shell
+
 # Show current version
 ./adm-agent version
 
@@ -306,6 +314,13 @@ The agent needs a database connection.
 
 # Export current taxonomy snapshot (optionally include learned names)
 .\adm-agent.exe taxonomy-export --output golden_samples/program_names/cleaned_programs_names.json --include-learned --min-confidence 0.90
+
+# List extractions that failed the quality gate (per-university diagnostic)
+.\adm-agent.exe quarantine list --university hku --year 2026
+
+# Clear quarantine entries for one university (optionally filter by reason)
+.\adm-agent.exe quarantine clear --university hku
+.\adm-agent.exe quarantine clear --university hku --reason empty_shell
 
 # Show current version
 .\adm-agent.exe version

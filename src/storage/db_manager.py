@@ -1163,3 +1163,67 @@ class DatabaseManager:
                     )
                 )
             return contexts
+
+    # ------------------------------------------------------------------
+    #  Quarantine — extraction results that failed the quality gate
+    # ------------------------------------------------------------------
+
+    def upsert_quarantine(
+        self,
+        *,
+        university_slug: str,
+        program_data: dict,
+        reason,
+        signals: dict,
+    ):
+        """Record a quality-gate rejection.
+
+        Delegates to :class:`QuarantineRepo`; opens and closes a session
+        so callers don't have to manage one.
+        """
+        from src.services.quality_gate import QuarantineReason  # noqa: F401
+        from src.storage.quarantine_repo import QuarantineRepo
+
+        with self.get_session() as session:
+            repo = QuarantineRepo(session)
+            return repo.record(
+                university_slug=university_slug,
+                program_data=program_data,
+                reason=reason,
+                signals=signals,
+            )
+
+    def list_quarantine(
+        self,
+        *,
+        university_slug: Optional[str] = None,
+        year: Optional[int] = None,
+    ):
+        """Return quarantine entries filtered by university/year."""
+        from src.storage.quarantine_repo import QuarantineRepo
+
+        with self.get_session() as session:
+            repo = QuarantineRepo(session)
+            return repo.list_for(university_slug=university_slug, year=year)
+
+    def clear_quarantine(
+        self,
+        *,
+        university_slug: Optional[str] = None,
+        source_url: Optional[str] = None,
+        reason=None,
+    ) -> int:
+        """Delete quarantine rows matching filters; returns the count.
+
+        At least one filter is required — full-table deletion is not
+        exposed via this entry point.
+        """
+        from src.storage.quarantine_repo import QuarantineRepo
+
+        with self.get_session() as session:
+            repo = QuarantineRepo(session)
+            return repo.clear(
+                university_slug=university_slug,
+                source_url=source_url,
+                reason=reason,
+            )

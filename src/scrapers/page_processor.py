@@ -15,6 +15,7 @@ from src.agents.cleaner_agent import LLMCleanerAgent, ParsedProgramData
 from src.agents.factory import RouterAgent
 from src.models.scraper_models import CrawlPageResult
 from src.scrapers.helpers import extract_program_name, is_noise_program_name
+from src.services.quality_gate import evaluate_extraction
 from src.storage.db_manager import DatabaseManager
 from src.utils.text import generate_program_group_code
 
@@ -105,6 +106,11 @@ def process_page_for_program(
     Returns:
         Tuple of (success: bool, error_message: Optional[str]).
     """
+    # Determine "no markdown" up-front; the downstream extract helper
+    # returns the same (None, error) shape for empty markdown and for
+    # cleaner-returned-None, so we disambiguate here for quarantine.
+    has_markdown = bool(page.markdown)
+
     program_data, error = extract_program_data_from_page(
         page=page,
         cleaner=cleaner,
@@ -114,7 +120,51 @@ def process_page_for_program(
         from_browser=from_browser,
     )
     if not program_data:
+        # Silent-failure path: extraction produced nothing. Record a
+        # quarantine entry so the URL is visible instead of vanishing
+        # into "0 programs imported".
+        from src.services.quality_gate import QuarantineReason
+
+        fail_reason = (
+            QuarantineReason.NO_MARKDOWN
+            if not has_markdown
+            else QuarantineReason.EXTRACTION_FAILED
+        )
+        stub = {
+            "academic_year": year,
+            "name_en": None,
+            "source_url": page.url,
+        }
+        try:
+            db_manager.upsert_quarantine(
+                university_slug=univ_slug,
+                program_data=stub,
+                reason=fail_reason,
+                signals={"error": str(error or "")},
+            )
+        except Exception:  # pylint: disable=broad-except
+            logger.exception(
+                "Failed to record silent-failure quarantine for %s", page.url
+            )
         return False, error
+
+    verdict = evaluate_extraction(program_data)
+    if not verdict.passed:
+        reason_value = verdict.reason.value if verdict.reason else "unknown"
+        logger.warning(
+            "Quality gate rejected %s (reason=%s, signals=%s)",
+            page.url, reason_value, verdict.signals,
+        )
+        try:
+            db_manager.upsert_quarantine(
+                university_slug=univ_slug,
+                program_data=program_data,
+                reason=verdict.reason,
+                signals=verdict.signals,
+            )
+        except Exception:  # pylint: disable=broad-except
+            logger.exception("Failed to record quarantine for %s", page.url)
+        return False, f"quarantine: {reason_value}"
 
     try:
         _, created = db_manager.upsert_program(
@@ -126,6 +176,21 @@ def process_page_for_program(
             "%s: %s (%d) [Group: %s]",
             action, program_data['name_en'], year, program_data.get('program_group_code'),
         )
+
+        # Auto-graduate: a URL that now extracts cleanly should not stay
+        # in quarantine. The "current state of this URL" is the
+        # successful upsert; the quarantine row is stale.
+        source_url = str(program_data.get("source_url") or page.url or "").strip()
+        if source_url:
+            try:
+                db_manager.clear_quarantine(
+                    university_slug=univ_slug, source_url=source_url
+                )
+            except Exception:  # pylint: disable=broad-except
+                logger.exception(
+                    "Failed to clear graduated quarantine entry for %s", source_url
+                )
+
         return True, None
     except Exception as e:
         logger.exception("Failed to persist %s", page.url)
@@ -161,7 +226,7 @@ def extract_program_data_from_page(
             content_type = "html"
 
     try:
-        parsed: Optional[ParsedProgramData] = cleaner.clean_markdown(
+        parsed: Optional[ParsedProgramData] = cleaner.clean_markdown_with_critique(
             markdown=content_for_llm,
             source_url=page.url,
             name_hints=name_hints,

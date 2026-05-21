@@ -90,6 +90,8 @@ DATABASE & STATUS:
     golden-collect   Collect Phase 3 golden sample snapshots
     quality-score    Run Phase 3 quality scoring and threshold checks
     taxonomy-export  Export canonical taxonomy names to JSON
+    quarantine list  List extractions that failed the quality gate
+    quarantine clear Remove quarantine entries for one university (optional reason filter)
     
 LLM CONFIGURATION:
     llm-config Interactive wizard to configure LLM providers
@@ -1583,6 +1585,88 @@ upgrade:
         """
     
     typer.echo(help_text)
+
+
+# ---------------------------------------------------------------------------
+#  Quarantine subcommands
+# ---------------------------------------------------------------------------
+
+quarantine_app = typer.Typer(
+    name="quarantine",
+    help="Inspect extraction results that failed the quality gate.",
+    add_completion=False,
+)
+app.add_typer(quarantine_app)
+
+
+@quarantine_app.command(name="list")
+def quarantine_list(
+    university: Optional[str] = typer.Option(
+        None, "--university", "-u", help="University slug filter"
+    ),
+    year: Optional[int] = typer.Option(
+        None, "--year", "-y", help="Academic year filter"
+    ),
+) -> None:
+    """List quarantined program extractions.
+
+    Quarantine entries are extracted programs that failed the quality
+    gate (empty shells, noise names, missing identifying content) and
+    therefore did NOT make it into the main `program` table.
+    """
+    db_manager = DatabaseManager()
+    entries = db_manager.list_quarantine(university_slug=university, year=year)
+    if not entries:
+        typer.echo("No quarantine entries.")
+        return
+
+    for entry in entries:
+        typer.echo(
+            f"[{entry.id}] {entry.university_slug} {entry.academic_year} "
+            f"reason={entry.quarantine_reason} "
+            f"name={entry.extracted_name!r} "
+            f"url={entry.source_url}"
+        )
+
+
+@quarantine_app.command(name="clear")
+def quarantine_clear(
+    university: str = typer.Option(
+        ..., "--university", "-u",
+        help="University slug to clear quarantine for (required).",
+    ),
+    reason: Optional[str] = typer.Option(
+        None, "--reason", "-r",
+        help="Optional reason filter (empty_name, name_too_short, noise_name, empty_shell).",
+    ),
+) -> None:
+    """Delete quarantine entries for one university.
+
+    Without ``--reason``, deletes all entries for the given university.
+    With ``--reason``, deletes only matching entries. The ``--university``
+    flag is required — there is intentionally no way to nuke the whole
+    quarantine table from the CLI.
+    """
+    from src.services.quality_gate import QuarantineReason
+
+    reason_enum = None
+    if reason is not None:
+        try:
+            reason_enum = QuarantineReason(reason)
+        except ValueError:
+            valid = ", ".join(r.value for r in QuarantineReason)
+            typer.echo(
+                f"❌ Invalid reason {reason!r}. Valid values: {valid}",
+                err=True,
+            )
+            raise typer.Exit(code=1)
+
+    db_manager = DatabaseManager()
+    deleted = db_manager.clear_quarantine(
+        university_slug=university, reason=reason_enum
+    )
+    suffix = f" (reason={reason_enum.value})" if reason_enum else ""
+    typer.echo(f"Deleted {deleted} quarantine entries for {university}{suffix}.")
 
 
 # ---------------------------------------------------------------------------

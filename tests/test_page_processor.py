@@ -63,7 +63,7 @@ def _make_mock_cleaner(
     parsed: Optional[ParsedProgramData] = None,
 ) -> MagicMock:
     cleaner = MagicMock()
-    cleaner.clean_markdown.return_value = parsed
+    cleaner.clean_markdown_with_critique.return_value = parsed
     return cleaner
 
 
@@ -89,7 +89,7 @@ def test_process_page_success() -> None:
 
     assert success is True
     assert error is None
-    cleaner.clean_markdown.assert_called_once()
+    cleaner.clean_markdown_with_critique.assert_called_once()
     db.upsert_program.assert_called_once()
 
     # Check the upsert data
@@ -113,7 +113,7 @@ def test_process_page_no_markdown() -> None:
 
     assert success is False
     assert error == "No markdown content"
-    cleaner.clean_markdown.assert_not_called()
+    cleaner.clean_markdown_with_critique.assert_not_called()
 
 
 def test_process_page_no_parsed_data() -> None:
@@ -147,7 +147,7 @@ def test_process_page_html_fallback() -> None:
 
     assert success is True
     # The HTML should have been passed to clean_markdown instead of short markdown
-    call_args = cleaner.clean_markdown.call_args
+    call_args = cleaner.clean_markdown_with_critique.call_args
     assert call_args[1]["markdown"] == large_html
 
 
@@ -166,7 +166,7 @@ def test_process_page_no_html_fallback_when_md_long_enough() -> None:
     )
 
     # Markdown should be used (not HTML)
-    call_args = cleaner.clean_markdown.call_args
+    call_args = cleaner.clean_markdown_with_critique.call_args
     content_used = call_args[1].get("markdown") or call_args[0][0]
     assert content_used == md
 
@@ -333,7 +333,7 @@ def test_extract_program_data_uses_selected_anchor_text_when_title_is_generic() 
 def test_process_page_llm_exception() -> None:
     page = _make_page()
     cleaner = MagicMock()
-    cleaner.clean_markdown.side_effect = RuntimeError("LLM crashed")
+    cleaner.clean_markdown_with_critique.side_effect = RuntimeError("LLM crashed")
     db = _make_mock_db()
 
     success, error = process_page_for_program(
@@ -397,7 +397,7 @@ def test_process_pages_batch_partial_failure() -> None:
         patch("src.scrapers.page_processor.DatabaseManager") as MockDB,
     ):
         mock_cleaner = MagicMock()
-        mock_cleaner.clean_markdown.side_effect = mock_clean_markdown
+        mock_cleaner.clean_markdown_with_critique.side_effect = mock_clean_markdown
         MockCleaner.return_value = mock_cleaner
         mock_db = _make_mock_db()
         MockDB.return_value = mock_db
@@ -436,4 +436,175 @@ def test_process_pages_batch_skip_empty_markdown() -> None:
 
     # Only 1 processed (the empty one is skipped)
     assert imported == 1
-    assert mock_cleaner.clean_markdown.call_count == 1
+    assert mock_cleaner.clean_markdown_with_critique.call_count == 1
+
+
+# ── Quality gate integration ────────────────────────────────────────
+
+
+def _make_empty_shell_parsed() -> ParsedProgramData:
+    """ParsedProgramData with a faculty but no tuition/deadline/requirement.
+
+    This represents the "LLM returned only structure, no actual data"
+    failure mode that the quality gate is designed to catch.
+    """
+    return ParsedProgramData(faculty="Faculty of Engineering")
+
+
+def test_quality_gate_routes_empty_shell_to_quarantine() -> None:
+    """Empty-shell extraction must NOT hit upsert_program, but MUST hit
+    upsert_quarantine."""
+    page = _make_page(markdown="# MSc Computer Science\n\n(empty page body)")
+    cleaner = _make_mock_cleaner(_make_empty_shell_parsed())
+    db = _make_mock_db()
+    db.upsert_quarantine = MagicMock()
+
+    success, error = process_page_for_program(
+        page=page, cleaner=cleaner, db_manager=db,
+        univ_slug="hku", year=2025, current_depth=0,
+    )
+
+    assert success is False
+    assert error is not None
+    assert "quarantine" in error.lower()
+    db.upsert_program.assert_not_called()
+    db.upsert_quarantine.assert_called_once()
+
+    # Quarantine signals must include diagnostic data.
+    kwargs = db.upsert_quarantine.call_args.kwargs
+    assert kwargs["university_slug"] == "hku"
+    assert kwargs["reason"].value == "empty_shell"
+    assert kwargs["signals"]["deadline_count"] == 0
+    assert kwargs["signals"]["has_tuition"] is False
+
+
+def test_quality_gate_routes_noise_name_to_quarantine() -> None:
+    """A name that matches the noise filter must be quarantined even when
+    the page has tuition/deadline data."""
+    page = _make_page(markdown="# Course Search\n\nFind your programme here")
+    parsed = _make_parsed_data()  # has tuition + deadline
+    cleaner = _make_mock_cleaner(parsed)
+    db = _make_mock_db()
+    db.upsert_quarantine = MagicMock()
+
+    with patch("src.scrapers.page_processor.extract_program_name", return_value="Course Search"):
+        success, error = process_page_for_program(
+            page=page, cleaner=cleaner, db_manager=db,
+            univ_slug="hku", year=2025, current_depth=0,
+        )
+
+    assert success is False
+    db.upsert_program.assert_not_called()
+    db.upsert_quarantine.assert_called_once()
+    assert db.upsert_quarantine.call_args.kwargs["reason"].value == "noise_name"
+
+
+def test_quality_gate_lets_good_program_through() -> None:
+    """Sanity: a complete program with a real name still hits upsert_program."""
+    page = _make_page()
+    cleaner = _make_mock_cleaner(_make_parsed_data())
+    db = _make_mock_db()
+    db.upsert_quarantine = MagicMock()
+
+    with patch("src.scrapers.page_processor.extract_program_name", return_value="MSc Computer Science"):
+        success, error = process_page_for_program(
+            page=page, cleaner=cleaner, db_manager=db,
+            univ_slug="hku", year=2025, current_depth=0,
+        )
+
+    assert success is True
+    assert error is None
+    db.upsert_program.assert_called_once()
+    db.upsert_quarantine.assert_not_called()
+
+
+def test_successful_upsert_graduates_prior_quarantine() -> None:
+    """If a page was quarantined previously and now extracts cleanly,
+    the prior quarantine record must be auto-removed."""
+    page = _make_page(url="https://example.com/prog")
+    cleaner = _make_mock_cleaner(_make_parsed_data())
+    db = _make_mock_db()
+    db.upsert_quarantine = MagicMock()
+    db.clear_quarantine = MagicMock(return_value=1)
+
+    with patch("src.scrapers.page_processor.extract_program_name", return_value="MSc Computer Science"):
+        success, error = process_page_for_program(
+            page=page, cleaner=cleaner, db_manager=db,
+            univ_slug="hku", year=2025, current_depth=0,
+        )
+
+    assert success is True
+    db.upsert_program.assert_called_once()
+    db.clear_quarantine.assert_called_once_with(
+        university_slug="hku", source_url="https://example.com/prog"
+    )
+
+
+def test_quarantine_path_does_not_call_clear() -> None:
+    """When the gate rejects, we do NOT call clear_quarantine — the new
+    record IS the (overwriting) quarantine entry via upsert_quarantine."""
+    page = _make_page(markdown="# MSc Computer Science")
+    cleaner = _make_mock_cleaner(_make_empty_shell_parsed())
+    db = _make_mock_db()
+    db.upsert_quarantine = MagicMock()
+    db.clear_quarantine = MagicMock()
+
+    process_page_for_program(
+        page=page, cleaner=cleaner, db_manager=db,
+        univ_slug="hku", year=2025, current_depth=0,
+    )
+
+    db.upsert_program.assert_not_called()
+    db.upsert_quarantine.assert_called_once()
+    db.clear_quarantine.assert_not_called()
+
+
+# ── Silent-failure quarantine: routes that previously bypassed the gate ──
+
+
+def test_no_markdown_routes_to_quarantine() -> None:
+    """A page with empty markdown must produce a quarantine entry so the
+    URL is visible — not silently dropped with `0 programs imported`."""
+    page = _make_page(url="https://e.edu/blocked", markdown="")
+    cleaner = _make_mock_cleaner()
+    db = _make_mock_db()
+    db.upsert_quarantine = MagicMock()
+
+    success, error = process_page_for_program(
+        page=page, cleaner=cleaner, db_manager=db,
+        univ_slug="hku", year=2025, current_depth=0,
+    )
+
+    assert success is False
+    assert error is not None
+    cleaner.clean_markdown_with_critique.assert_not_called()  # markdown empty → never reaches LLM
+    db.upsert_program.assert_not_called()
+    db.upsert_quarantine.assert_called_once()
+    kwargs = db.upsert_quarantine.call_args.kwargs
+    assert kwargs["university_slug"] == "hku"
+    assert kwargs["reason"].value == "no_markdown"
+    assert kwargs["program_data"]["source_url"] == "https://e.edu/blocked"
+    assert kwargs["program_data"]["academic_year"] == 2025
+
+
+def test_cleaner_returns_none_routes_to_quarantine() -> None:
+    """When the cleaner returns None (LLM said 'nothing to extract'), the
+    URL must appear in quarantine with EXTRACTION_FAILED — this is the
+    exact bug surfaced by smoke-testing Edinburgh accounting."""
+    page = _make_page(url="https://e.edu/needs-interaction")
+    cleaner = _make_mock_cleaner(parsed=None)  # LLM returned no data
+    db = _make_mock_db()
+    db.upsert_quarantine = MagicMock()
+
+    success, error = process_page_for_program(
+        page=page, cleaner=cleaner, db_manager=db,
+        univ_slug="hku", year=2025, current_depth=0,
+    )
+
+    assert success is False
+    cleaner.clean_markdown_with_critique.assert_called_once()  # we DID try the LLM
+    db.upsert_program.assert_not_called()
+    db.upsert_quarantine.assert_called_once()
+    kwargs = db.upsert_quarantine.call_args.kwargs
+    assert kwargs["reason"].value == "extraction_failed"
+    assert kwargs["program_data"]["source_url"] == "https://e.edu/needs-interaction"
