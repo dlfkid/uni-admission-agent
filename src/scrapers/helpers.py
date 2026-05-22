@@ -162,7 +162,20 @@ _NOISE_PROGRAM_NAME_RE = re.compile(
     r"|browse\s+(?:by\s+)?(?:faculty|subject|department)"
     r"|all\s+(?:programmes?|courses?)"
     r"|masters?\s+courses?|bachelor'?s?\s+courses?"
-    r"|course\s+search|find\s+a?\s*(?:course|programme|degree))$",
+    r"|course\s+search|find\s+a?\s*(?:course|programme|degree)"
+    # Generic organizational units — these are containers OF programs,
+    # never program names themselves.
+    r"|(?:faculty|school|department|college|institute|centre|center)"
+    r"\s+of\s+\S.*"
+    # Navigation / call-to-action labels.
+    r"|about(?:\s+(?:us|the\s+\S+|our\s+\S+))?"
+    r"|apply(?:\s+(?:now|online|here|today))?"
+    r"|contact(?:\s+(?:us|me))?"
+    r"|visit(?:\s+(?:us|me))?"
+    r"|enroll(?:ment)?|enrol(?:ment)?|register"
+    r"|get\s+(?:in\s+touch|started)"
+    r"|learn\s+more|find\s+out\s+more|read\s+more"
+    r")$",
     re.IGNORECASE,
 )
 

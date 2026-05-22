@@ -608,3 +608,95 @@ def test_cleaner_returns_none_routes_to_quarantine() -> None:
     kwargs = db.upsert_quarantine.call_args.kwargs
     assert kwargs["reason"].value == "extraction_failed"
     assert kwargs["program_data"]["source_url"] == "https://e.edu/needs-interaction"
+
+
+# ── Name self-critique integration ─────────────────────────────────
+
+
+def test_extract_triggers_name_critique_when_extracted_name_is_noise() -> None:
+    """When the heuristic picks a noise name like 'Faculty of Business',
+    refine_name_with_critique fires; if it returns a refined name,
+    program_data['name_en'] is updated to the refined one."""
+    page = _make_page(
+        url="https://e.edu/finance",
+        markdown="# Faculty of Business\n\nMSc Finance program details here.",
+    )
+    cleaner = _make_mock_cleaner(_make_parsed_data())
+    cleaner.router = MagicMock()  # so refine has a router
+
+    with (
+        patch(
+            "src.scrapers.page_processor.extract_program_name",
+            return_value="Faculty of Business",  # noise — should trigger refine
+        ),
+        patch(
+            "src.scrapers.page_processor.refine_name_with_critique",
+            return_value="MSc Finance",
+        ) as mock_refine,
+    ):
+        program_data, error = extract_program_data_from_page(
+            page=page, cleaner=cleaner,
+            univ_slug="hku", year=2026, current_depth=0,
+        )
+
+    assert program_data is not None
+    assert program_data["name_en"] == "MSc Finance"  # refined value won
+    mock_refine.assert_called_once()
+    # Critique receives the bad name as input.
+    kwargs = mock_refine.call_args.kwargs
+    assert kwargs["bad_name"] == "Faculty of Business"
+
+
+def test_extract_skips_name_critique_when_name_is_clean() -> None:
+    """If the extracted name passes the suspect check, no critique fires
+    (no extra LLM call)."""
+    page = _make_page(
+        url="https://e.edu/finance",
+        markdown="# MSc Finance\n\nProgram details",
+    )
+    cleaner = _make_mock_cleaner(_make_parsed_data())
+
+    with (
+        patch(
+            "src.scrapers.page_processor.extract_program_name",
+            return_value="MSc Finance",
+        ),
+        patch(
+            "src.scrapers.page_processor.refine_name_with_critique",
+        ) as mock_refine,
+    ):
+        program_data, _ = extract_program_data_from_page(
+            page=page, cleaner=cleaner,
+            univ_slug="hku", year=2026, current_depth=0,
+        )
+
+    assert program_data is not None
+    assert program_data["name_en"] == "MSc Finance"
+    mock_refine.assert_not_called()
+
+
+def test_extract_keeps_bad_name_when_refine_returns_none() -> None:
+    """If refine fails to find a better name (returns None), keep the
+    original bad name so downstream quality gate can quarantine it."""
+    page = _make_page(markdown="# Course Search\n\nbrowse all programs")
+    cleaner = _make_mock_cleaner(_make_parsed_data())
+    cleaner.router = MagicMock()
+
+    with (
+        patch(
+            "src.scrapers.page_processor.extract_program_name",
+            return_value="Course Search",
+        ),
+        patch(
+            "src.scrapers.page_processor.refine_name_with_critique",
+            return_value=None,
+        ) as mock_refine,
+    ):
+        program_data, _ = extract_program_data_from_page(
+            page=page, cleaner=cleaner,
+            univ_slug="hku", year=2026, current_depth=0,
+        )
+
+    assert program_data is not None
+    assert program_data["name_en"] == "Course Search"  # unchanged
+    mock_refine.assert_called_once()

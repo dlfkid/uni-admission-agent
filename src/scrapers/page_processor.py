@@ -15,6 +15,10 @@ from src.agents.cleaner_agent import LLMCleanerAgent, ParsedProgramData
 from src.agents.factory import RouterAgent
 from src.models.scraper_models import CrawlPageResult
 from src.scrapers.helpers import extract_program_name, is_noise_program_name
+from src.scrapers.name_critique import (
+    _name_looks_suspect,
+    refine_name_with_critique,
+)
 from src.services.quality_gate import evaluate_extraction
 from src.storage.db_manager import DatabaseManager
 from src.utils.text import generate_program_group_code
@@ -252,6 +256,32 @@ def extract_program_data_from_page(
             extracted_name = _extract_program_name_from_html_title(page.html)
         if not extracted_name:
             extracted_name = _extract_program_name_from_hints(name_hints)
+
+        # Name self-critique: if the heuristic picked something noisy
+        # (e.g. "Faculty of Business", "Apply Now") or far from any
+        # high-confidence taxonomy candidate, re-prompt the LLM with
+        # critique to find the real name on the page.
+        if extracted_name and _name_looks_suspect(
+            extracted_name,
+            [{"name_en": h, "score": 1.0} for h in (name_hints or [])],
+        ):
+            logger.info(
+                "[NameCritique] Suspect name %r on %s — invoking refine",
+                extracted_name, page.url,
+            )
+            try:
+                refined = refine_name_with_critique(
+                    router=getattr(cleaner, "router", None),
+                    markdown=page.markdown,
+                    bad_name=extracted_name,
+                    taxonomy_hints=list(name_hints or []),
+                    source_url=page.url,
+                )
+            except Exception:  # pylint: disable=broad-except
+                logger.exception("Name critique raised for %s", page.url)
+                refined = None
+            if refined:
+                extracted_name = refined
 
         program_data: Dict[str, Any] = {
             "academic_year": year,
