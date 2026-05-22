@@ -990,6 +990,78 @@ async def api_task_status(task_id: str) -> TaskStatusResponse:
     return TaskStatusResponse(**info.to_dict())
 
 
+_TASK_SUMMARY_ANOMALOUS_STOPS = {"url_drift", "decreasing_yield", "quality_failed"}
+
+
+@app.get("/tasks/{task_id}/summary")
+async def api_task_summary(task_id: str) -> Dict[str, Any]:
+    """Compact post-crawl summary for the extension's logs-console.
+
+    Returns the same data the `adm-agent crawl-summary` CLI prints —
+    funnel + quarantine breakdown + stop_reason — but as JSON so the
+    extension can format it into its existing console panel.
+
+    When the task isn't a crawl (no univ_slug in params) or no audit
+    row was written, returns ``{"available": false, "reason": "..."}``
+    with HTTP 200 so the caller can show an empty state instead of
+    treating it as an error.
+    """
+    from collections import Counter
+
+    task = task_manager.get_task(task_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
+
+    params = getattr(task, "params", {}) or {}
+    univ_slug = (params.get("univ_slug") or "").strip().lower()
+    year_raw = params.get("year")
+    try:
+        year = int(year_raw) if year_raw is not None else None
+    except (TypeError, ValueError):
+        year = None
+
+    if not univ_slug:
+        return {
+            "available": False,
+            "reason": "task has no university context (not a crawl)",
+        }
+
+    db = get_db_manager()
+    audits = db.list_extraction_audit(
+        university_slug=univ_slug, year=year, limit=1
+    )
+    if not audits:
+        return {
+            "available": False,
+            "reason": "no audit row recorded for this crawl",
+            "university_slug": univ_slug,
+            "academic_year": year,
+        }
+
+    audit = audits[0]
+    q_entries = db.list_quarantine(university_slug=univ_slug, year=year)
+    q_breakdown = dict(Counter(e.quarantine_reason for e in q_entries))
+
+    stop_reason = audit.pagination_stop_reason
+    return {
+        "available": True,
+        "university_slug": audit.university_slug,
+        "academic_year": audit.academic_year,
+        "index_url": audit.index_url,
+        "raw_link_count": audit.raw_link_count,
+        "llm_filtered_count": audit.llm_filtered_count,
+        "candidate_count": audit.candidate_count,
+        "extracted_count": audit.extracted_count,
+        "quarantined_count": audit.quarantined_count,
+        "recovered_count": audit.recovered_count,
+        "stop_reason": stop_reason,
+        "stop_reason_anomalous": bool(
+            stop_reason and stop_reason in _TASK_SUMMARY_ANOMALOUS_STOPS
+        ),
+        "quarantine_breakdown": q_breakdown,
+    }
+
+
 @app.get("/tasks/{task_id}/events")
 async def api_task_events(task_id: str, request: Request) -> StreamingResponse:
     """Stream stored task events over SSE for agent progress UIs."""
