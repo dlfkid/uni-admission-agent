@@ -17,6 +17,8 @@
 
 import {
     batchSummaryText,
+    browserProviderSelect,
+    browserSourceStatus,
     closeConfigBtn,
     closeExportBtn,
     closePreviewBtn,
@@ -99,7 +101,7 @@ import {
 } from "./popup/slugAutocomplete";
 import { initCrawlFlow } from "./popup/crawlFlow";
 import { applyPlatformBodyClass, isExtensionContext } from "./platform";
-import type { TaskInfo } from "./popup/types";
+import type { BrowserProvider, ClientInfo, TaskInfo } from "./popup/types";
 
 const API_BASE = "http://localhost:8910";
 
@@ -110,6 +112,7 @@ const API_BASE = "http://localhost:8910";
 let currentWindowId: number | null = null;
 let monitorFlow: ReturnType<typeof initMonitorFlow> | null = null;
 let serverAgentEnabled = false;  // Whether server currently allows the default agent path
+let connectedClients: ClientInfo[] = [];
 
 // ---------------------------------------------------------------------------
 //  UI Helpers
@@ -119,6 +122,7 @@ function setFormEnabled(enabled: boolean) {
     slugInput.disabled = !enabled;
     yearInput.disabled = !enabled;
     pageTypeSelect.disabled = !enabled;
+    browserProviderSelect.disabled = !enabled;
     exportMdCheckbox.disabled = !enabled;
     exportPathInput.disabled = !enabled;
     taxonomyEnabledCheckbox.disabled = !enabled;
@@ -198,6 +202,76 @@ function getTaxonomyOptions(): {
         hintTopK,
         overrideEnabled: taxonomyOverrideEnabledCheckbox.checked,
     };
+}
+
+// ---------------------------------------------------------------------------
+//  Browser source — server vs connected adm-agent-client (Playwright).
+//
+//  Default behavior: when at least one client is connected, the popup
+//  defaults to "client" (better anti-detection). Otherwise "server".
+//  The user can override at any time via the dropdown; their last
+//  explicit choice is remembered for the session.
+// ---------------------------------------------------------------------------
+
+let userOverrodeBrowserProvider = false;
+
+function getBrowserSource(): { provider: BrowserProvider; clientId?: string } {
+    const provider = (browserProviderSelect.value as BrowserProvider) || "server";
+    if (provider === "client" && connectedClients.length > 0) {
+        return { provider, clientId: connectedClients[0].client_id };
+    }
+    return { provider };
+}
+
+function updateBrowserSourceStatus(): void {
+    const provider = browserProviderSelect.value as BrowserProvider;
+    const count = connectedClients.length;
+    browserSourceStatus.classList.remove("connected", "unavailable");
+    if (provider === "client") {
+        if (count > 0) {
+            const label = connectedClients[0].client_name || connectedClients[0].client_id;
+            browserSourceStatus.textContent = count === 1
+                ? `Connected: ${label}`
+                : `${count} clients available`;
+            browserSourceStatus.classList.add("connected");
+        } else {
+            browserSourceStatus.textContent = "⚠ No client connected — will fall back to server";
+            browserSourceStatus.classList.add("unavailable");
+        }
+        return;
+    }
+    if (count > 0) {
+        browserSourceStatus.textContent = `${count} client${count > 1 ? "s" : ""} available`;
+    } else {
+        browserSourceStatus.textContent = "No client connected";
+    }
+}
+
+async function refreshConnectedClients(): Promise<void> {
+    try {
+        const res = await fetch(`${API_BASE}/clients`);
+        if (!res.ok) {
+            connectedClients = [];
+        } else {
+            const data = await res.json();
+            connectedClients = Array.isArray(data) ? (data as ClientInfo[]) : [];
+        }
+    } catch (err) {
+        console.warn("Failed to fetch /clients:", err);
+        connectedClients = [];
+    }
+    // Only auto-pick default if user hasn't explicitly chosen yet.
+    if (!userOverrodeBrowserProvider) {
+        browserProviderSelect.value = connectedClients.length > 0 ? "client" : "server";
+    }
+    updateBrowserSourceStatus();
+}
+
+function initBrowserSourceListeners(): void {
+    browserProviderSelect.addEventListener("change", () => {
+        userOverrodeBrowserProvider = true;
+        updateBrowserSourceStatus();
+    });
 }
 
 function switchView(view: "input" | "link-selection" | "monitor") {
@@ -349,6 +423,12 @@ async function init() {
         serverAgentEnabled = false;
     }
 
+    // Detect connected adm-agent-client(s) and set the browser-source
+    // default ("client" if any connected, else "server"). Runs in
+    // parallel with university load — both hit the same backend but
+    // don't depend on each other.
+    await refreshConnectedClients();
+
     // Load university slugs for autocomplete
     await loadUniversities(API_BASE);
     initSlugAutocomplete();
@@ -412,12 +492,14 @@ initCrawlFlow({
     appendPreflightLog,
     clearPreflightLogs,
     getTaxonomyOptions,
+    getBrowserSource,
     getMonitorFlow: () => monitorFlow,
     serverAgentEnabled: () => serverAgentEnabled,
     reinit: init,
 });
 
 initPreferenceListeners({ updateTaxonomySettingsVisibility });
+initBrowserSourceListeners();
 
 init();
 

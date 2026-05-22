@@ -56,11 +56,29 @@ export interface CrawlPayload {
     detail_pages_batch?: DetailPageBatchItem[];
     batch_index?: number;
     batch_total?: number;
+    // Browser source — "server" uses backend crawl4ai, "client" routes to
+    // a connected adm-agent-client (Playwright) for stronger anti-detection.
+    // "auto" lets the server pick client when one is connected. Omit to
+    // accept the server default ("auto").
+    browser_provider?: BrowserProvider;
+    client_id?: string;
     taxonomy_enabled: boolean;
     taxonomy_low_threshold: number;
     taxonomy_high_threshold: number;
     taxonomy_hint_top_k: number;
     taxonomy_override_enabled: boolean;
+}
+
+export type BrowserProvider = "auto" | "server" | "client";
+
+export interface ClientInfo {
+    client_id: string;
+    client_name: string;
+    platform: string;
+    arch: string;
+    workdir: string;
+    capabilities: Record<string, unknown>;
+    last_seen_epoch: number;
 }
 
 export interface DetailPageBatchItem {

@@ -32,7 +32,7 @@ import {
     waitForTaskTerminal,
     type CrawlApiCallbacks,
 } from "./crawlApi";
-import type { AnalyzeResult, CrawlPayload, ShowStatusFn } from "./types";
+import type { AnalyzeResult, BrowserProvider, CrawlPayload, ShowStatusFn } from "./types";
 import type { initMonitorFlow } from "./monitorFlow";
 
 type MonitorFlow = ReturnType<typeof initMonitorFlow>;
@@ -67,6 +67,7 @@ export interface CrawlFlowDeps {
         hintTopK: number;
         overrideEnabled: boolean;
     };
+    getBrowserSource?: () => { provider: BrowserProvider; clientId?: string };
     getMonitorFlow: () => MonitorFlow | null;
     serverAgentEnabled: () => boolean;
     reinit: () => Promise<void>;
@@ -124,6 +125,7 @@ export function initCrawlFlow(deps: CrawlFlowDeps): void {
         appendPreflightLog,
         clearPreflightLogs,
         getTaxonomyOptions,
+        getBrowserSource,
         getMonitorFlow,
         serverAgentEnabled,
         reinit,
@@ -133,6 +135,7 @@ export function initCrawlFlow(deps: CrawlFlowDeps): void {
         showStatus,
         setFormEnabled,
         getTaxonomyOptions,
+        getBrowserSource,
         reinit,
     };
 

@@ -67,6 +67,17 @@
                 <input id="export-path" type="text" placeholder="e.g. /Users/username/crawl-output" />
             </div>
 
+            <div class="field">
+                <label for="browser-provider">Browser Source</label>
+                <div class="browser-source-row">
+                    <select id="browser-provider">
+                        <option value="server">🌐 Server (built-in fetcher)</option>
+                        <option value="client">🛡️ Local Client (best anti-detection)</option>
+                    </select>
+                    <span id="browser-source-status" class="source-status">Detecting…</span>
+                </div>
+            </div>
+
             <div class="field checkbox-field">
                 <label>
                     <input id="taxonomy-enabled" type="checkbox" checked />
