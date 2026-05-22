@@ -1413,6 +1413,7 @@ async def api_audit_list(
             "extracted_count": e.extracted_count,
             "quarantined_count": e.quarantined_count,
             "recovered_count": e.recovered_count,
+            "pagination_stop_reason": e.pagination_stop_reason,
             "job_uid": e.job_uid,
             "created_at": e.created_at.isoformat() if e.created_at else None,
         }

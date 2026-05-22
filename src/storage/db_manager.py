@@ -1246,8 +1246,10 @@ class DatabaseManager:
         recovered_count: int = 0,
         job_uid: Optional[str] = None,
         dropped_links: Optional[list] = None,
+        pagination_stop_reason: Optional[str] = None,
     ):
-        """Persist one index→detail funnel record (with optional dropped links)."""
+        """Persist one index→detail funnel record (with optional dropped links
+        and pagination stop reason)."""
         from src.storage.audit_repo import ExtractionAuditRepo
 
         with self.get_session() as session:
@@ -1264,6 +1266,7 @@ class DatabaseManager:
                 recovered_count=recovered_count,
                 job_uid=job_uid,
                 dropped_links=dropped_links,
+                pagination_stop_reason=pagination_stop_reason,
             )
 
     def list_audit_dropped_links(self, *, audit_id: int):

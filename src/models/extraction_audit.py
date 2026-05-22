@@ -77,6 +77,18 @@ class ExtractionAudit(SQLModel, table=True):
         default=None, max_length=64,
         description="Optional link back to the originating ingestion_job",
     )
+    pagination_stop_reason: Optional[str] = Field(
+        default=None,
+        max_length=64,
+        description=(
+            "When the index page was auto-paginated, the reason the loop "
+            "stopped: 'exhausted' (all pages processed), 'max_pages' "
+            "(hit hard cap), 'url_drift' (next page outside index pattern), "
+            "'decreasing_yield' (program output collapsed), or "
+            "'quality_failed' (post-extract quality breaker). Null when no "
+            "pagination occurred."
+        ),
+    )
     created_at: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc), index=True
     )

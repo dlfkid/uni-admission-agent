@@ -160,7 +160,13 @@ class PaginatedCrawlSkillInput(BaseModel):
 class PaginatedCrawlSkillOutput(BaseModel):
     """Output payload for paginated crawl skill."""
 
-    status: Literal["done", "quality_failed", "pagination_not_supported"] = "done"
+    status: Literal[
+        "done",
+        "quality_failed",
+        "pagination_not_supported",
+        "url_drift",
+        "decreasing_yield",
+    ] = "done"
     pagination_type: str = "single_page"
     total_pages_detected: Optional[int] = None
     pages_processed: int = 0
@@ -170,3 +176,12 @@ class PaginatedCrawlSkillOutput(BaseModel):
     quality_scores: list[dict[str, Any]] = Field(default_factory=list)
     warning: Optional[str] = None
     summary: str = ""
+    stop_reason: Optional[str] = Field(
+        default=None,
+        description=(
+            "Why the crawl stopped: 'max_pages' (reached limit), 'exhausted' "
+            "(processed all detected pages), 'quality_failed', 'url_drift' "
+            "(next page URL no longer matches index pattern), "
+            "'decreasing_yield' (per-page program output collapsed)."
+        ),
+    )
