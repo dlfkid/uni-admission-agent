@@ -70,7 +70,7 @@ def should_stop_for_decreasing_yield(
          (fires earlier — two zeros is a clearer signal than just one).
     """
     # Trigger 2: trailing zeros — fires even with shorter history.
-    if consecutive_zero_stop > 0 and len(yield_history) >= consecutive_zero_stop:
+    if 0 < consecutive_zero_stop <= len(yield_history):
         tail = yield_history[-consecutive_zero_stop:]
         if all(y == 0 for y in tail):
             return True
