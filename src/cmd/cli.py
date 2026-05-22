@@ -1714,13 +1714,18 @@ def audit_list(
         recovered_note = (
             f" rescued={entry.recovered_count}" if entry.recovered_count else ""
         )
+        stop_note = (
+            f" stop={entry.pagination_stop_reason}"
+            if entry.pagination_stop_reason
+            else ""
+        )
         typer.echo(
             f"[{entry.id}] {entry.university_slug} {entry.academic_year}  "
             f"raw={entry.raw_link_count} → "
             f"filtered={entry.llm_filtered_count}{recovered_note} → "
             f"candidates={entry.candidate_count} → "
             f"extracted={entry.extracted_count} "
-            f"(quarantined={entry.quarantined_count})  "
+            f"(quarantined={entry.quarantined_count}){stop_note}  "
             f"url={entry.index_url}"
         )
 

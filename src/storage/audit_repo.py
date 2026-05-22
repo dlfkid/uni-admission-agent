@@ -31,6 +31,7 @@ class ExtractionAuditRepo:
         recovered_count: int = 0,
         job_uid: Optional[str] = None,
         dropped_links: Optional[List[Dict[str, Any]]] = None,
+        pagination_stop_reason: Optional[str] = None,
     ) -> ExtractionAudit:
         entry = ExtractionAudit(
             university_slug=university_slug,
@@ -43,6 +44,7 @@ class ExtractionAuditRepo:
             quarantined_count=int(quarantined_count),
             recovered_count=int(recovered_count),
             job_uid=job_uid,
+            pagination_stop_reason=pagination_stop_reason,
         )
         self._session.add(entry)
         self._session.commit()

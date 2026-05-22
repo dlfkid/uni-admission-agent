@@ -21,8 +21,81 @@ from src.agent_runtime.skills.impl.common import (
     _get_cached_llm_filter,
     _set_cached_llm_filter,
 )
+from src.scrapers.pagination_signals import (
+    should_stop_for_decreasing_yield,
+    urls_diverged,
+)
+from src.storage.db_manager import DatabaseManager
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def _build_stop_result(
+    *,
+    status: str,
+    stop_reason: str,
+    pagination: Any,
+    pages_processed: int,
+    all_programs: list[dict[str, Any]],
+    quality_scores: list[dict[str, Any]],
+    summary: str,
+) -> dict[str, Any]:
+    """Compose a stop-mid-loop result dict with consistent fields."""
+    return {
+        "status": status,
+        "stop_reason": stop_reason,
+        "pagination_type": getattr(pagination, "pagination_type", "single_page"),
+        "total_pages_detected": getattr(pagination, "total_pages", None),
+        "pages_processed": pages_processed,
+        "programs": all_programs,
+        "extracted_programs": all_programs,
+        "total_programs": len(all_programs),
+        "quality_scores": quality_scores,
+        "warning": None,
+        "summary": summary,
+    }
+
+
+def _write_pagination_audit(
+    *,
+    univ_slug: str,
+    year: int,
+    index_url: str,
+    pages_processed: int,
+    all_programs: list[dict[str, Any]],
+    stop_reason: str,
+) -> None:
+    """Persist a single extraction_audit row recording WHY the paginated
+    crawl stopped. Failures here are logged but never block the skill —
+    diagnostic data is best-effort.
+    """
+    try:
+        db = DatabaseManager()
+        db.record_extraction_audit(
+            university_slug=univ_slug,
+            academic_year=int(year),
+            index_url=str(index_url),
+            # Funnel counts: we don't have raw_link_count etc. in the
+            # pagination path (it's index→detail not link-filter), so we
+            # report what we know: pages processed maps to candidates,
+            # successfully-extracted count maps to extracted.
+            raw_link_count=int(pages_processed),
+            llm_filtered_count=int(pages_processed),
+            candidate_count=int(pages_processed),
+            extracted_count=int(len(all_programs)),
+            quarantined_count=0,
+            pagination_stop_reason=stop_reason,
+        )
+    except Exception:  # pylint: disable=broad-except
+        logger.exception(
+            "[PaginatedCrawl] Failed to record audit (stop_reason=%s)",
+            stop_reason,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -107,8 +180,42 @@ def paginated_crawl_skill_handler(
     quality_scores: list[dict[str, Any]] = []
     programs_since_last_check = 0
     batch_index = 0
+    page_yield_history: list[int] = []
+    index_url_for_pattern = url  # page 1 URL anchors the expected pattern
 
     for page_idx, page_url in enumerate(page_urls):
+        # Pre-extraction stop signal: URL pattern divergence.
+        # Fires BEFORE the LLM call so a drifted page costs zero tokens.
+        if page_idx > 0 and urls_diverged(index_url_for_pattern, page_url):
+            logger.warning(
+                "[PaginatedCrawl] URL drift at page %d: %s no longer matches "
+                "index pattern of %s — stopping",
+                page_idx + 1, page_url, index_url_for_pattern,
+            )
+            emit({
+                "type": "pagination_stopped",
+                "reason": "url_drift",
+                "page": page_idx + 1,
+                "drifted_url": page_url,
+            })
+            _write_pagination_audit(
+                univ_slug=univ_slug, year=year, index_url=url,
+                pages_processed=page_idx,
+                all_programs=all_programs, stop_reason="url_drift",
+            )
+            return _build_stop_result(
+                status="url_drift",
+                stop_reason="url_drift",
+                pagination=pagination,
+                pages_processed=page_idx,  # this page wasn't processed
+                all_programs=all_programs,
+                quality_scores=quality_scores,
+                summary=(
+                    f"URL drift at page {page_idx + 1}: {page_url!r} "
+                    f"does not match index pattern"
+                ),
+            )
+
         # Fetch HTML (reuse page 1 HTML for index 0)
         if page_idx == 0:
             html_content = page1_html
@@ -137,6 +244,39 @@ def paginated_crawl_skill_handler(
 
         all_programs.extend(page_programs)
         programs_since_last_check += len(page_programs)
+        page_yield_history.append(len(page_programs))
+
+        # Post-extraction stop signal: decreasing yield trend. Keep the
+        # data we already extracted (it's still valid) but don't fetch
+        # further pages.
+        if should_stop_for_decreasing_yield(page_yield_history):
+            logger.warning(
+                "[PaginatedCrawl] Decreasing yield trend at page %d "
+                "(history=%s) — stopping",
+                page_idx + 1, page_yield_history,
+            )
+            emit({
+                "type": "pagination_stopped",
+                "reason": "decreasing_yield",
+                "page": page_idx + 1,
+                "yield_history": page_yield_history,
+            })
+            _write_pagination_audit(
+                univ_slug=univ_slug, year=year, index_url=url,
+                pages_processed=page_idx + 1,
+                all_programs=all_programs, stop_reason="decreasing_yield",
+            )
+            return _build_stop_result(
+                status="decreasing_yield",
+                stop_reason="decreasing_yield",
+                pagination=pagination,
+                pages_processed=page_idx + 1,
+                all_programs=all_programs,
+                quality_scores=quality_scores,
+                summary=(
+                    f"Yield collapsed at page {page_idx + 1}: history={page_yield_history}"
+                ),
+            )
 
         emit({
             "type": "pagination_progress",
@@ -178,8 +318,14 @@ def paginated_crawl_skill_handler(
                     "[PaginatedCrawl] Quality check FAILED at page %d: %s",
                     page_idx + 1, qr.reason,
                 )
+                _write_pagination_audit(
+                    univ_slug=univ_slug, year=year, index_url=url,
+                    pages_processed=page_idx + 1,
+                    all_programs=all_programs, stop_reason="quality_failed",
+                )
                 return {
                     "status": "quality_failed",
+                    "stop_reason": "quality_failed",
                     "pagination_type": pagination.pagination_type,
                     "total_pages_detected": pagination.total_pages,
                     "pages_processed": page_idx + 1,
@@ -226,13 +372,19 @@ def paginated_crawl_skill_handler(
                 "reason": qr.reason,
             })
             logger.warning("[PaginatedCrawl] Final quality check FAILED: %s", qr.reason)
+            _write_pagination_audit(
+                univ_slug=univ_slug, year=year, index_url=url,
+                pages_processed=total_pages,
+                all_programs=all_programs, stop_reason="quality_failed",
+            )
             return {
                 "status": "quality_failed",
+                "stop_reason": "quality_failed",
                 "pagination_type": pagination.pagination_type,
                 "total_pages_detected": pagination.total_pages,
                 "pages_processed": total_pages,
                 "programs": all_programs,
-                    "extracted_programs": all_programs,
+                "extracted_programs": all_programs,
                 "total_programs": len(all_programs),
                 "quality_scores": quality_scores,
                 "warning": None,
@@ -249,18 +401,38 @@ def paginated_crawl_skill_handler(
         else None
     )
 
+    # Distinguish "ran to the hard cap" from "naturally consumed all detected
+    # pages" — both succeed, but the diagnostic story differs.
+    if is_spa:
+        stop_reason = "pagination_not_supported"
+    elif (
+        pagination.total_pages is not None
+        and total_pages >= max_pages
+        and pagination.total_pages > max_pages
+    ):
+        stop_reason = "max_pages"
+    else:
+        stop_reason = "exhausted"
+
     logger.info(
-        "[PaginatedCrawl] Completed. status=%s pages=%d programs=%d",
-        status, total_pages, len(all_programs),
+        "[PaginatedCrawl] Completed. status=%s stop_reason=%s pages=%d programs=%d",
+        status, stop_reason, total_pages, len(all_programs),
+    )
+
+    _write_pagination_audit(
+        univ_slug=univ_slug, year=year, index_url=url,
+        pages_processed=total_pages,
+        all_programs=all_programs, stop_reason=stop_reason,
     )
 
     return {
         "status": status,
+        "stop_reason": stop_reason,
         "pagination_type": pagination.pagination_type,
         "total_pages_detected": pagination.total_pages,
         "pages_processed": total_pages,
         "programs": all_programs,
-                    "extracted_programs": all_programs,
+        "extracted_programs": all_programs,
         "total_programs": len(all_programs),
         "quality_scores": quality_scores,
         "warning": warning,
