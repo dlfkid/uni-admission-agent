@@ -94,6 +94,7 @@ DATABASE & STATUS:
     quarantine clear Remove quarantine entries for one university (optional reason filter)
     audit list       Inspect index→detail extraction funnel (raw → filtered → extracted)
     audit drill      Show URLs dropped at each filter stage for one audit row
+    crawl-summary    One-shot summary of the most recent crawl (for LLM CLI / quick scan)
     diagnostics clear One-shot wipe of quarantine + audit data for one university
     
 LLM CONFIGURATION:
@@ -1755,6 +1756,80 @@ def audit_drill(
         for link in items:
             anchor = f" [{link.anchor_text}]" if link.anchor_text else ""
             typer.echo(f"  {link.url}{anchor}")
+
+
+# ---------------------------------------------------------------------------
+#  crawl-summary — single-shot post-crawl summary for LLM CLI consumption
+# ---------------------------------------------------------------------------
+
+
+_ANOMALOUS_STOP_REASONS = {"url_drift", "decreasing_yield", "quality_failed"}
+
+
+@app.command(name="crawl-summary")
+def crawl_summary(
+    university: str = typer.Option(
+        ..., "--university", "-u",
+        help="University slug to summarize (required).",
+    ),
+    year: Optional[int] = typer.Option(
+        None, "--year", "-y", help="Optional academic year filter.",
+    ),
+) -> None:
+    """Print a one-shot summary of the most recent crawl for a university.
+
+    Designed for LLM CLI consumption (Claude Code, Codex, Gemini CLI via
+    the uni-admission-crawl skill): combines the latest audit row + the
+    quarantine reason breakdown into a single block the model can quote
+    directly to the user.
+    """
+    from collections import Counter
+
+    db_manager = DatabaseManager()
+    audits = db_manager.list_extraction_audit(
+        university_slug=university, year=year, limit=1
+    )
+    if not audits:
+        suffix = f" in {year}" if year else ""
+        typer.echo(f"No recent crawl recorded for {university}{suffix}.")
+        return
+
+    audit = audits[0]
+    q_entries = db_manager.list_quarantine(university_slug=university, year=year)
+    q_breakdown = Counter(e.quarantine_reason for e in q_entries)
+
+    stop = audit.pagination_stop_reason or "n/a"
+    warn = "  ⚠️" if stop in _ANOMALOUS_STOP_REASONS else ""
+    recovered_line = (
+        f"  Recovered: rescued={audit.recovered_count} "
+        f"(brought back by critique retry)\n"
+        if audit.recovered_count
+        else ""
+    )
+
+    typer.echo(
+        f"Latest crawl: {audit.university_slug} {audit.academic_year}\n"
+        f"  Index URL: {audit.index_url}\n"
+        f"  Funnel:    raw={audit.raw_link_count} → "
+        f"filtered={audit.llm_filtered_count} → "
+        f"candidates={audit.candidate_count} → "
+        f"extracted={audit.extracted_count}\n"
+        f"  Quarantined: {audit.quarantined_count}\n"
+        f"{recovered_line}"
+        f"  Stop reason: {stop}{warn}"
+    )
+
+    if q_breakdown:
+        typer.echo("\nQuarantine breakdown:")
+        for reason, count in sorted(q_breakdown.items(), key=lambda x: -x[1]):
+            typer.echo(f"  {reason}: {count}")
+        typer.echo(
+            f"\nReview details:\n"
+            f"  adm-agent quarantine list --university {university}"
+            + (f" --year {year}" if year else "")
+        )
+    else:
+        typer.echo("\nNo quarantine entries — all extracted programs passed the quality gate.")
 
 
 # ---------------------------------------------------------------------------
