@@ -159,6 +159,33 @@ The agent needs a database connection.
    ```
 3. Set your `DATABASE_URL` and API keys in `.env`.
 
+## 🤖 Using with LLM CLIs (Claude Code / Codex / Gemini CLI)
+
+You can drive adm-agent by **talking to your LLM CLI** — no Chrome extension, no manual REST calls. Install the included skill once:
+
+```bash
+# Claude Code
+mkdir -p ~/.claude/skills && ln -s "$(pwd)/skills/uni-admission-crawl" ~/.claude/skills/
+
+# Codex CLI: ~/.codex/skills    Gemini CLI: ~/.gemini/skills
+```
+
+Then paste a structured prompt — the LLM will check the backend, run the crawl, monitor progress, and report back. Example:
+
+```
+请用 uni-admission-crawl skill 帮我抓取一个分页 index：
+
+  大学 slug:     leeds
+  入学年份:      2026
+  入口 URL:      https://courses.leeds.ac.uk/course-search/masters-courses?page=4
+  抓取模式:      paginate
+  最大页数:      5
+
+跑完后汇报：总程序数、stop_reason、quarantine top 3 原因。
+```
+
+Full prompt templates (detail / index / paginate / diagnostic) and installation per CLI in [`skills/uni-admission-crawl/README.md`](skills/uni-admission-crawl/README.md).
+
 ## 🚀 Getting Started (Development)
 1. `pyenv local 3.12.0`
 2. `uv sync`
@@ -255,6 +282,11 @@ The agent needs a database connection.
 # Drill into one audit row to see WHICH URLs got filtered at each stage
 ./adm-agent audit drill 42
 
+# One-shot post-crawl summary for one university (designed for LLM CLI consumption
+# via the uni-admission-crawl skill). Quotable, includes funnel + quarantine
+# breakdown + stop_reason interpretation cues.
+./adm-agent crawl-summary --university hku --year 2026
+
 # One-shot wipe of ALL diagnostic data (quarantine + audit + audit links)
 # for one university. Use --year to scope to a single academic year.
 # The main `program` table is NOT touched — only diagnostic records.
@@ -342,6 +374,9 @@ The agent needs a database connection.
 
 # Drill into one audit row to see WHICH URLs got filtered at each stage
 .\adm-agent.exe audit drill 42
+
+# One-shot post-crawl summary
+.\adm-agent.exe crawl-summary --university hku --year 2026
 
 # One-shot wipe of ALL diagnostic data for one university (quarantine + audit)
 .\adm-agent.exe diagnostics clear --university hku
