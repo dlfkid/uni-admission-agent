@@ -197,25 +197,49 @@ class LLMCleanerAgent:
         self,
         raw_row: Dict[str, str],
         name_hints: Optional[List[str]] = None,
+        name_constraints: Optional[List[str]] = None,
     ) -> Optional[ParsedProgramData]:
         """
         Parse a dictionary of raw row data into structured ParsedProgramData.
 
         Args:
             raw_row: Dict like {"Tuition Fee": "HK$ 350,000", "Duration": "1 year"}
+            name_hints: Soft taxonomy suggestions — LLM may use them.
+            name_constraints: Hard taxonomy candidates — LLM MUST pick from
+                this list (or return null). Mutually exclusive with hints:
+                when constraints are supplied, hints are ignored.
 
         Returns:
             ParsedProgramData object or None if parsing fails.
         """
-        hints = self._normalize_name_hints(name_hints)
-        hints_block = ""
-        if hints:
-            lines = "\n".join(f"- {item}" for item in hints)
+        constraints = self._normalize_name_hints(name_constraints)
+        if constraints:
+            # Hard constraint mode — name must be one of the candidates.
+            allowed = "\n".join(f"- {item}" for item in constraints)
             hints_block = (
-                "Program Name Hints (canonical_name|score):\n"
-                f"{lines}\n"
-                "Use these only as guidance for program identity; do not invent fields.\n"
+                "PROGRAM NAME CONSTRAINT\n"
+                "=======================\n"
+                "The program name on this page MUST be one of the following "
+                "candidates, identified by external signals (anchor text, "
+                "URL slug, taxonomy match):\n"
+                f"{allowed}\n"
+                "Pick the one that best matches the page content. If NONE of "
+                "the candidates above can be confidently matched to a real "
+                "degree program described on this page, return null for ALL "
+                "fields rather than fabricating a different name. Do not "
+                "invent a name outside this list.\n"
+                "=======================\n"
             )
+        else:
+            hints = self._normalize_name_hints(name_hints)
+            hints_block = ""
+            if hints:
+                lines = "\n".join(f"- {item}" for item in hints)
+                hints_block = (
+                    "Program Name Hints (canonical_name|score):\n"
+                    f"{lines}\n"
+                    "Use these only as guidance for program identity; do not invent fields.\n"
+                )
 
         # Extract academic year for deadline inference
         year = int(raw_row.get("academic_year") or 0)
@@ -277,6 +301,7 @@ class LLMCleanerAgent:
         source_url: str = "",
         name_hints: Optional[List[str]] = None,
         academic_year: int = 0,
+        name_constraints: Optional[List[str]] = None,
     ) -> Optional[ParsedProgramData]:
         """Parse Markdown content from a detail page into structured data.
 
@@ -287,14 +312,24 @@ class LLMCleanerAgent:
         Args:
             markdown: Full Markdown content of the detail page.
             source_url: Source URL for logging.
+            name_hints: Soft suggestions for the program name (taxonomy).
+            name_constraints: Hard candidate list — when present, the LLM
+                MUST pick a name from this list or return null. Used when
+                taxonomy confidence is high enough to trust over LLM judgement.
 
         Returns:
             ParsedProgramData or None if parsing fails entirely.
         """
         if len(markdown) <= MAX_DETAIL_CHARS:
-            return self._parse_single_pass(markdown, source_url, name_hints, academic_year)
+            return self._parse_single_pass(
+                markdown, source_url, name_hints, academic_year,
+                name_constraints=name_constraints,
+            )
 
-        return self._parse_rolling_chunks(markdown, source_url, name_hints, academic_year)
+        return self._parse_rolling_chunks(
+            markdown, source_url, name_hints, academic_year,
+            name_constraints=name_constraints,
+        )
 
     # ------------------------------------------------------------------ #
     #  Self-critique retry                                                #
@@ -354,6 +389,7 @@ class LLMCleanerAgent:
         source_url: str = "",
         name_hints: Optional[List[str]] = None,
         academic_year: int = 0,
+        name_constraints: Optional[List[str]] = None,
     ) -> Optional[ParsedProgramData]:
         """Parse markdown with one self-critique retry on poor results.
 
@@ -365,12 +401,16 @@ class LLMCleanerAgent:
 
         Caps at one retry — no critique chains, to bound cost and avoid
         the LLM hallucinating data to satisfy escalating critiques.
+
+        When ``name_constraints`` is provided, the program name is bound
+        to that candidate list (LLM must pick from it or return null).
         """
         first = self.clean_markdown(
             markdown=markdown,
             source_url=source_url,
             name_hints=name_hints,
             academic_year=academic_year,
+            name_constraints=name_constraints,
         )
         if self._parsed_has_content(first):
             return first
@@ -389,6 +429,7 @@ class LLMCleanerAgent:
             source_url=source_url,
             name_hints=name_hints,
             academic_year=academic_year,
+            name_constraints=name_constraints,
         )
 
         if self._parsed_has_content(retry):
@@ -408,6 +449,8 @@ class LLMCleanerAgent:
         source_url: str,
         name_hints: Optional[List[str]],
         academic_year: int = 0,
+        *,
+        name_constraints: Optional[List[str]] = None,
     ) -> Optional[ParsedProgramData]:
         """Parse a small detail page in one LLM call."""
         raw_row: Dict[str, str] = {
@@ -416,7 +459,9 @@ class LLMCleanerAgent:
         }
         if academic_year:
             raw_row["academic_year"] = str(academic_year)
-        return self.clean_row(raw_row, name_hints=name_hints)
+        return self.clean_row(
+            raw_row, name_hints=name_hints, name_constraints=name_constraints,
+        )
 
     def _parse_rolling_chunks(
         self,
@@ -424,6 +469,8 @@ class LLMCleanerAgent:
         source_url: str,
         name_hints: Optional[List[str]],
         academic_year: int = 0,
+        *,
+        name_constraints: Optional[List[str]] = None,
     ) -> Optional[ParsedProgramData]:
         """Parse a large detail page using rolling-window sequential chunks.
 
@@ -443,7 +490,8 @@ class LLMCleanerAgent:
         accumulated = ParsedProgramData()
         context_summary = "No previous context. This is the first chunk."
 
-        hints = self._normalize_name_hints(name_hints)
+        constraints = self._normalize_name_hints(name_constraints)
+        hints = [] if constraints else self._normalize_name_hints(name_hints)
         year_context = ""
         if academic_year:
             year_context = (
@@ -467,7 +515,18 @@ class LLMCleanerAgent:
             )
             if year_context:
                 prompt = year_context + prompt
-            if hints:
+            if constraints:
+                allowed = "\n".join(f"- {item}" for item in constraints)
+                prompt = (
+                    "PROGRAM NAME CONSTRAINT\n"
+                    "=======================\n"
+                    "The program name MUST be one of:\n"
+                    f"{allowed}\n"
+                    "Or return null if none confidently matches. Do not invent.\n"
+                    "=======================\n\n"
+                    f"{prompt}"
+                )
+            elif hints:
                 hints_lines = "\n".join(f"- {item}" for item in hints)
                 prompt = (
                     "Program Name Hints (canonical_name|score):\n"

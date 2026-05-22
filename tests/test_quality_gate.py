@@ -22,6 +22,9 @@ class TestQuarantineReasonValues:
     def test_no_markdown_reason_exists(self) -> None:
         assert QuarantineReason.NO_MARKDOWN.value == "no_markdown"
 
+    def test_name_unconstrained_reason_exists(self) -> None:
+        assert QuarantineReason.NAME_UNCONSTRAINED.value == "name_unconstrained"
+
 
 def _good_program() -> dict:
     """A program that should pass the gate cleanly."""
@@ -153,3 +156,61 @@ class TestEvaluateExtraction:
         # Touching it shouldn't blow up.
         assert isinstance(verdict.signals, dict)
         assert verdict.passed is True
+
+
+class TestEvaluateExtractionWithConstraints:
+    """When taxonomy constraints are supplied, the extracted name must
+    match one of them (case/whitespace tolerant) or pass null."""
+
+    def test_passes_when_name_matches_constraint(self) -> None:
+        prog = _good_program()
+        prog["name_en"] = "MSc Finance"
+        v = evaluate_extraction(prog, name_constraints=["MSc Finance", "MSc Economics"])
+        assert v.passed is True
+
+    def test_passes_when_name_matches_case_insensitive(self) -> None:
+        prog = _good_program()
+        prog["name_en"] = "msc finance"
+        v = evaluate_extraction(prog, name_constraints=["MSc Finance"])
+        assert v.passed is True
+
+    def test_fails_when_name_outside_constraints(self) -> None:
+        prog = _good_program()
+        prog["name_en"] = "Faculty of Business"
+        v = evaluate_extraction(prog, name_constraints=["MSc Finance", "MSc Economics"])
+        assert v.passed is False
+        assert v.reason == QuarantineReason.NAME_UNCONSTRAINED
+        # Signals carry both the chosen name and the candidate set for diagnosis.
+        assert v.signals.get("constraint_violated") is True
+
+    def test_no_constraints_means_no_constraint_check(self) -> None:
+        """name_constraints=None or empty list → behaves like today."""
+        prog = _good_program()
+        prog["name_en"] = "Some Name That's Not In Any Constraint List"
+        # Without constraints, this passes (existing rules don't reject).
+        v1 = evaluate_extraction(prog, name_constraints=None)
+        assert v1.passed is True
+        v2 = evaluate_extraction(prog, name_constraints=[])
+        assert v2.passed is True
+
+    def test_name_failures_take_precedence_over_constraint_check(self) -> None:
+        """Empty name should be EMPTY_NAME, not NAME_UNCONSTRAINED — the
+        more specific name failure is the more actionable signal."""
+        prog = _good_program()
+        prog["name_en"] = ""
+        v = evaluate_extraction(prog, name_constraints=["MSc Finance"])
+        assert v.passed is False
+        assert v.reason == QuarantineReason.EMPTY_NAME
+
+    def test_constraint_check_runs_before_empty_shell(self) -> None:
+        """A wrong name with no content should report the name violation,
+        not the empty-shell symptom — name fix is the root cause."""
+        prog = _good_program()
+        prog["name_en"] = "Wrong Name"
+        prog["tuition_amount"] = None
+        prog["currency"] = None
+        prog["deadlines"] = []
+        prog["requirements"] = []
+        v = evaluate_extraction(prog, name_constraints=["MSc Finance"])
+        assert v.passed is False
+        assert v.reason == QuarantineReason.NAME_UNCONSTRAINED

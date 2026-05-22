@@ -138,6 +138,51 @@ def test_persist_versioned_routes_empty_shells_to_quarantine() -> None:
     assert reasons == {"empty_shell", "noise_name"}
 
 
+def test_persist_versioned_enforces_taxonomy_constraints_from_metadata() -> None:
+    """When a program record carries name_constraints in its extra_metadata
+    (set by extract_structured when taxonomy confidence was high) and the
+    extracted name doesn't match, persist must quarantine via the gate
+    with reason NAME_UNCONSTRAINED — not silently insert."""
+    mock_db = MagicMock()
+    pipeline = IngestionPipeline(db_manager=mock_db)
+
+    request_payload = {"univ_slug": "hku", "year": 2026}
+    context = {
+        "validated_programs": [
+            # Constraint set says "MSc Finance" but LLM picked "Faculty of Business"
+            {
+                "name_en": "Faculty of Business",
+                "academic_year": 2026,
+                "tuition_amount": 100,
+                "extra_metadata": {
+                    "name_constraints": ["MSc Finance", "MSc Economics"],
+                },
+            },
+            # Same constraint, LLM picked one of the candidates → passes
+            {
+                "name_en": "MSc Finance",
+                "academic_year": 2026,
+                "tuition_amount": 100,
+                "extra_metadata": {
+                    "name_constraints": ["MSc Finance", "MSc Economics"],
+                },
+            },
+        ],
+        "validated_hash": "h",
+    }
+    mock_db.upsert_program.return_value = (
+        MagicMock(id=1, name_en="MSc Finance", source_url="", extra_metadata=None),
+        True,
+    )
+
+    result = pipeline._stage_persist_versioned(request_payload, context)
+
+    assert result["persisted_count"] == 1
+    assert result["quarantined_count"] == 1
+    mock_db.upsert_quarantine.assert_called_once()
+    assert mock_db.upsert_quarantine.call_args.kwargs["reason"].value == "name_unconstrained"
+
+
 def test_persist_versioned_writes_extraction_audit() -> None:
     """When fetch_raw recorded a funnel, persist_versioned must finalize
     an extraction_audit row combining funnel + final counts."""

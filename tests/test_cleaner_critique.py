@@ -55,7 +55,7 @@ class TestCleanMarkdownWithCritique:
 
         call_args_log: list[str] = []
 
-        def fake_parse_single_pass(markdown, source_url, name_hints, academic_year):
+        def fake_parse_single_pass(markdown, source_url, name_hints, academic_year, **kwargs):
             call_args_log.append(markdown)
             if len(call_args_log) == 1:
                 return None  # first call: nothing extracted
@@ -83,7 +83,7 @@ class TestCleanMarkdownWithCritique:
 
         attempts: list[ParsedProgramData | None] = []
 
-        def fake_parse(markdown, source_url, name_hints, academic_year):
+        def fake_parse(markdown, source_url, name_hints, academic_year, **kwargs):
             if not attempts:
                 attempts.append(_empty_shell_parsed())
                 return attempts[-1]
@@ -107,7 +107,7 @@ class TestCleanMarkdownWithCritique:
 
         calls = [0]
 
-        def fake_parse(markdown, source_url, name_hints, academic_year):
+        def fake_parse(markdown, source_url, name_hints, academic_year, **kwargs):
             calls[0] += 1
             return _empty_shell_parsed()  # always empty shell
 
@@ -132,6 +132,55 @@ class TestCleanMarkdownWithCritique:
         assert result is None
         assert agent._parse_single_pass.call_count == 2
 
+    def _make_router_spy(self) -> MagicMock:
+        """Build a router spy whose generate() returns a well-formed
+        LLMResponse with a serialized ParsedProgramData JSON body."""
+        spy = MagicMock()
+        response = MagicMock()
+        response.text = _good_parsed().model_dump_json()
+        spy.return_value = response
+        return spy
+
+    def test_name_constraints_emit_must_be_one_of_directive(self) -> None:
+        """When name_constraints is non-empty, the prompt sent to the LLM
+        must contain a hard constraint (not just a hint), naming the
+        allowed values and the explicit null escape valve."""
+        agent = LLMCleanerAgent(router=MagicMock())
+        spy = self._make_router_spy()
+        agent.router.generate = spy  # type: ignore[method-assign]
+
+        agent.clean_markdown_with_critique(
+            markdown="page body about a finance program",
+            source_url="https://e.edu/finance",
+            academic_year=2026,
+            name_constraints=["MSc Finance", "MSc Accounting"],
+        )
+
+        prompt = spy.call_args[0][0]
+        # Hard constraint language must be present.
+        assert "MUST be one of" in prompt or "must be one of" in prompt
+        # Constraint values must appear verbatim.
+        assert "MSc Finance" in prompt
+        assert "MSc Accounting" in prompt
+        # Null escape valve must be explicit so LLM doesn't fabricate.
+        assert "null" in prompt.lower()
+
+    def test_name_constraints_none_behaves_like_today(self) -> None:
+        """No constraints supplied → no constraint directive in prompt."""
+        agent = LLMCleanerAgent(router=MagicMock())
+        spy = self._make_router_spy()
+        agent.router.generate = spy  # type: ignore[method-assign]
+
+        agent.clean_markdown_with_critique(
+            markdown="page body",
+            source_url="https://e.edu",
+            academic_year=2026,
+        )
+
+        prompt = spy.call_args[0][0]
+        assert "MUST be one of" not in prompt
+        assert "must be one of" not in prompt
+
     def test_critique_hint_embeds_previous_output_as_text(self) -> None:
         """The critique prompt must include the previous (failed) output
         as data — not as an assistant message — to avoid LLM cognitive
@@ -141,7 +190,7 @@ class TestCleanMarkdownWithCritique:
         first_result = ParsedProgramData(faculty="Faculty of Music")
         attempts: list[str] = []
 
-        def fake_parse(markdown, source_url, name_hints, academic_year):
+        def fake_parse(markdown, source_url, name_hints, academic_year, **kwargs):
             attempts.append(markdown)
             return first_result if len(attempts) == 1 else _good_parsed()
 

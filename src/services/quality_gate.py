@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from src.scrapers.helpers import is_noise_program_name
 
@@ -33,6 +33,10 @@ class QuarantineReason(str, Enum):
     # paths used to fail silently with no DB trace.
     NO_MARKDOWN = "no_markdown"
     EXTRACTION_FAILED = "extraction_failed"
+    # Name doesn't match the taxonomy-derived constraint set — LLM picked
+    # something outside the high-confidence candidate list. Indicates the
+    # LLM ignored the constraint instruction.
+    NAME_UNCONSTRAINED = "name_unconstrained"
 
 
 @dataclass(frozen=True)
@@ -55,16 +59,39 @@ def _collect_signals(program_data: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def evaluate_extraction(program_data: Dict[str, Any]) -> QualityVerdict:
+def _name_matches_constraints(name: str, constraints: List[str]) -> bool:
+    """Case-insensitive whitespace-tolerant match against constraint set."""
+    needle = name.strip().lower()
+    if not needle:
+        return False
+    for candidate in constraints:
+        if not candidate:
+            continue
+        if needle == str(candidate).strip().lower():
+            return True
+    return False
+
+
+def evaluate_extraction(
+    program_data: Dict[str, Any],
+    *,
+    name_constraints: Optional[List[str]] = None,
+) -> QualityVerdict:
     """Return a verdict for one extracted program record.
 
     Order of checks matters: name failures are reported before content
     failures because name is the most actionable root cause (you can't
     review a record you can't identify).
+
+    When ``name_constraints`` is supplied (non-empty), the extracted
+    name must match one of them (case-insensitive). Used by the pipeline
+    when taxonomy confidence is high — locks the LLM to known canonical
+    names rather than letting it freelance.
     """
     signals = _collect_signals(program_data)
     name = str(program_data.get("name_en") or "").strip()
 
+    # Step 1: name format checks (more specific than constraint check).
     if not name:
         return QualityVerdict(False, QuarantineReason.EMPTY_NAME, signals)
     if len(name) < MIN_NAME_LENGTH:
@@ -72,6 +99,20 @@ def evaluate_extraction(program_data: Dict[str, Any]) -> QualityVerdict:
     if is_noise_program_name(name):
         return QualityVerdict(False, QuarantineReason.NOISE_NAME, signals)
 
+    # Step 2: constraint match — runs BEFORE empty-shell because a wrong
+    # name with no content is a name problem first.
+    if name_constraints:
+        active = [c for c in name_constraints if c]
+        if active and not _name_matches_constraints(name, active):
+            signals = {
+                **signals,
+                "constraint_violated": True,
+                "chosen_name": name,
+                "constraint_candidates": active,
+            }
+            return QualityVerdict(False, QuarantineReason.NAME_UNCONSTRAINED, signals)
+
+    # Step 3: content completeness.
     has_content = (
         signals["has_tuition"]
         or signals["deadline_count"] > 0

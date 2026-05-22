@@ -1165,6 +1165,23 @@ class IngestionPipeline:
                         top_k=taxonomy_hint_top_k,
                     )
 
+            # Hard constraint mode: when taxonomy confidence crosses the
+            # high threshold, lock the LLM to the candidate set rather than
+            # leaving the name choice free. Constraints are the candidate
+            # names with score >= low_threshold.
+            name_constraints: list[str] = []
+            if (
+                taxonomy_enabled
+                and taxonomy_matches
+                and best_score >= taxonomy_high_threshold
+            ):
+                name_constraints = [
+                    str(m.get("name_en") or "").strip()
+                    for m in taxonomy_matches
+                    if float(m.get("score") or 0.0) >= taxonomy_low_threshold
+                    and str(m.get("name_en") or "").strip()
+                ]
+
             program_data, error = extract_program_data_from_page(
                 page=page,
                 cleaner=cleaner,
@@ -1174,6 +1191,7 @@ class IngestionPipeline:
                 from_browser=from_browser,
                 name_hints=name_hints,
                 selected_anchor_text=str(row.get("selected_anchor_text") or "").strip() or None,
+                name_constraints=name_constraints or None,
             )
             if program_data:
                 if is_index_mode_request:
@@ -1223,6 +1241,12 @@ class IngestionPipeline:
                     taxonomy_override_enabled=taxonomy_override_enabled,
                     hints_injected=bool(name_hints),
                 )
+                # Carry constraints into metadata so the persist-stage gate
+                # can enforce them. Empty list = no constraint was active.
+                if name_constraints:
+                    meta = program_data.setdefault("extra_metadata", {})
+                    if isinstance(meta, dict):
+                        meta["name_constraints"] = list(name_constraints)
                 candidates.append(_json_safe(program_data))
             else:
                 err_text = str(error or "No structured data extracted")
@@ -1390,7 +1414,16 @@ class IngestionPipeline:
 
         for item in validated_programs:
             item_dict = dict(item)
-            verdict = evaluate_extraction(item_dict)
+            # Pull taxonomy constraints (if any) from extra_metadata so the
+            # gate can enforce them — set upstream in extract_structured
+            # when taxonomy best_score exceeded the high threshold.
+            constraints = None
+            meta = item_dict.get("extra_metadata")
+            if isinstance(meta, dict):
+                raw = meta.get("name_constraints")
+                if isinstance(raw, list) and raw:
+                    constraints = [str(c) for c in raw if c]
+            verdict = evaluate_extraction(item_dict, name_constraints=constraints)
             if not verdict.passed:
                 reason_value = verdict.reason.value if verdict.reason else "unknown"
                 logger.warning(

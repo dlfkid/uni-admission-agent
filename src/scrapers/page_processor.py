@@ -148,7 +148,14 @@ def process_page_for_program(
             )
         return False, error
 
-    verdict = evaluate_extraction(program_data)
+    # Pull constraints (if any) so the gate can enforce taxonomy lock.
+    _constraints = None
+    _meta = program_data.get("extra_metadata") if isinstance(program_data, dict) else None
+    if isinstance(_meta, dict):
+        _raw = _meta.get("name_constraints")
+        if isinstance(_raw, list) and _raw:
+            _constraints = [str(c) for c in _raw if c]
+    verdict = evaluate_extraction(program_data, name_constraints=_constraints)
     if not verdict.passed:
         reason_value = verdict.reason.value if verdict.reason else "unknown"
         logger.warning(
@@ -206,8 +213,14 @@ def extract_program_data_from_page(
     from_browser: bool = False,
     name_hints: Optional[List[str]] = None,
     selected_anchor_text: Optional[str] = None,
+    name_constraints: Optional[List[str]] = None,
 ) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
-    """Extract structured program payload from one page without DB persistence."""
+    """Extract structured program payload from one page without DB persistence.
+
+    When ``name_constraints`` is supplied (typically when the pipeline's
+    taxonomy match exceeded the high-confidence threshold), it is forwarded
+    to the cleaner so the LLM prompt binds the program name to that set.
+    """
     if not page.markdown:
         return None, "No markdown content"
 
@@ -231,6 +244,7 @@ def extract_program_data_from_page(
             source_url=page.url,
             name_hints=name_hints,
             academic_year=year,
+            name_constraints=name_constraints,
         )
         
         if content_type == "html":
