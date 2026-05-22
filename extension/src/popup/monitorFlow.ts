@@ -127,6 +127,91 @@ export function initMonitorFlow(deps: MonitorFlowDeps): {
         }
     }
 
+    interface CrawlSummaryResponse {
+        available: boolean;
+        reason?: string;
+        university_slug?: string;
+        academic_year?: number;
+        index_url?: string;
+        raw_link_count?: number;
+        llm_filtered_count?: number;
+        candidate_count?: number;
+        extracted_count?: number;
+        quarantined_count?: number;
+        recovered_count?: number;
+        stop_reason?: string | null;
+        stop_reason_anomalous?: boolean;
+        quarantine_breakdown?: Record<string, number>;
+    }
+
+    function _stopReasonInterpretation(reason: string | null | undefined): string {
+        switch (reason) {
+            case "exhausted":
+                return "正常爬完了所有检测到的页面。";
+            case "max_pages":
+                return "命中 max_pages 上限——如果还有更多程序，可以提高这个值再跑一次。";
+            case "url_drift":
+                return "⚠️ 检测到 URL 跳到了无关页面（不在 index pattern 内），自动停了。建议检查入口 URL。";
+            case "decreasing_yield":
+                return "⚠️ 后几页几乎没新程序了，可能已经爬完——也可能分页规则有问题。";
+            case "quality_failed":
+                return "⚠️ 数据质量门挡下来了——LLM 抽取出了一批垃圾。检查 quarantine 看具体原因。";
+            default:
+                return "";
+        }
+    }
+
+    function _formatSummaryBlock(s: CrawlSummaryResponse): string[] {
+        const ts = new Date().toLocaleTimeString([], { hour12: false });
+        const lines: string[] = [];
+        const prefix = `[${ts}] [Summary]`;
+        lines.push("");
+        lines.push(`${prefix} ✅ Crawl complete — ${s.university_slug} ${s.academic_year}`);
+        lines.push(`${prefix}   Funnel:    raw=${s.raw_link_count} → filtered=${s.llm_filtered_count} → candidates=${s.candidate_count} → extracted=${s.extracted_count}`);
+        if (s.recovered_count && s.recovered_count > 0) {
+            lines.push(`${prefix}   Recovered: rescued=${s.recovered_count} (by critique retry)`);
+        }
+        const warn = s.stop_reason_anomalous ? " ⚠️" : "";
+        lines.push(`${prefix}   Quarantined: ${s.quarantined_count ?? 0}`);
+        lines.push(`${prefix}   Stop reason: ${s.stop_reason ?? "n/a"}${warn}`);
+        const interp = _stopReasonInterpretation(s.stop_reason ?? null);
+        if (interp) {
+            lines.push(`${prefix}   → ${interp}`);
+        }
+        const breakdown = s.quarantine_breakdown ?? {};
+        const reasons = Object.keys(breakdown);
+        if (reasons.length > 0) {
+            lines.push(`${prefix}   Quarantine breakdown:`);
+            const sorted = reasons.sort((a, b) => (breakdown[b] ?? 0) - (breakdown[a] ?? 0));
+            for (const r of sorted) {
+                lines.push(`${prefix}     ${r}: ${breakdown[r]}`);
+            }
+        }
+        return lines;
+    }
+
+    async function appendCrawlSummary(taskId: string): Promise<void> {
+        try {
+            const res = await fetch(`${apiBase}/tasks/${taskId}/summary`);
+            if (!res.ok) {
+                return;
+            }
+            const data = (await res.json()) as CrawlSummaryResponse;
+            if (!data.available) {
+                return;
+            }
+            const summaryLines = _formatSummaryBlock(data);
+            streamingLines.push(...summaryLines);
+            if (streamingLines.length > 200) {
+                streamingLines = streamingLines.slice(-200);
+            }
+            renderLogsConsole();
+        } catch {
+            // Silently degrade — the summary is a nice-to-have; never block
+            // the crawl completion flow on a fetch error.
+        }
+    }
+
     function renderLogsConsole() {
         const allLines = [...externalBatchLogs, ...streamingLines];
         const text = allLines.join("\n");
@@ -203,6 +288,9 @@ export function initMonitorFlow(deps: MonitorFlowDeps): {
             if (type === "agent_done" || type === "agent_failed") {
                 es.close();
                 activeEventSource = null;
+                // Fetch + append the post-crawl summary block into the same
+                // logs-console (no new popup or page — per user request).
+                void appendCrawlSummary(taskId);
             }
         };
 
