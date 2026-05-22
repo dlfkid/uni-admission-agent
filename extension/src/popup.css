@@ -1260,3 +1260,19 @@ input[type="range"]::-moz-range-thumb {
     transform: rotate(360deg);
   }
 }
+
+/* ---------------------------------------------------------------------
+ * Platform-specific visibility.
+ *
+ * The same Vite bundle powers both the Chrome extension popup and the
+ * standalone web UI served at /ui/. In web mode, elements that depend
+ * on extension-only APIs (chrome.tabs, chrome.scripting,
+ * background-tab automation) are hidden via these rules.
+ *
+ * The body class is set by `applyPlatformBodyClass()` in platform.ts
+ * during init.
+ * --------------------------------------------------------------------- */
+
+body.platform-web .extension-only {
+  display: none !important;
+}

@@ -21,6 +21,7 @@ import {
     urlDisplay,
     yearInput,
 } from "./dom";
+import { isExtensionContext } from "../platform";
 import { DETAIL_BATCH_SIZE } from "./preferences";
 import { initLinkSelectionFlow } from "./linkSelectionFlow";
 import { captureDetailPagesBatch, chunkUrls, clampAutomationConcurrency } from "./automationQueue";
@@ -76,6 +77,11 @@ export interface CrawlFlowDeps {
 // ---------------------------------------------------------------------------
 
 export async function getCurrentPageHTML(): Promise<string | null> {
+    // Web mode has no concept of a "current tab" — return null so callers
+    // fall back to server-side fetching of the URL the user typed.
+    if (!isExtensionContext) {
+        return null;
+    }
     return new Promise((resolve) => {
         chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
             const tab = tabs[0];

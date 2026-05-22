@@ -785,6 +785,13 @@ def serve(
         import uvicorn
 
         typer.echo(f"🚀 Starting server on {host}:{port}")
+        # Display URL the user can click. When the server binds 0.0.0.0,
+        # the human-meaningful address is 127.0.0.1 — don't put
+        # "http://0.0.0.0/" in front of users.
+        display_host = "127.0.0.1" if host in ("0.0.0.0", "::") else host
+        typer.echo(f"   🌐 Web UI:  http://{display_host}:{port}/ui/")
+        typer.echo(f"   📚 API docs: http://{display_host}:{port}/docs")
+        typer.echo(f"   🩺 Health:   http://{display_host}:{port}/health")
         typer.echo(f"   PID file: {_PID_FILE}")
         _write_pid_file()
         try:
@@ -1071,6 +1078,8 @@ def up(
         _terminate_children([server_proc])
         raise typer.Exit(code=1)
     typer.echo("✅ Server is healthy.")
+    typer.echo(f"   🌐 Web UI:  {server_url}/ui/")
+    typer.echo(f"   📚 API docs: {server_url}/docs")
 
     client_proc: subprocess.Popen | None = None
     client_thread: threading.Thread | None = None

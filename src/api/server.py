@@ -317,6 +317,64 @@ _main_loop: Optional[asyncio.AbstractEventLoop] = None  # set on startup
 client_rpc_broker = ClientRpcBroker(timeout_seconds=120.0)
 
 
+# ---------------------------------------------------------------------------
+# Web UI static mount
+# ---------------------------------------------------------------------------
+#
+# The Chrome extension's Vite bundle works as a standalone web app too —
+# same crawl flow, same monitor view, just lacking the extension-only
+# features (auto-detect current tab URL, multi-tab automation queue).
+# Users who don't want to install the extension can open
+# `http://<host>:<port>/ui/` in any browser instead.
+
+def _resolve_web_ui_dir() -> Optional[Path]:
+    """Locate the built extension/web bundle across dev and frozen contexts.
+
+    Searches, in order:
+      1. ``<repo>/extension/dist`` (dev: `npm run build` output)
+      2. ``sys._MEIPASS/web_ui`` (PyInstaller frozen build)
+      3. ``<executable_dir>/web_ui`` (sibling-of-binary install)
+    Returns the first directory that contains a ``popup.html``.
+    """
+    import sys as _sys
+    candidates: list[Path] = []
+    repo_root = Path(__file__).resolve().parent.parent.parent
+    candidates.append(repo_root / "extension" / "dist")
+    meipass = getattr(_sys, "_MEIPASS", None)
+    if meipass:
+        candidates.append(Path(meipass) / "web_ui")
+    candidates.append(Path(_sys.executable).resolve().parent / "web_ui")
+    for c in candidates:
+        if (c / "popup.html").exists():
+            return c
+    return None
+
+
+_web_ui_dir = _resolve_web_ui_dir()
+if _web_ui_dir is not None:
+    # pylint: disable=ungrouped-imports
+    from fastapi.responses import FileResponse, RedirectResponse
+    from fastapi.staticfiles import StaticFiles
+
+    # Vite outputs popup.html (not index.html), so /ui/ and /ui need an
+    # explicit handler before the StaticFiles mount picks them up.
+    @app.get("/ui/", include_in_schema=False)
+    async def _web_ui_root() -> FileResponse:
+        return FileResponse(_web_ui_dir / "popup.html")
+
+    @app.get("/ui", include_in_schema=False)
+    async def _web_ui_root_no_slash() -> RedirectResponse:
+        return RedirectResponse(url="/ui/", status_code=307)
+
+    app.mount("/ui", StaticFiles(directory=str(_web_ui_dir)), name="web-ui")
+    logger.info("Web UI mounted at /ui  (source: %s)", _web_ui_dir)
+else:
+    logger.warning(
+        "Web UI bundle not found — /ui/ will 404. "
+        "Run `npm run build --prefix extension` to produce it."
+    )
+
+
 def _has_available_client(preferred_client_id: Optional[str]) -> bool:
     return client_registry.select_client_id(preferred_client_id) is not None
 

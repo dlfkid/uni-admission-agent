@@ -1,3 +1,4 @@
+import { isExtensionContext } from "../platform";
 import type { DetailPageBatchItem } from "./types";
 
 const DEFAULT_CONCURRENCY = 5;
@@ -91,6 +92,18 @@ export async function captureDetailPagesBatch(
     candidates: CaptureCandidate[],
     options: CaptureBatchOptions = {}
 ): Promise<CaptureBatchResult> {
+    // Background-tab automation is extension-only. In web mode, every
+    // candidate must fall back to server-side fetching — surface this
+    // by returning all candidates as failures with a clear reason.
+    if (!isExtensionContext) {
+        return {
+            successes: [],
+            failures: candidates.map((c) => ({
+                url: c.url,
+                error: "extension-only: install the Chrome extension or use server-side fetch",
+            })),
+        };
+    }
     const total = candidates.length;
     if (total === 0) {
         return { successes: [], failures: [] };

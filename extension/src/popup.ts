@@ -98,6 +98,7 @@ import {
     initSlugAutocomplete,
 } from "./popup/slugAutocomplete";
 import { initCrawlFlow } from "./popup/crawlFlow";
+import { applyPlatformBodyClass, isExtensionContext } from "./platform";
 import type { TaskInfo } from "./popup/types";
 
 const API_BASE = "http://localhost:8910";
@@ -266,8 +267,16 @@ function updateLogsState(expanded: boolean) {
 /**
  * Update the displayed URL from the current active tab.
  * Called on init and whenever tab changes.
+ *
+ * In web mode (no chrome.tabs), shows a placeholder asking the user to
+ * paste a URL into the input field below — there's no concept of
+ * "current tab" outside the extension popup.
  */
 function updateCurrentUrl() {
+    if (!isExtensionContext) {
+        urlDisplay.textContent = "(paste URL below — web mode)";
+        return;
+    }
     chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
         const tab = tabs[0];
         if (tab?.url) {
@@ -284,8 +293,10 @@ function updateCurrentUrl() {
 
 /**
  * Setup listeners to auto-update URL when user switches tabs or navigates.
+ * Extension-only — web mode has no tab concept.
  */
 function setupTabListeners() {
+    if (!isExtensionContext) return;
     // When user switches to a different tab
     chrome.tabs.onActivated.addListener((activeInfo) => {
         // Only update if it's in our window
@@ -309,6 +320,10 @@ function setupTabListeners() {
 // ---------------------------------------------------------------------------
 
 async function init() {
+    // Tag <body> with platform-extension or platform-web so CSS can
+    // hide extension-only UI in web mode.
+    applyPlatformBodyClass();
+
     // Restore cached preferences
     restoreCachedPreferences({
         updateTaxonomySettingsVisibility,
