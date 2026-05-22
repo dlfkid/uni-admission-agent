@@ -50,7 +50,7 @@ logger = logging.getLogger("build_dist")
 
 SCRIPTS_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = SCRIPTS_DIR.parent
-EXTENSION_DIR = PROJECT_ROOT / "extension"
+FRONTEND_DIR = PROJECT_ROOT / "frontend"
 SPEC_FILE = PROJECT_ROOT / "adm-agent.spec"
 CLIENT_SPEC_FILE = PROJECT_ROOT / "adm-agent-client.spec"
 PYPROJECT_FILE = PROJECT_ROOT / "pyproject.toml"
@@ -172,8 +172,9 @@ def clean() -> None:
 
 
 def prepare_extension_version(version: str) -> Path:
-    """Create a temporary extension directory with updated version numbers."""
-    logger.info("📝 Preparing extension with version %s", version)
+    """Create a temporary frontend directory with updated version numbers
+    (used when building the Chrome-extension form of the bundle)."""
+    logger.info("📝 Preparing frontend with version %s", version)
     
     # Remove 'v' prefix if present
     clean_version = version.lstrip('v')
@@ -197,8 +198,8 @@ def prepare_extension_version(version: str) -> Path:
     if temp_ext_dir.exists():
         shutil.rmtree(temp_ext_dir)
     
-    # Copy extension source to temp directory
-    shutil.copytree(EXTENSION_DIR, temp_ext_dir, ignore=shutil.ignore_patterns('node_modules', 'dist', '*.zip'))
+    # Copy frontend source to temp directory
+    shutil.copytree(FRONTEND_DIR, temp_ext_dir, ignore=shutil.ignore_patterns('node_modules', 'dist', '*.zip'))
     
     # Update package.json in temp directory
     temp_package_json = temp_ext_dir / "package.json"
@@ -240,7 +241,7 @@ def build_extension(version: str | None = None) -> Path:
         build_dir = prepare_extension_version(version)
     else:
         # Use original extension directory
-        build_dir = EXTENSION_DIR
+        build_dir = FRONTEND_DIR
 
     _run(["npm", "install"], cwd=build_dir, label="ext")
     _run(["npm", "run", "build"], cwd=build_dir, label="ext")
@@ -264,9 +265,9 @@ def build_extension(version: str | None = None) -> Path:
     shutil.make_archive(str(zip_path.with_suffix("")), "zip", dist_dir)
     
     # Clean up temporary directory if used
-    if version and build_dir != EXTENSION_DIR:
+    if version and build_dir != FRONTEND_DIR:
         # Copy zip back to original extension directory for consistency
-        final_zip_path = EXTENSION_DIR / "uni-admission-extension.zip" 
+        final_zip_path = FRONTEND_DIR / "uni-admission-extension.zip" 
         shutil.copy2(zip_path, final_zip_path)
         logger.info("  📋 Copied zip to %s", final_zip_path.relative_to(PROJECT_ROOT))
         return final_zip_path
@@ -804,7 +805,7 @@ def main() -> None:
             extension_zip = None
             if not args.skip_extension:
                 if args.skip_frontend_build:
-                    zip_path = EXTENSION_DIR / "uni-admission-extension.zip"
+                    zip_path = FRONTEND_DIR / "uni-admission-extension.zip"
                     if zip_path.exists():
                         extension_zip = zip_path
                         logger.info("  Using existing extension zip")
@@ -835,7 +836,7 @@ def main() -> None:
         if not args.skip_extension:
             if args.skip_frontend_build:
                 # Look for existing
-                zip_path = EXTENSION_DIR / "uni-admission-extension.zip"
+                zip_path = FRONTEND_DIR / "uni-admission-extension.zip"
                 if zip_path.exists():
                     extension_zip = zip_path
                     logger.info("  Using existing extension zip")

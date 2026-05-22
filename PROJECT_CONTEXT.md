@@ -77,13 +77,13 @@ For agent-driven index crawls, the system now short-circuits repeated LLM extrac
 - when selector coverage drops, `FallbackHandler` chooses field-level repair or full-page LLM fallback
 - degraded schemas are automatically deprecated and relearned
 
-### 3.2 Chrome Extension & API
+### 3.2 Frontend & API
 
 The system exposes a REST API and MCP server for external control.
 -   **Server**: `src/api/server.py` (FastAPI)
 -   **Protocol**: HTTP + SSE (Server-Sent Events) for real-time logs
 -   **Agent chat**: `POST /agent/chat` returns a task id; `GET /tasks/{id}/events` streams thinking/tool/summary events
--   **Extension**: Vite/TypeScript-based UI in `extension/` directory.
+-   **Frontend**: Vite/TypeScript-based UI in `frontend/` directory. One bundle, two delivery forms — Chrome extension (`frontend/dist/` loaded unpacked) and Web UI (same `frontend/dist/` served by FastAPI at `/ui/`). Source layout: `frontend/src/{shared,extension,web}/` — `shared/` is used by both, `extension/` is extension-only (background service worker), `web/` reserved for web-only entries.
     -   Connects to `http://localhost:8910`
     -   Displays real-time logs and token usage
     -   Manages crawler configuration
@@ -271,7 +271,7 @@ The project supports a fully automated build pipeline to generate standalone art
 ### 4.1 Artifacts
 -   **Backend Engine**: `adm-agent` (Single-directory executable via PyInstaller)
 -   **Client Engine**: `adm-agent-client` (Single-directory executable via PyInstaller)
--   **Frontend**: `extension/uni-admission-extension.zip` (Chrome Extension)
+-   **Frontend**: `frontend/uni-admission-extension.zip` (Chrome Extension form) — same `frontend/dist/` is also served as the Web UI by the backend at `/ui/`
 
 ### 4.2 Build Process
 Managed by `scripts/build_dist.py`:
@@ -303,7 +303,7 @@ uni-admission-agent/
 │   ├── services/           # Business logic (Crawler Service)
 │   ├── storage/            # DB Manager, Import/Export
 │   └── utils/              # Text/PDF processors
-├── extension/              # Chrome Extension source
+├── frontend/               # Vite/TS source for Chrome extension + Web UI
 ├── scripts/                # Build & Maintenance scripts
 ├── tests/                  # Pytest suite
 ├── data/                   # Default data storage (dev mode)

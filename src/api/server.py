@@ -321,24 +321,27 @@ client_rpc_broker = ClientRpcBroker(timeout_seconds=120.0)
 # Web UI static mount
 # ---------------------------------------------------------------------------
 #
-# The Chrome extension's Vite bundle works as a standalone web app too —
-# same crawl flow, same monitor view, just lacking the extension-only
-# features (auto-detect current tab URL, multi-tab automation queue).
-# Users who don't want to install the extension can open
-# `http://<host>:<port>/ui/` in any browser instead.
+# The frontend Vite bundle (`frontend/dist/`) ships two build outputs from
+# one source tree: a Chrome extension and a standalone web app. Both share
+# the same crawl flow and monitor view; the web app simply lacks the
+# extension-only features (auto-detect current tab URL, multi-tab
+# automation queue). Users who don't want to install the extension can
+# open `http://<host>:<port>/ui/` in any browser instead.
 
 def _resolve_web_ui_dir() -> Optional[Path]:
-    """Locate the built extension/web bundle across dev and frozen contexts.
+    """Locate the built frontend bundle across dev and frozen contexts.
 
     Searches, in order:
-      1. ``<repo>/extension/dist`` (dev: `npm run build` output)
-      2. ``sys._MEIPASS/web_ui`` (PyInstaller frozen build)
-      3. ``<executable_dir>/web_ui`` (sibling-of-binary install)
+      1. ``<repo>/frontend/dist`` (dev: ``npm run build`` output)
+      2. ``<repo>/extension/dist`` (legacy path before frontend/ rename)
+      3. ``sys._MEIPASS/web_ui`` (PyInstaller frozen build)
+      4. ``<executable_dir>/web_ui`` (sibling-of-binary install)
     Returns the first directory that contains a ``popup.html``.
     """
     import sys as _sys
     candidates: list[Path] = []
     repo_root = Path(__file__).resolve().parent.parent.parent
+    candidates.append(repo_root / "frontend" / "dist")
     candidates.append(repo_root / "extension" / "dist")
     meipass = getattr(_sys, "_MEIPASS", None)
     if meipass:
@@ -371,7 +374,7 @@ if _web_ui_dir is not None:
 else:
     logger.warning(
         "Web UI bundle not found — /ui/ will 404. "
-        "Run `npm run build --prefix extension` to produce it."
+        "Run `npm run build --prefix frontend` to produce it."
     )
 
 
