@@ -157,7 +157,7 @@ Go to the [Releases Page](../../releases) and download the artifact for your OS:
    AGENT_ALLOW_INTERNAL_LLM=true
    AGENT_ALLOW_EXTERNAL_LLM=true
    ```
-2. Set API keys in `.env`. `DATABASE_URL` is optional — leave it unset to use SQLite (recommended), or point at a Postgres instance if you have one.
+2. Set API keys in `.env`. `DATABASE_URL` is optional — leave it unset to use SQLite (recommended), or point at a Postgres instance if you have one. See [Database Configuration](#database-configuration) for details on storage location, switching engines, and platform caveats.
 
 ## 🤖 Using with LLM CLIs (Claude Code / Codex / Gemini CLI)
 
@@ -443,6 +443,54 @@ export PLAYWRIGHT_BROWSERS_PATH=/path/to/ms-playwright
 .\adm-agent.exe crawl --name hku --year 2026 --url https://admissions.hku.hk/programmes
 .\adm-agent.exe crawl --name hku --year 2026 --url https://admissions.hku.hk/programmes --continue 2
 ```
+
+### Database Configuration
+
+`adm-agent` supports two backends. **You do not need to configure either explicitly — SQLite is the default and works out of the box.**
+
+| | **SQLite** *(default)* | **Postgres** *(opt-in)* |
+|---|---|---|
+| `DATABASE_URL` | leave unset / commented out | `postgresql+psycopg2://user:pass@host:port/dbname` |
+| Install needed | none — built into Python stdlib | `psycopg2-binary` (already in `pyproject.toml`) + running Postgres server |
+| Where data lives | `./data/admission.db` (dev) · `~/.uni-agent/admission.db` (packaged binary) · `%USERPROFILE%\.uni-agent\admission.db` (Windows packaged) | wherever your Postgres instance stores it |
+| Schema bootstrap | `SQLModel.metadata.create_all()` once at startup | Alembic migrations to `head` on startup |
+| Best for | local single-user use, install skill, demos | multi-process deployments, shared databases |
+
+#### SQLite — what gets enabled automatically
+
+Per-connection PRAGMAs applied on every new SQLite connection:
+
+| PRAGMA | Value | Why |
+|---|---|---|
+| `journal_mode` | `WAL` | Readers don't block while a writer commits |
+| `busy_timeout` | `5000` ms | Wait instead of failing on transient locks |
+| `foreign_keys` | `ON` | SQLite default is **off** — we turn it on for referential integrity |
+| `synchronous` | `NORMAL` | Safe under WAL, faster than `FULL` |
+
+**Platform notes:**
+
+- ✅ macOS · Linux · Windows — same `.db` file format, fully portable
+- ⚠️ **Avoid syncing folders** (iCloud Drive · OneDrive · Dropbox · Google Drive) — sync clients can corrupt SQLite databases by racing fsync. The default paths above are sync-safe.
+- ⚠️ **Local disk only** — SQLite's locking is unreliable on SMB / NFS. Don't put the `.db` file on a network share.
+
+#### Postgres — when you want it
+
+Set `DATABASE_URL` and restart. Alembic migrations run automatically. To create the database the first time:
+
+```bash
+createdb uni_admission   # or use any tool you prefer
+```
+
+If you previously used Postgres and now want to switch back to SQLite, just unset `DATABASE_URL` and restart — the two engines keep separate state, so the SQLite file is created fresh. (Use the REST `/export` and `/import` endpoints if you want to copy data across.)
+
+#### Inspecting / resetting
+
+| Command | What it does |
+|---|---|
+| `./adm-agent status` | Shows DB URL, university count, program count |
+| `./adm-agent db-version` | Current Alembic revision (Postgres only; SQLite reports `sqlite-create-all`) |
+| `./adm-agent db-migrate --yes` | Apply pending migrations (no-op on SQLite) |
+| `./adm-agent db-reinit --yes` | Drop all rows — **destructive**, used during development |
 
 ### Database Status
 
