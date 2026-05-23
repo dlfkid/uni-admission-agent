@@ -159,32 +159,57 @@ Go to the [Releases Page](../../releases) and download the artifact for your OS:
    ```
 2. Set API keys in `.env`. `DATABASE_URL` is optional — leave it unset to use SQLite (recommended), or point at a Postgres instance if you have one. See [Database Configuration](#database-configuration) for details on storage location, switching engines, and platform caveats.
 
-## 🤖 Using with LLM CLIs (Claude Code / Codex / Gemini CLI)
+## 🤖 Using with LLM CLIs (Claude Code Plugin)
 
-You can drive adm-agent by **talking to your LLM CLI** — no Chrome extension, no manual REST calls. Install the included skill once:
+This repo ships as a Claude Code **plugin** — one install gives you a router skill + 4 focused sub-skills (install / crawl / diagnose / export) plus 5 slash commands. The plugin is its own marketplace, so updates flow automatically.
+
+### Install the plugin (one time)
 
 ```bash
-# Claude Code
-mkdir -p ~/.claude/skills && ln -s "$(pwd)/skills/uni-admission-crawl" ~/.claude/skills/
-
-# Codex CLI: ~/.codex/skills    Gemini CLI: ~/.gemini/skills
+# Add this repo as a marketplace + install the plugin from it
+claude plugin marketplace add https://github.com/dlfkid/uni-admission-agent
+claude plugin install uni-admission-agent
 ```
 
-Then paste a structured prompt — the LLM will check the backend, run the crawl, monitor progress, and report back. Example:
+Updates:
+
+```bash
+claude plugin update uni-admission-agent
+```
+
+### Slash commands
+
+| Command | What it does |
+|---|---|
+| `/uni-admission-agent:uni-admission-agent` | Router — describe what you want in natural language, plugin decides install / crawl / diagnose / export. |
+| `/uni-admission-agent:install` | Install / upgrade / start adm-agent (`~/.uni-agent/`, no sudo, SQLite default). |
+| `/uni-admission-agent:crawl` | Crawl a university URL — single page, single index, or paginated. |
+| `/uni-admission-agent:diagnose` | Investigate why a crawl failed — quarantine, audit funnel, stop reasons. |
+| `/uni-admission-agent:export` | Export stored data to Excel / CSV, or preview what's in the database. |
+
+### Natural-language entry
+
+You don't have to use slash commands — the plugin's router skill triggers on any adm-agent / 抓取大学 / crawl programs intent. Just describe what you want:
 
 ```
-请用 uni-admission-crawl skill 帮我抓取一个分页 index：
-
-  大学 slug:     leeds
-  入学年份:      2026
-  入口 URL:      https://courses.leeds.ac.uk/course-search/masters-courses?page=4
-  抓取模式:      paginate
-  最大页数:      5
-
+请帮我抓取利兹大学 2026 年的硕士课程，入口 https://courses.leeds.ac.uk/course-search/masters-courses
 跑完后汇报：总程序数、stop_reason、quarantine top 3 原因。
 ```
 
-Full prompt templates (detail / index / paginate / diagnostic) and installation per CLI in [`skills/uni-admission-crawl/README.md`](skills/uni-admission-crawl/README.md).
+The router will preflight (CLI installed? server running?), route to install if needed, then to crawl. No skill switching by hand.
+
+### What happens if you're not on Claude Code
+
+Codex CLI / Gemini CLI users can still consume the skills directly by symlinking:
+
+```bash
+# Codex CLI:   ~/.codex/skills/
+# Gemini CLI:  ~/.gemini/skills/
+ln -s "$(pwd)/skills/uni-admission-crawl" ~/.codex/skills/
+# repeat for using-uni-admission-agent, uni-admission-install, etc.
+```
+
+Plugin auto-update only works in Claude Code; other CLIs need `git pull` in the symlinked repo.
 
 ## 🚀 Getting Started (Development)
 1. `pyenv local 3.12.0`
