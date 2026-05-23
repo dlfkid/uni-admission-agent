@@ -40,8 +40,46 @@ def _resolve_migration_paths() -> tuple[Path, Path]:
 def _resolve_db_url(db_url: str | None = None) -> str:
     url = db_url or os.getenv("DATABASE_URL")
     if not url:
-        raise MigrationError("DATABASE_URL is not configured.")
+        from src.storage.db_manager import DatabaseManager
+        url = DatabaseManager._default_sqlite_url()  # pylint: disable=protected-access
     return url
+
+
+def _is_sqlite_url(url: str) -> bool:
+    return url.startswith("sqlite")
+
+
+def _sqlite_create_all(db_url: str) -> dict[str, Any]:
+    """Bootstrap a SQLite database via ``SQLModel.metadata.create_all``.
+
+    Alembic's migration history targets Postgres and uses dialect-specific
+    DDL (CREATE TYPE for enums, ALTER TYPE for label rename) that doesn't
+    translate to SQLite. For SQLite we simply materialise the current
+    model state in one shot — the project has no shipped data to migrate,
+    and ``create_all`` is idempotent, so re-running is safe.
+    """
+    # Importing here keeps alembic-only code paths from forcing the
+    # full SQLModel registry to import during PG-only operations.
+    from sqlmodel import SQLModel
+    # Side-effect imports so all models register with the SQLModel registry.
+    import src.models.admission  # noqa: F401  pylint: disable=unused-import
+    import src.models.ingestion  # noqa: F401  pylint: disable=unused-import
+    import src.models.requirement  # noqa: F401  pylint: disable=unused-import
+    import src.models.taxonomy  # noqa: F401  pylint: disable=unused-import
+
+    engine = create_engine(db_url)
+    try:
+        SQLModel.metadata.create_all(engine)
+    finally:
+        engine.dispose()
+    return {
+        "legacy_bootstrap": False,
+        "before_revision": None,
+        "after_revision": "sqlite-create-all",
+        "head_revision": "sqlite-create-all",
+        "pending": False,
+        "engine": "sqlite",
+    }
 
 
 def _build_config(db_url: str | None = None) -> Config:
@@ -111,8 +149,16 @@ def _bootstrap_legacy_schema(cfg: Config, db_url: str, head_revision: str) -> bo
 
 
 def get_migration_status(db_url: str | None = None) -> dict[str, Any]:
-    cfg = _build_config(db_url)
     resolved_db_url = _resolve_db_url(db_url)
+    if _is_sqlite_url(resolved_db_url):
+        return {
+            "current_revision": "sqlite-create-all",
+            "head_revision": "sqlite-create-all",
+            "pending": False,
+            "engine": "sqlite",
+        }
+
+    cfg = _build_config(db_url)
     head_revision = _get_head_revision(cfg)
     current_revision = _get_current_revision(resolved_db_url)
 
@@ -128,8 +174,13 @@ def run_db_migrations(
     revision: str = "head",
     verbose: bool = False,
 ) -> dict[str, Any]:
-    cfg = _build_config(db_url)
     resolved_db_url = _resolve_db_url(db_url)
+    if _is_sqlite_url(resolved_db_url):
+        if verbose:
+            logger.info("SQLite detected — bootstrapping via create_all (alembic skipped)")
+        return _sqlite_create_all(resolved_db_url)
+
+    cfg = _build_config(db_url)
     head_revision = _get_head_revision(cfg)
 
     if verbose:

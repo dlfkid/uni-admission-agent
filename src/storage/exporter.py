@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 
 
 def _format_deadlines(deadlines: list) -> str:
-    """Convert deadline JSONB list into a human-readable string."""
+    """Convert deadline JSON list into a human-readable string."""
     if not deadlines:
         return ""
     parts = []
@@ -33,7 +33,7 @@ def _format_deadlines(deadlines: list) -> str:
 
 
 def _format_study_options(options: list) -> str:
-    """Convert study_options JSONB list into a human-readable string."""
+    """Convert study_options JSON list into a human-readable string."""
     if not options:
         return ""
     parts = []

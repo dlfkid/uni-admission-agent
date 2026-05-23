@@ -3,8 +3,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from enum import Enum
 from sqlmodel import SQLModel, Field, Relationship, Column
-from sqlalchemy import Numeric, UniqueConstraint
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy import JSON, Numeric, UniqueConstraint
 
 # --- Enums ---
 class CurrencyCode(str, Enum):
@@ -85,17 +84,17 @@ class Program(SQLModel, table=True):
     tuition_amount: Optional[Decimal] = Field(default=None, sa_column=Column(Numeric(12, 2)))
     currency: Optional[CurrencyCode] = Field(default=None)
     
-    # Study Options: List[Dict] -> JSONB
+    # Study Options: List[Dict] -> JSON
     # structure: [{"mode": "FullTime", "duration_months": 12}, ...]
-    study_options: List[Dict[str, Any]] = Field(default_factory=list, sa_column=Column(JSONB))
+    study_options: List[Dict[str, Any]] = Field(default_factory=list, sa_column=Column(JSON))
     
-    # Deadlines: List[Dict] -> JSONB
+    # Deadlines: List[Dict] -> JSON
     # structure: [{"round": 1, "description": "Main Round", "cutoff_date": "2025-12-31T00:00:00"}]
     # Round number is assigned chronologically (1, 2, 3...)
-    deadlines: List[Dict[str, Any]] = Field(default_factory=list, sa_column=Column(JSONB))
+    deadlines: List[Dict[str, Any]] = Field(default_factory=list, sa_column=Column(JSON))
     
     # Store any extra columns from Excel as JSON
-    extra_metadata: Dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSONB))
+    extra_metadata: Dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
 
     source_url: Optional[str] = Field(default=None)
 

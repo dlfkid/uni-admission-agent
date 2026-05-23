@@ -1,8 +1,7 @@
 from datetime import datetime, timezone
 from typing import Optional, List
 
-from sqlalchemy import Column, UniqueConstraint
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy import JSON, Column, UniqueConstraint
 from sqlmodel import SQLModel, Field
 
 
@@ -22,7 +21,7 @@ class SubjectTaxonomy(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     name_en: str = Field(index=True)
     normalized_name: str = Field(index=True)
-    aliases: List[str] = Field(default_factory=list, sa_column=Column(JSONB))
+    aliases: List[str] = Field(default_factory=list, sa_column=Column(JSON))
     source: str = Field(default="seed", index=True)
     first_seen_url: Optional[str] = Field(default=None)
     confidence: Optional[float] = Field(default=None)
