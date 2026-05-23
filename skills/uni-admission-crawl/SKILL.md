@@ -1,201 +1,154 @@
 ---
 name: uni-admission-crawl
-description: Crawl university admission/program data using the adm-agent tool. Use when the user asks to scrape, crawl, extract, or fetch course lists, program details, tuition fees, or application deadlines from a specific university website. Triggers on phrases like "抓取大学课程", "爬取招生数据", "crawl university programs", "extract course data from <URL>".
+description: Execute a crawl against a specific university URL — single-page, single-index, or paginated. Use only AFTER [[using-uni-admission-agent]] has classified the user's intent as a crawl request and preflight has passed. Triggers on "抓取/爬取 <university> <URL>", "crawl programs from <URL>", "extract course data".
 ---
 
-# University Admission Data Crawler — Operator Skill
+# uni-admission-crawl — Execute a Crawl
 
-You are operating the **adm-agent** tool (https://github.com/dlfkid/uni-admission-agent). It is a Python service that crawls university websites, extracts admission/program data with LLM assistance, and stores results in a local SQLite database (Postgres is also supported via `DATABASE_URL` for advanced users). This skill teaches you how to drive it end-to-end and report results back to the user.
+You arrived here from **[[using-uni-admission-agent]]** with preflight already passed. If you didn't, stop and start over there — there's shared glossary and conventions you need first.
 
-## When to use
-
-Activate this skill when the user wants to extract structured program / course / admission data from a university website. Typical phrases:
-
-- "帮我抓取 XXX 大学的硕士课程，入口是 <URL>"
-- "用 adm-agent 爬取这个 index 页：<URL>"
-- "crawl Leeds masters courses from <URL>"
-- "extract all programs on this page"
-
-Do NOT use this skill for: scraping non-university sites, modifying the adm-agent codebase itself, or general web scraping unrelated to admission data.
+This skill takes the user from "I want data from <URL>" to "here are the results". It does **not** cover installation, failure diagnosis, or export — those are sibling skills.
 
 ---
 
-## Step 1 — Preflight: is the tool ready?
+## Step 1 — Determine crawl mode
 
-Before crawling, verify three things:
+Three patterns based on the URL and user phrasing:
 
-### 1.1 Backend is running
-
-```bash
-curl -sS --max-time 3 http://127.0.0.1:8910/health
-```
-
-- ✅ Returns `{"status":"ok",...}` → backend up, continue.
-- ❌ Connection refused / timeout → backend is down. Tell the user:
-  > 后端服务没启动。请在另一个终端运行 `adm-agent up`（会同时拉起 host 和 client），起来后告诉我，我继续。
-  
-  Do **not** try to start it yourself in the background — `adm-agent up` is a foreground process that should run in the user's terminal so they can see logs and Ctrl+C cleanly.
-
-### 1.2 Database schema is up to date
-
-```bash
-adm-agent db-version
-```
-
-- ✅ "Database schema is up to date." → continue.
-- ⚠️ "Migrations pending" → run `adm-agent db-migrate --yes` first.
-
-### 1.3 LLM provider is configured
-
-If the user mentions a specific provider, verify the API key is in `.env`. Otherwise just continue — `adm-agent check` will surface config issues if any.
-
----
-
-## Step 2 — Determine the crawl mode
-
-Three patterns based on what the user gave you:
-
-| User intent | Mode | Command |
+| Mode | When to use | Command |
 |---|---|---|
-| Single program detail page (e.g., "MSc Finance" specific page) | `detail` | `adm-agent crawl ... --page-type detail` |
-| One index page (program list, no pagination needed) | `index` | `adm-agent crawl ... --page-type index` |
-| Multi-page paginated index | `paginate` | REST `/agent/run` with `auto_paginate=true` |
+| `detail` | URL is one specific program (slug contains a degree code like `msc-finance`, `accounting-bsc`) | `adm-agent crawl ... --page-type detail` |
+| `index` | URL is a program-list / course-search page **and** user only asked for "this page" / "first page" | `adm-agent crawl ... --page-type index` |
+| `paginate` | User said "all programs" / "every page" / "complete list" / "全部" | REST `POST /agent/run` with `auto_paginate=true` |
 
-**Rules**:
-- If the URL clearly looks like a single program (slug contains a degree code like `msc-finance` or `accounting-bsc`), use `detail`.
-- If the URL is a course-search or program-list page AND the user only asked for "this page" / "first page" / "what's on this page", use `index`.
-- If the user says "all programs", "every page", "complete list", "全部" — use `paginate`.
-- When in doubt, **ask the user** which mode they want and what `max_pages` cap they're comfortable with.
+**When in doubt, ask** which mode they want and what `max_pages` cap they're comfortable with. Don't guess on paginated crawls — they cost the most.
 
 ---
 
-## Step 3 — Execute the crawl
+## Step 2 — Get the user-side parameters
 
-### 3.1 Detail or single index mode
+Before invoking the tool, you need:
+
+- **University slug** — must match `^[a-z0-9-]+$` (see [[using-uni-admission-agent]] glossary). Ask if not provided.
+- **Year** — academic year (e.g., `2026`). Default to current year if user didn't specify.
+- **Entry URL** — verbatim from the user; never invent or normalize.
+- **For paginated mode**: confirm `max_pages` upper bound. Default to 10 if user doesn't care.
+
+---
+
+## Step 3 — Execute
+
+### 3.1 Detail / single-index mode
 
 ```bash
 adm-agent crawl \
-  --name <UNIVERSITY_SLUG> \
-  --year <ACADEMIC_YEAR> \
+  --name <SLUG> \
+  --year <YEAR> \
   --url '<URL>' \
   --page-type <detail|index> \
   --continue 0
 ```
 
-The command runs synchronously and prints token usage + `0 programs imported` or `N programs imported` at the end.
+Runs synchronously. Final line will say `N programs imported` or `0 programs imported`.
 
-### 3.2 Paginated index mode
-
-For multi-page index, hit the REST API directly:
+### 3.2 Paginated mode
 
 ```bash
 curl -sS -X POST http://127.0.0.1:8910/agent/run \
   -H 'Content-Type: application/json' \
   -d '{
     "url": "<INDEX_URL>",
-    "univ_slug": "<UNIVERSITY_SLUG>",
-    "year": <ACADEMIC_YEAR>,
+    "univ_slug": "<SLUG>",
+    "year": <YEAR>,
     "page_type_hint": "index",
     "auto_paginate": true,
     "max_pages": <N>
   }'
 ```
 
-The response contains `task_id`. Poll status:
+Response includes `task_id`. **Always tell the user the expected cost before kicking off a paginated job**:
 
-```bash
-# Wait for the task to finish (poll every 10s up to ~30 min).
-for i in $(seq 1 180); do
-  state=$(curl -sS "http://127.0.0.1:8910/tasks/<TASK_ID>" | jq -r '.state')
-  case "$state" in
-    DONE|FAILED|CANCELLED) echo "Final state: $state"; break ;;
-  esac
-  sleep 10
-done
-```
-
-⚠️ **Budget warning**: Paginated crawls call the LLM once per detail page on the FIRST page (afterwards selectors are reused via SchemaLearner where applicable). For a page with 20 programs and 5 pages, expect 30-100 LLM calls and 5-15 minutes. Tell the user the expected scale BEFORE starting.
+> 这是分页爬取，预计会调用 LLM ~{20 × max_pages} 次，耗时 ~{2 × max_pages} 分钟。开始吗？
 
 ---
 
-## Step 4 — Monitor progress
+## Step 4 — Monitor (paginated only)
 
-While the crawl runs, you can tail events (for paginated mode):
+Stream events:
 
 ```bash
 curl -sN "http://127.0.0.1:8910/tasks/<TASK_ID>/events"
 ```
 
-Watch for these events that matter:
-- `pagination_progress` — "page X/Y, programs so far: N"
-- `quality_check_passed` / `quality_check_failed` — quality circuit breaker firing
-- `pagination_stopped` with `reason=url_drift` or `decreasing_yield` — early stop fired
+Events worth surfacing to the user as they arrive:
 
-If a `quality_check_failed` or `pagination_stopped` event fires, that's not a crash — it means the system intelligently stopped. Mention it in your report.
+- `pagination_progress` — "page X/Y, programs so far: N" (every page)
+- `quality_check_failed` — quality circuit breaker fired
+- `pagination_stopped` with `reason` field — early stop fired (not a crash, intentional)
+
+For terminal state, poll until `state in {DONE, FAILED, CANCELLED}`:
+
+```bash
+for i in $(seq 1 180); do
+  state=$(curl -sS "http://127.0.0.1:8910/tasks/<TASK_ID>" | jq -r '.state')
+  case "$state" in
+    DONE|FAILED|CANCELLED) break ;;
+  esac
+  sleep 10
+done
+```
 
 ---
 
-## Step 5 — Report results
+## Step 5 — Report
 
-After the crawl finishes, run the dedicated summary command:
+Run the dedicated summary command:
 
 ```bash
-adm-agent crawl-summary --university <UNIVERSITY_SLUG> --year <YEAR>
+adm-agent crawl-summary --university <SLUG> --year <YEAR>
 ```
 
-This prints a structured block with:
-- Funnel: raw → filtered → candidates → extracted
-- Quarantine count + breakdown by reason
-- `stop_reason` (with ⚠️ if anomalous: `url_drift`, `decreasing_yield`, `quality_failed`)
-- Recovered count (if critique retry kicked in)
+It prints a structured block with the audit funnel, quarantine count, `stop_reason`, and recovered count. **Quote it verbatim** to the user, then add a one-sentence interpretation:
 
-**Quote this verbatim to the user**, then add a one-sentence plain-language interpretation:
-
-| stop_reason | What to say |
+| `stop_reason` | Plain-language interpretation |
 |---|---|
 | `exhausted` | "正常爬完了所有检测到的页面。" |
-| `max_pages` | "命中了 max_pages 上限——如果还有更多程序需要抓取，可以提高这个值再跑一次。" |
-| `url_drift` | "⚠️ 检测到 URL 跳到了无关页面（不在 index pattern 内），自动停了。建议你检查下入口 URL 是否正确。" |
-| `decreasing_yield` | "⚠️ 后几页几乎没新程序了，可能已经爬完——也可能是分页规则有问题。看看 audit 里最后几页的 extracted 数。" |
-| `quality_failed` | "⚠️ 数据质量门挡下来了——可能 LLM 抽取出了一批垃圾。建议跑 `adm-agent quarantine list --university <slug>` 查具体失败原因。" |
+| `max_pages` | "命中了 max_pages 上限——还想要更多就提高这个值再跑。" |
+| `url_drift` | "⚠️ URL pattern 跑偏了，自动停了。检查下入口 URL 是否对。" |
+| `decreasing_yield` | "⚠️ 后几页几乎没新程序——可能爬完了，也可能分页规则错了。" |
+| `quality_failed` | "⚠️ 数据质量门挡了一批垃圾输出。建议跑 [[uni-admission-diagnose]] 看具体失败。" |
 
-If there are quarantine entries, also run:
+**If there's quarantine output**, don't dig into it here — that's [[uni-admission-diagnose]]'s job. Just say:
 
-```bash
-adm-agent quarantine list --university <UNIVERSITY_SLUG> --year <YEAR>
-```
+> 有 N 条进了 quarantine，要看具体失败原因吗？
 
-…and summarize the top 3 most common reasons for the user.
+…and route to diagnose if they say yes.
 
 ---
 
-## Troubleshooting cheatsheet
-
-| Symptom | Cause | What to tell user |
-|---|---|---|
-| `curl: connection refused` on /health | Backend down | "请运行 `adm-agent up`" |
-| `0 programs imported` and stop_reason is null | Page wasn't crawlable (anti-bot, JS-rendered, etc.) | Check `adm-agent quarantine list` for `extraction_failed` / `no_markdown` entries |
-| Task stuck in RUNNING for > 30 min | Likely hit a rate limit or browser hang | Tell user to check server logs; offer to cancel via `POST /tasks/<id>/cancel` |
-| `migration pending` | DB schema behind code | Run `adm-agent db-migrate --yes` |
-| University slug invalid error | Slug must match `^[a-z0-9-]+$` | Suggest a valid slug (e.g., "leeds" not "Leeds") |
-
----
-
-## Output format
-
-When done, your final message to the user should look like:
+## Final message format
 
 ```
 ✅ 抓取完成 — <university> <year>
 
-  抓取入口: <URL>
-  漏斗:    raw=X → filtered=Y → candidates=Z → extracted=N
-  Quarantine: M 条 ({reason: count, ...})
-  停止原因: <stop_reason>  [⚠️ if anomalous]
-  耗时:    ~T 分钟
-  
-{一句话人话解读 — 见 Step 5 表格}
-{如有 quarantine：top 3 失败原因 + 建议下一步}
+  入口:        <URL>
+  漏斗:        raw=X → filtered=Y → candidates=Z → extracted=N
+  Quarantine:  M 条
+  停止原因:    <stop_reason>  [⚠️ if anomalous]
+  耗时:        ~T 分钟
+
+{一句话解读}
+{如有 quarantine：提示可以诊断}
 ```
 
-Keep it short and skimmable — user might be reading it at 2 AM.
+Skimmable. Short. The user might be reading at 2 AM.
+
+---
+
+## Things you must NOT do
+
+- Don't invent URLs the user didn't provide.
+- Don't normalize the slug (e.g., don't lowercase if user already lowercased — just validate the regex).
+- Don't run a paginated crawl without telling the user the cost estimate first.
+- Don't debug a failed crawl here — route to [[uni-admission-diagnose]].
+- Don't try to start the server if /health is down — route to [[uni-admission-install]] §"Start an existing install".
