@@ -159,23 +159,61 @@ Go to the [Releases Page](../../releases) and download the artifact for your OS:
    ```
 2. Set API keys in `.env`. `DATABASE_URL` is optional — leave it unset to use SQLite (recommended), or point at a Postgres instance if you have one. See [Database Configuration](#database-configuration) for details on storage location, switching engines, and platform caveats.
 
-## 🤖 Using with LLM CLIs (Claude Code Plugin)
+## 🤖 Using with LLM CLIs (Claude Code / Codex / OpenCode)
 
-This repo ships as a Claude Code **plugin** — one install gives you a router skill + 4 focused sub-skills (install / crawl / diagnose / export) plus 5 slash commands. The plugin is its own marketplace, so updates flow automatically.
+This repo ships as a **plugin** with a router skill + 4 focused sub-skills (install / crawl / diagnose / export) plus 5 slash commands. The repo is its own marketplace so Claude Code users get auto-updates; Codex / OpenCode users get the same skills via symlink.
 
-### Install the plugin (one time)
+### One-line install (auto-detects your CLI)
 
 ```bash
-# Add this repo as a marketplace + install the plugin from it
+git clone https://github.com/dlfkid/uni-admission-agent.git ~/.uni-admission-agent && \
+  bash ~/.uni-admission-agent/install-plugin.sh
+```
+
+The installer detects `claude`, `codex`, and `opencode` and configures each one it finds. Safe to re-run — refreshes the install.
+
+### Manual install per CLI
+
+If you'd rather not run the script, use the CLI-specific path:
+
+**Claude Code** (native plugin + auto-update):
+
+```bash
 claude plugin marketplace add https://github.com/dlfkid/uni-admission-agent
 claude plugin install uni-admission-agent
 ```
 
-Updates:
+**Codex CLI** (symlink skills to the universal `~/.agents/skills/` path):
 
 ```bash
-claude plugin update uni-admission-agent
+git clone https://github.com/dlfkid/uni-admission-agent.git ~/.uni-admission-agent
+mkdir -p ~/.agents/skills
+for s in using-uni-admission-agent uni-admission-install uni-admission-crawl uni-admission-diagnose uni-admission-export; do
+  ln -sfn ~/.uni-admission-agent/skills/$s ~/.agents/skills/$s
+done
 ```
+
+**OpenCode** (symlink to `~/.config/opencode/skills/`):
+
+```bash
+git clone https://github.com/dlfkid/uni-admission-agent.git ~/.uni-admission-agent
+mkdir -p ~/.config/opencode/skills
+for s in using-uni-admission-agent uni-admission-install uni-admission-crawl uni-admission-diagnose uni-admission-export; do
+  ln -sfn ~/.uni-admission-agent/skills/$s ~/.config/opencode/skills/$s
+done
+```
+
+### Updates
+
+```bash
+# Claude Code (native)
+claude plugin update uni-admission-agent
+
+# Codex / OpenCode (rerun installer — does git pull + refreshes symlinks)
+bash ~/.uni-admission-agent/install-plugin.sh
+```
+
+Slash commands and auto-discovery only work in Claude Code; Codex/OpenCode users invoke skills through natural-language triggers (the router skill's `description` matches the same phrases).
 
 ### Slash commands
 
@@ -197,19 +235,6 @@ You don't have to use slash commands — the plugin's router skill triggers on a
 ```
 
 The router will preflight (CLI installed? server running?), route to install if needed, then to crawl. No skill switching by hand.
-
-### What happens if you're not on Claude Code
-
-Codex CLI / Gemini CLI users can still consume the skills directly by symlinking:
-
-```bash
-# Codex CLI:   ~/.codex/skills/
-# Gemini CLI:  ~/.gemini/skills/
-ln -s "$(pwd)/skills/uni-admission-crawl" ~/.codex/skills/
-# repeat for using-uni-admission-agent, uni-admission-install, etc.
-```
-
-Plugin auto-update only works in Claude Code; other CLIs need `git pull` in the symlinked repo.
 
 ## 🚀 Getting Started (Development)
 1. `pyenv local 3.12.0`

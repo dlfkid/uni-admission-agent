@@ -1,6 +1,6 @@
 ---
 name: uni-admission-install
-description: Install, upgrade, or start the adm-agent CLI on the user's machine. Use when [[using-uni-admission-agent]] preflight reports cli=missing or server=down, or when the user explicitly says "install", "set up", "upgrade", "重装", "升级", "怎么启动". Triggers on "我还没装", "帮我安装 adm-agent", "升级到新版本", "服务怎么启动".
+description: Install, upgrade, or start either (a) the adm-agent CLI binary on the user's machine, or (b) this plugin itself (skills + slash commands). Use when [[using-uni-admission-agent]] preflight reports cli=missing or server=down, or when the user says "install", "set up", "upgrade", "update plugin", "重装", "升级", "更新插件", "怎么启动". Triggers on "我还没装", "帮我安装 adm-agent", "升级到新版本", "服务怎么启动", "更新这个插件".
 ---
 
 # uni-admission-install — Install / Upgrade / Start adm-agent
@@ -13,12 +13,22 @@ This skill handles the binary lifecycle: download → extract → configure → 
 
 ## Decide: which sub-flow?
 
+First, disambiguate **what** the user wants installed/upgraded:
+
+- **The CLI binary** (`adm-agent` command, server, scraping engine) — §1 / §2 / §3
+- **This plugin itself** (the skills + slash commands you're reading right now) — §4
+
+Phrases that map to "the plugin itself": "更新插件", "升级 skill", "刷新 plugin", "update plugin", "refresh skills". If unclear, ask.
+
+For CLI binary lifecycle:
+
 | Preflight state | User intent | Sub-flow |
 |---|---|---|
-| `cli=missing` | anything | **§1 Fresh install** |
+| `cli=missing` | anything | **§1 Fresh install (CLI)** |
 | `cli=ok`, `server=down` | crawl / preview / export | **§2 Start an existing install** |
-| `cli=ok`, `server=ok` | "升级" / "upgrade" / "更新" | **§3 Upgrade in place** |
-| any | "重装" / "fix broken install" | **§1 Fresh install** (overwrites existing) |
+| `cli=ok`, `server=ok` | "升级" / "upgrade" CLI | **§3 Upgrade CLI in place** |
+| any | "重装" / "fix broken install" | **§1 Fresh install (CLI)** (overwrites existing) |
+| any | "更新插件" / "update plugin" | **§4 Update the plugin itself** |
 
 ---
 
@@ -220,6 +230,82 @@ adm-agent serve-stop
 ```
 
 Tell the user that data + config are preserved; only the binary is replaced. Show the version-to-version delta from GitHub Releases page if useful.
+
+---
+
+## §4 Update the plugin itself
+
+The plugin (skills + slash commands you're reading right now) is **separate** from the `adm-agent` CLI binary. They update on different cadences and through different mechanisms.
+
+### 4.1 Detect which CLI loaded this plugin
+
+Check which of these paths exist on the user's machine:
+
+```bash
+[ -f "$HOME/.claude/plugins/installed_plugins.json" ] && echo "claude-code"
+[ -d "$HOME/.agents/skills/using-uni-admission-agent" ] && echo "codex"
+[ -d "$HOME/.config/opencode/skills/using-uni-admission-agent" ] && echo "opencode"
+```
+
+A user may have the plugin installed in multiple CLIs simultaneously — update each.
+
+### 4.2 Update commands per CLI
+
+**Claude Code** (uses native plugin marketplace):
+
+```bash
+claude plugin update uni-admission-agent
+```
+
+Then restart Claude Code to pick up changes.
+
+**Codex / OpenCode** (uses symlinks to a git clone — usually `~/.uni-admission-agent/`):
+
+```bash
+# Find the clone (default location is $HOME/.uni-admission-agent)
+CLONE_DIR="${UNI_ADMISSION_HOME:-$HOME/.uni-admission-agent}"
+
+# If user followed the standard install, this dir exists. Pull updates.
+git -C "$CLONE_DIR" pull --ff-only
+
+# Re-run installer to refresh any new symlinks (cheap, idempotent)
+bash "$CLONE_DIR/install-plugin.sh"
+```
+
+If `$CLONE_DIR` doesn't exist, the user installed via manual symlink. Locate the source dir by following the symlink:
+
+```bash
+readlink ~/.agents/skills/using-uni-admission-agent  # Codex
+readlink ~/.config/opencode/skills/using-uni-admission-agent  # OpenCode
+```
+
+…then `git pull` in whatever parent dir that points to.
+
+### 4.3 Verify update applied
+
+After updating, ask the user to:
+
+1. Restart the CLI (skill content is loaded at session start in some CLIs)
+2. Type `/uni-admission-agent:uni-admission-agent` and check that any recently-added phrasing appears in the response
+
+If the user can't see the change, they likely didn't restart — that's the most common failure.
+
+### 4.4 What gets updated
+
+- ✅ Skill markdown (this file, crawl/diagnose/export skills, router)
+- ✅ Slash command stubs in `commands/`
+- ✅ Plugin manifests in `.claude-plugin/`
+- ❌ The `adm-agent` CLI binary — that's §3, separate update
+
+### 4.5 Don't confuse the two updates
+
+| User says | Means | Sub-flow |
+|---|---|---|
+| "新版抓取功能" / "新爬虫特性" | Tool binary | §3 |
+| "Skill 改了" / "新的 prompt 模板" / "router 更新了" | Plugin | §4 |
+| "全都更新一下" | Both | §3 first, then §4 |
+
+When in doubt, do §4 (it's faster and lower risk) and ask whether they also want §3.
 
 ---
 
