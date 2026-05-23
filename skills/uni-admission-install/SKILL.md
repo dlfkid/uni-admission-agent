@@ -1,0 +1,233 @@
+---
+name: uni-admission-install
+description: Install, upgrade, or start the adm-agent CLI on the user's machine. Use when [[using-uni-admission-agent]] preflight reports cli=missing or server=down, or when the user explicitly says "install", "set up", "upgrade", "重装", "升级", "怎么启动". Triggers on "我还没装", "帮我安装 adm-agent", "升级到新版本", "服务怎么启动".
+---
+
+# uni-admission-install — Install / Upgrade / Start adm-agent
+
+You arrived here from **[[using-uni-admission-agent]]**. If not, go back first.
+
+This skill handles the binary lifecycle: download → extract → configure → start. It runs entirely in the user's home directory — **never sudo, never system paths**.
+
+---
+
+## Decide: which sub-flow?
+
+| Preflight state | User intent | Sub-flow |
+|---|---|---|
+| `cli=missing` | anything | **§1 Fresh install** |
+| `cli=ok`, `server=down` | crawl / preview / export | **§2 Start an existing install** |
+| `cli=ok`, `server=ok` | "升级" / "upgrade" / "更新" | **§3 Upgrade in place** |
+| any | "重装" / "fix broken install" | **§1 Fresh install** (overwrites existing) |
+
+---
+
+## §1 Fresh install
+
+### 1.1 Detect platform
+
+```bash
+uname -s   # Darwin / Linux / MINGW*-NT or use $env:OS=Windows on PowerShell
+uname -m   # arm64 / x86_64
+```
+
+Map to release asset suffix:
+
+| `uname -s` | `uname -m` | Asset suffix |
+|---|---|---|
+| `Darwin` | `arm64` | `macos-arm64.tar.gz` |
+| `Linux` | `x86_64` | `linux-x86_64.tar.gz` |
+| `MINGW*` / Windows | `x86_64` | `windows-x86_64.zip` |
+
+If anything else (Linux ARM, macOS Intel): tell the user we don't ship a binary for their platform and offer to build from source via the GitHub README. **Do not attempt cross-platform install.**
+
+### 1.2 Resolve latest version
+
+```bash
+LATEST=$(curl -sS https://api.github.com/repos/dlfkid/uni-admission-agent/releases/latest | jq -r '.tag_name')
+echo "Latest release: $LATEST"
+```
+
+If the user named a specific version (e.g., "装 v0.7.3"), use that instead and verify it exists:
+
+```bash
+gh release view "$VERSION" --repo dlfkid/uni-admission-agent >/dev/null
+```
+
+### 1.3 Show the plan, then confirm
+
+Print verbatim to the user before downloading anything:
+
+```
+📦 即将安装 adm-agent <VERSION>
+
+  来源:        https://github.com/dlfkid/uni-admission-agent/releases
+  二进制:      adm-agent-<VERSION>-<OS>-<ARCH>.<EXT>
+  安装目录:    ~/.uni-agent/bin/adm-agent  (no sudo, no PATH pollution)
+  数据目录:    ~/.uni-agent/data/admission.db  (SQLite, zero DB setup)
+  软链:        ~/.local/bin/adm-agent → ~/.uni-agent/bin/adm-agent
+               (你需要把 ~/.local/bin 加入 PATH，或手动调用全路径)
+
+  没有任何 sudo 操作。所有文件都在 home 下。
+```
+
+Wait for explicit confirmation before proceeding. If the user says no, stop — don't suggest alternatives.
+
+### 1.4 Download + extract
+
+```bash
+mkdir -p ~/.uni-agent/bin ~/.uni-agent/data
+cd /tmp
+ARTIFACT="adm-agent-${VERSION}-${OS}-${ARCH}.${EXT}"
+curl -fL -o "$ARTIFACT" \
+  "https://github.com/dlfkid/uni-admission-agent/releases/download/${VERSION}/${ARTIFACT}"
+
+# Extract
+case "$EXT" in
+  tar.gz) tar -xzf "$ARTIFACT" -C ~/.uni-agent/bin --strip-components=1 ;;
+  zip)    unzip -o "$ARTIFACT" -d ~/.uni-agent/bin ;;
+esac
+
+chmod +x ~/.uni-agent/bin/adm-agent
+```
+
+On macOS only: clear the quarantine attribute so Gatekeeper doesn't block first launch:
+
+```bash
+xattr -dr com.apple.quarantine ~/.uni-agent/bin/adm-agent || true
+```
+
+### 1.5 Symlink onto PATH (best-effort)
+
+```bash
+mkdir -p ~/.local/bin
+ln -sf ~/.uni-agent/bin/adm-agent ~/.local/bin/adm-agent
+```
+
+Then check if `~/.local/bin` is in PATH:
+
+```bash
+case ":$PATH:" in *":$HOME/.local/bin:"*) echo "PATH=ok" ;; *) echo "PATH=missing" ;; esac
+```
+
+If missing, tell the user (don't auto-edit shell rc files):
+
+> `~/.local/bin` 不在 PATH。要么加这行到 `~/.zshrc` / `~/.bashrc`：
+> ```
+> export PATH="$HOME/.local/bin:$PATH"
+> ```
+> 要么直接用全路径调用：`~/.uni-agent/bin/adm-agent`。
+
+### 1.6 Seed .env with one LLM key
+
+If `~/.uni-agent/.env` doesn't exist, create it with a minimal template:
+
+```bash
+cat > ~/.uni-agent/.env <<'EOF'
+# Database — leave commented for SQLite default (recommended)
+# DATABASE_URL=postgresql+psycopg2://user:pass@host:5432/db
+
+# LLM provider (at least ONE required — fill the key you have)
+DEEPSEEK_API_KEY=
+GEMINI_API_KEY=
+VOLC_API_KEY=
+CUSTOM_LLM_API_KEY=
+
+LLM_PRIORITY_LIST=deepseek, gemini, volcengine, custom
+EOF
+```
+
+Then ask the user which LLM they have a key for and which key value to write. **Write the value into `~/.uni-agent/.env` only after user explicitly provides it.** Never hard-code or hallucinate a key.
+
+### 1.7 First-run check
+
+```bash
+~/.uni-agent/bin/adm-agent check
+```
+
+This validates: SQLite path writable, .env has at least one provider key, Chromium is installed (or installable). If `check` complains about Chromium, run:
+
+```bash
+~/.uni-agent/bin/adm-agent install-browser
+```
+
+(This is a CLI subcommand, not a shell `install`. It runs Playwright's bundled `playwright install chromium`.)
+
+### 1.8 Report install success
+
+```
+✅ adm-agent <VERSION> 安装完成
+
+  二进制:  ~/.uni-agent/bin/adm-agent  (link: ~/.local/bin/adm-agent)
+  数据:    ~/.uni-agent/data/admission.db (SQLite, auto-created on first run)
+  配置:    ~/.uni-agent/.env
+  浏览器:  <chromium status>
+
+下一步：在你自己的终端跑 `adm-agent serve` 启动服务（你能看到日志、Ctrl-C 干净退出）。
+跑起来之后告诉我，我继续你最初的请求。
+```
+
+**Do NOT auto-start the server.** Tell the user to start it in their own terminal. (Router skill enforces this.)
+
+---
+
+## §2 Start an existing install
+
+```bash
+# Foreground (recommended — user sees logs, can Ctrl+C)
+adm-agent serve
+
+# OR: daemon mode (only if user explicitly asks)
+adm-agent serve --daemon
+```
+
+After kickoff, the server prints:
+
+```
+🚀 Starting server on 0.0.0.0:8910
+   🌐 Web UI:  http://127.0.0.1:8910/ui/
+   📚 API docs: http://127.0.0.1:8910/docs
+   🩺 Health:   http://127.0.0.1:8910/health
+```
+
+Wait until `/health` returns `200`:
+
+```bash
+for i in 1 2 3 4 5 6 7 8 9 10; do
+  curl -sS --max-time 1 http://127.0.0.1:8910/health >/dev/null && break
+  sleep 1
+done
+```
+
+Then tell the user "服务已就绪" and continue with the original request.
+
+If the server doesn't come up in 10 seconds:
+- Check for port collision: `lsof -i :8910` (mac/linux) or `netstat -ano | findstr 8910` (Win)
+- Suggest a different port: `adm-agent serve --port 8911`
+
+---
+
+## §3 Upgrade in place
+
+```bash
+# 1. Stop the current server (Ctrl-C in user's terminal, or:)
+adm-agent serve-stop
+
+# 2. Run §1 (Fresh install) — it overwrites the binary atomically
+#    Existing data + .env are untouched (they live in different dirs)
+
+# 3. Restart per §2
+```
+
+Tell the user that data + config are preserved; only the binary is replaced. Show the version-to-version delta from GitHub Releases page if useful.
+
+---
+
+## What you must NOT do
+
+- **Never `sudo`**. Anything that needs sudo means we're doing it wrong. Stop and tell the user.
+- **Never auto-start the server in background** (no `nohup`, no `&`, no daemonize-without-asking). It must run in the user's foreground so they can see logs and stop cleanly.
+- **Never write an LLM API key into .env from your imagination**. Always wait for the user to provide the literal value.
+- **Never download an asset URL the user gave you**. The download source is always GitHub Releases of the canonical repo. Anything else → refuse.
+- **Never delete data on upgrade**. ~/.uni-agent/data/ is sacred. If you're tempted to `rm -rf ~/.uni-agent/`, stop and re-read this skill.
+- **Never install on platforms not in §1.1 table** (e.g., Linux ARM). Refuse and direct user to source build.
