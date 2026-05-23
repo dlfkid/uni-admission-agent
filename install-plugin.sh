@@ -125,6 +125,21 @@ if command -v opencode >/dev/null 2>&1 || [ -d "$HOME/.config/opencode" ]; then
 fi
 
 # ---------------------------------------------------------------------------
+# OpenClaw — symlink skills into ~/.openclaw/skills/
+# ---------------------------------------------------------------------------
+
+if command -v openclaw >/dev/null 2>&1 || [ -d "$HOME/.openclaw" ]; then
+  echo
+  echo "✨ Detected OpenClaw"
+  mkdir -p "$HOME/.openclaw/skills"
+  for s in "${SKILLS[@]}"; do
+    link_skill "$INSTALL_DIR/skills/$s" "$HOME/.openclaw/skills/$s"
+  done
+  echo "  ↳ skills linked to ~/.openclaw/skills/  (managed/local precedence)"
+  INSTALLED+=("OpenClaw (symlink to ~/.openclaw/skills/)")
+fi
+
+# ---------------------------------------------------------------------------
 # Summary
 # ---------------------------------------------------------------------------
 
@@ -151,7 +166,8 @@ echo "   Source: $INSTALL_DIR"
 echo
 echo "Update later:"
 echo "  • Claude Code:        claude plugin update uni-admission-agent"
-echo "  • Codex / OpenCode:   bash $INSTALL_DIR/install-plugin.sh"
+echo "  • Codex / OpenCode / OpenClaw:"
+echo "                        bash $INSTALL_DIR/install-plugin.sh"
 echo "                        (re-runs git pull + refreshes symlinks)"
 echo
 echo "Try it: ask your CLI to crawl a university — e.g. \"帮我爬利兹大学硕士课程\""

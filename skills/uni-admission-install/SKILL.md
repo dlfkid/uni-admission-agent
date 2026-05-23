@@ -51,18 +51,39 @@ Map to release asset suffix:
 
 If anything else (Linux ARM, macOS Intel): tell the user we don't ship a binary for their platform and offer to build from source via the GitHub README. **Do not attempt cross-platform install.**
 
-### 1.2 Resolve latest version
+### 1.2 Resolve version
 
-```bash
-LATEST=$(curl -sS https://api.github.com/repos/dlfkid/uni-admission-agent/releases/latest | jq -r '.tag_name')
-echo "Latest release: $LATEST"
-```
-
-If the user named a specific version (e.g., "装 v0.7.3"), use that instead and verify it exists:
+If the user named a specific version (e.g., "装 v0.7.3"), use that and verify it exists, skipping the rest of this section:
 
 ```bash
 gh release view "$VERSION" --repo dlfkid/uni-admission-agent >/dev/null
 ```
+
+Otherwise resolve the latest release. **First try the "Latest" badge**:
+
+```bash
+LATEST=$(curl -sS https://api.github.com/repos/dlfkid/uni-admission-agent/releases/latest \
+  | jq -r '.tag_name // empty')
+```
+
+GitHub's `/releases/latest` endpoint returns only the release explicitly tagged with the "Latest" badge — it excludes drafts and pre-releases unless the maintainer marked one as latest. **If `$LATEST` is empty, fall back to the most recent tag**:
+
+```bash
+if [ -z "$LATEST" ]; then
+  echo "No 'Latest' release tagged — falling back to most recent tag"
+  LATEST=$(curl -sS "https://api.github.com/repos/dlfkid/uni-admission-agent/releases?per_page=1" \
+    | jq -r '.[0].tag_name // empty')
+fi
+if [ -z "$LATEST" ]; then
+  echo "❌ No releases found at all. Cannot install."
+  exit 1
+fi
+echo "Resolved version: $LATEST"
+```
+
+This fallback matters because:
+- New projects with only `prerelease` tags would otherwise have `/latest` return 404
+- A maintainer who forgot to re-tag "Latest" on a fresh release won't break installs
 
 ### 1.3 Show the plan, then confirm
 
@@ -245,6 +266,7 @@ Check which of these paths exist on the user's machine:
 [ -f "$HOME/.claude/plugins/installed_plugins.json" ] && echo "claude-code"
 [ -d "$HOME/.agents/skills/using-uni-admission-agent" ] && echo "codex"
 [ -d "$HOME/.config/opencode/skills/using-uni-admission-agent" ] && echo "opencode"
+[ -d "$HOME/.openclaw/skills/using-uni-admission-agent" ] && echo "openclaw"
 ```
 
 A user may have the plugin installed in multiple CLIs simultaneously — update each.
@@ -259,7 +281,7 @@ claude plugin update uni-admission-agent
 
 Then restart Claude Code to pick up changes.
 
-**Codex / OpenCode** (uses symlinks to a git clone — usually `~/.uni-admission-agent/`):
+**Codex / OpenCode / OpenClaw** (uses symlinks to a git clone — usually `~/.uni-admission-agent/`):
 
 ```bash
 # Find the clone (default location is $HOME/.uni-admission-agent)
@@ -275,8 +297,9 @@ bash "$CLONE_DIR/install-plugin.sh"
 If `$CLONE_DIR` doesn't exist, the user installed via manual symlink. Locate the source dir by following the symlink:
 
 ```bash
-readlink ~/.agents/skills/using-uni-admission-agent  # Codex
-readlink ~/.config/opencode/skills/using-uni-admission-agent  # OpenCode
+readlink ~/.agents/skills/using-uni-admission-agent              # Codex
+readlink ~/.config/opencode/skills/using-uni-admission-agent     # OpenCode
+readlink ~/.openclaw/skills/using-uni-admission-agent            # OpenClaw
 ```
 
 …then `git pull` in whatever parent dir that points to.

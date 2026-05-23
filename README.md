@@ -159,9 +159,9 @@ Go to the [Releases Page](../../releases) and download the artifact for your OS:
    ```
 2. Set API keys in `.env`. `DATABASE_URL` is optional — leave it unset to use SQLite (recommended), or point at a Postgres instance if you have one. See [Database Configuration](#database-configuration) for details on storage location, switching engines, and platform caveats.
 
-## 🤖 Using with LLM CLIs (Claude Code / Codex / OpenCode)
+## 🤖 Using with LLM CLIs (Claude Code / Codex / OpenCode / OpenClaw)
 
-This repo ships as a **plugin** with a router skill + 4 focused sub-skills (install / crawl / diagnose / export) plus 5 slash commands. The repo is its own marketplace so Claude Code users get auto-updates; Codex / OpenCode users get the same skills via symlink.
+This repo ships as a **plugin** with a router skill + 4 focused sub-skills (install / crawl / diagnose / export) plus 5 slash commands. The repo is its own marketplace so Claude Code users get auto-updates; Codex / OpenCode / OpenClaw users get the same skills via symlink.
 
 ### One-line install (auto-detects your CLI)
 
@@ -170,7 +170,7 @@ git clone https://github.com/dlfkid/uni-admission-agent.git ~/.uni-admission-age
   bash ~/.uni-admission-agent/install-plugin.sh
 ```
 
-The installer detects `claude`, `codex`, and `opencode` and configures each one it finds. Safe to re-run — refreshes the install.
+The installer detects `claude`, `codex`, `opencode`, and `openclaw` and configures each one it finds. Safe to re-run — refreshes the install.
 
 ### Manual install per CLI
 
@@ -203,13 +203,23 @@ for s in using-uni-admission-agent uni-admission-install uni-admission-crawl uni
 done
 ```
 
+**OpenClaw** (symlink to `~/.openclaw/skills/` — AgentSkills-compatible managed/local path):
+
+```bash
+git clone https://github.com/dlfkid/uni-admission-agent.git ~/.uni-admission-agent
+mkdir -p ~/.openclaw/skills
+for s in using-uni-admission-agent uni-admission-install uni-admission-crawl uni-admission-diagnose uni-admission-export; do
+  ln -sfn ~/.uni-admission-agent/skills/$s ~/.openclaw/skills/$s
+done
+```
+
 ### Updates
 
 ```bash
 # Claude Code (native)
 claude plugin update uni-admission-agent
 
-# Codex / OpenCode (rerun installer — does git pull + refreshes symlinks)
+# Codex / OpenCode / OpenClaw (rerun installer — does git pull + refreshes symlinks)
 bash ~/.uni-admission-agent/install-plugin.sh
 ```
 
