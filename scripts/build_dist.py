@@ -429,7 +429,8 @@ def _write_readme(dest: Path, exe_name: str) -> None:
 
     1. PREREQUISITES
     ────────────────
-    • PostgreSQL 14+ running.
+    • Database: none required — a local SQLite file is created on first run.
+      (Optional: set DATABASE_URL=postgresql+... in .env to use Postgres instead.)
     • Chromium browser (automatically installed on first run check).
 
     2. macOS USERS — REMOVE QUARANTINE
@@ -672,7 +673,8 @@ def _write_backend_readme(dest: Path, exe_name: str) -> None:
 
     1. PREREQUISITES
     ────────────────
-    • PostgreSQL 14+ running.
+    • Database: none required — a local SQLite file is created on first run.
+      (Optional: set DATABASE_URL=postgresql+... in .env to use Postgres instead.)
     • Chrome extension: Download separately from GitHub Releases
 
     2. macOS USERS — REMOVE QUARANTINE

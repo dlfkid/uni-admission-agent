@@ -5,7 +5,7 @@ description: Crawl university admission/program data using the adm-agent tool. U
 
 # University Admission Data Crawler — Operator Skill
 
-You are operating the **adm-agent** tool (https://github.com/dlfkid/uni-admission-agent). It is a Python service that crawls university websites, extracts admission/program data with LLM assistance, and stores results in a Postgres / SQLite database. This skill teaches you how to drive it end-to-end and report results back to the user.
+You are operating the **adm-agent** tool (https://github.com/dlfkid/uni-admission-agent). It is a Python service that crawls university websites, extracts admission/program data with LLM assistance, and stores results in a local SQLite database (Postgres is also supported via `DATABASE_URL` for advanced users). This skill teaches you how to drive it end-to-end and report results back to the user.
 
 ## When to use
 

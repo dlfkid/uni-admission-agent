@@ -2,8 +2,7 @@ from typing import Optional, List, Dict, Any
 from datetime import datetime, timezone
 from enum import Enum
 
-from sqlalchemy import UniqueConstraint, Column, Enum as SqlEnum
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy import JSON, UniqueConstraint, Column, Enum as SqlEnum
 from sqlmodel import SQLModel, Field, Relationship
 
 from src.models.admission import StudyMode
@@ -47,7 +46,7 @@ class SubjectDim(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     normalized_name: str = Field(index=True)
     canonical_name: str = Field(index=True)
-    aliases: List[str] = Field(default_factory=list, sa_column=Column(JSONB))
+    aliases: List[str] = Field(default_factory=list, sa_column=Column(JSON))
     updated_at: datetime = Field(default_factory=_utc_now)
 
     requirement_records: List["ProgramRequirement"] = Relationship(back_populates="subject_dim")
@@ -111,7 +110,7 @@ class RequirementVersion(SQLModel, table=True):
     valid_from: datetime = Field(default_factory=_utc_now, index=True)
     valid_to: Optional[datetime] = Field(default=None, index=True)
     change_summary: Optional[str] = Field(default=None)
-    diff_payload: Dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSONB))
+    diff_payload: Dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
     created_at: datetime = Field(default_factory=_utc_now)
 
     program_id: int = Field(foreign_key="program.id", index=True)

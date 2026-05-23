@@ -2,8 +2,7 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
-from sqlalchemy import Column, Enum as SqlEnum, UniqueConstraint
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy import JSON, Column, Enum as SqlEnum, UniqueConstraint
 from sqlmodel import Field, Relationship, SQLModel
 
 
@@ -72,8 +71,8 @@ class IngestionJob(SQLModel, table=True):
         sa_column=Column(INGESTION_STAGE_ENUM, nullable=True, index=True),
     )
 
-    request_payload: Dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSONB))
-    context_payload: Dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSONB))
+    request_payload: Dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
+    context_payload: Dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
 
     error_message: Optional[str] = Field(default=None)
 
@@ -100,8 +99,8 @@ class IngestionTask(SQLModel, table=True):
     state: IngestionTaskState = Field(default=IngestionTaskState.PENDING, index=True)
     idempotency_key: Optional[str] = Field(default=None, index=True)
 
-    input_payload: Dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSONB))
-    output_payload: Dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSONB))
+    input_payload: Dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
+    output_payload: Dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
     error_message: Optional[str] = Field(default=None)
 
     attempt_count: int = Field(default=0)

@@ -121,13 +121,13 @@ Go to the [Releases Page](../../releases) and download the artifact for your OS:
    > **macOS Note**: If you see "System cannot verify the developer", go to **Settings > Privacy & Security** and click "Allow Anyway".
 
 ### 3. Setup
-The agent needs a database connection.
-1. Make sure you have **PostgreSQL** running.
-2. Create a `.env` file in the same folder as the executable. You can copy the content below:
+1. Create a `.env` file next to the executable. The minimum is one LLM provider key — the database needs no extra setup (a local SQLite file is created automatically at first start). Copy the content below:
    ```bash
-   # PostgreSQL Connection URL
-   # Format: postgresql+psycopg2://user:password@host:port/dbname
-   DATABASE_URL=postgresql+psycopg2://postgres:postgres@localhost:5432/uni_admission
+   # Database URL (optional)
+   # Default — leave commented: a local SQLite file is created at
+   # ./data/admission.db (dev) or ~/.uni-agent/admission.db (frozen).
+   # Advanced — point at a Postgres instance (requires psycopg2):
+   #   DATABASE_URL=postgresql+psycopg2://postgres:postgres@localhost:5432/uni_admission
 
    # Gemini APIKey config
    GEMINI_API_KEY=your_gemini_api_key_here
@@ -157,7 +157,7 @@ The agent needs a database connection.
    AGENT_ALLOW_INTERNAL_LLM=true
    AGENT_ALLOW_EXTERNAL_LLM=true
    ```
-3. Set your `DATABASE_URL` and API keys in `.env`.
+2. Set API keys in `.env`. `DATABASE_URL` is optional — leave it unset to use SQLite (recommended), or point at a Postgres instance if you have one.
 
 ## 🤖 Using with LLM CLIs (Claude Code / Codex / Gemini CLI)
 

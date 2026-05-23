@@ -7,10 +7,12 @@ import threading
 from datetime import datetime, timezone
 from typing import Any, Optional, Tuple, List, Dict
 
-from sqlalchemy import inspect as sa_inspect
+from sqlalchemy import event, inspect as sa_inspect
 from sqlalchemy import text
 from sqlmodel import create_engine, Session, select, SQLModel, col
 from sqlalchemy_utils import database_exists, create_database
+
+from src.core.paths import get_data_dir
 
 from src.models.admission import (
     University,
@@ -51,6 +53,25 @@ logger = logging.getLogger(__name__)
 patch_psycopg2_for_gbk()
 
 
+def _attach_sqlite_pragmas(engine) -> None:
+    """Apply per-connection PRAGMAs for SQLite engines.
+
+    WAL gives concurrent readers while a writer is committing, busy_timeout
+    waits instead of failing on transient locks, and foreign_keys turns on
+    referential integrity enforcement (off by default in SQLite).
+    """
+    @event.listens_for(engine, "connect")
+    def _set_pragmas(dbapi_connection, _connection_record):  # noqa: ANN001
+        cursor = dbapi_connection.cursor()
+        try:
+            cursor.execute("PRAGMA journal_mode=WAL")
+            cursor.execute("PRAGMA busy_timeout=5000")
+            cursor.execute("PRAGMA foreign_keys=ON")
+            cursor.execute("PRAGMA synchronous=NORMAL")
+        finally:
+            cursor.close()
+
+
 class DatabaseManager:
     _instance: Optional["DatabaseManager"] = None
     _lock = threading.Lock()
@@ -86,6 +107,17 @@ class DatabaseManager:
             url = f"{url}{sep}client_encoding=utf8"
         return url
 
+    @staticmethod
+    def _default_sqlite_url() -> str:
+        """Resolve the default SQLite URL, ensuring the parent dir exists.
+
+        Dev mode: ``<project>/data/admission.db``.
+        Frozen mode: ``~/.uni-agent/admission.db`` (see ``get_data_dir``).
+        """
+        data_dir = get_data_dir()
+        data_dir.mkdir(parents=True, exist_ok=True)
+        return f"sqlite:///{data_dir / 'admission.db'}"
+
     def init_db(self, db_url: Optional[str] = None):
         """Initialize DB engine and sync minimal additive schema drift."""
         if getattr(self, "engine", None):
@@ -94,16 +126,28 @@ class DatabaseManager:
         if not db_url:
             db_url = os.getenv("DATABASE_URL")
             if not db_url:
-                db_url = (
-                    "postgresql+psycopg2://postgres:postgres@localhost:5432/uni_admission"
-                )
+                db_url = self._default_sqlite_url()
 
         db_url = self._sanitize_db_url(db_url)
 
-        self.engine = create_engine(
-            db_url,
-            connect_args={"client_encoding": "utf8"},
-        )
+        # Dialect-specific engine knobs:
+        #   • Postgres needs explicit utf8 client_encoding (matches
+        #     _sanitize_db_url URL injection)
+        #   • SQLite needs no connect_args; PRAGMAs are applied on each
+        #     new connection via an event listener below.
+        connect_args: dict[str, Any] = {}
+        if db_url.startswith("postgresql"):
+            connect_args["client_encoding"] = "utf8"
+        # `check_same_thread=False` lets SQLAlchemy share a connection
+        # across the FastAPI thread pool — safe because the connection
+        # is serialized by the pool, not by SQLite's check.
+        elif db_url.startswith("sqlite"):
+            connect_args["check_same_thread"] = False
+
+        self.engine = create_engine(db_url, connect_args=connect_args)
+
+        if self.engine.dialect.name == "sqlite":
+            _attach_sqlite_pragmas(self.engine)
 
         if not database_exists(self.engine.url):
             logger.info("Database does not exist. Creating: %s", self.engine.url)
