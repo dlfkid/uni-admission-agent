@@ -1,0 +1,21 @@
+{
+  "name": "uni-admission-agent",
+  "metadata": {
+    "description": "Plugin marketplace for the uni-admission-agent crawler tool",
+    "version": "0.1.0"
+  },
+  "plugins": [
+    {
+      "name": "uni-admission-agent",
+      "source": "./",
+      "description": "Crawl university admission/program data via natural language. Skills cover install, crawl, diagnose, and export.",
+      "version": "0.1.0",
+      "category": "data-extraction",
+      "keywords": [
+        "crawler",
+        "university-admission",
+        "llm-agent"
+      ]
+    }
+  ]
+}

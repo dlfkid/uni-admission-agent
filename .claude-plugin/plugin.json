@@ -1,0 +1,15 @@
+{
+  "name": "uni-admission-agent",
+  "description": "Crawl university admission/program data via natural language. Wraps the adm-agent CLI with skills for install, crawl, diagnose, and export.",
+  "version": "0.1.0",
+  "homepage": "https://github.com/dlfkid/uni-admission-agent",
+  "repository": "https://github.com/dlfkid/uni-admission-agent",
+  "license": "MIT",
+  "keywords": [
+    "crawler",
+    "university-admission",
+    "data-extraction",
+    "llm-agent",
+    "education-data"
+  ]
+}
