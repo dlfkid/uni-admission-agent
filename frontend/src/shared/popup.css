@@ -1260,3 +1260,49 @@ input[type="range"]::-moz-range-thumb {
     transform: rotate(360deg);
   }
 }
+
+/* ---------------------------------------------------------------------
+ * Platform-specific visibility.
+ *
+ * The same Vite bundle powers both the Chrome extension popup and the
+ * standalone web UI served at /ui/. In web mode, elements that depend
+ * on extension-only APIs (chrome.tabs, chrome.scripting,
+ * background-tab automation) are hidden via these rules.
+ *
+ * The body class is set by `applyPlatformBodyClass()` in platform.ts
+ * during init.
+ * --------------------------------------------------------------------- */
+
+body.platform-web .extension-only {
+  display: none !important;
+}
+
+/* ---------------------------------------------------------------------
+ * Browser source picker — selects between built-in server fetcher and
+ * a connected adm-agent-client (Playwright) for anti-detection.
+ * --------------------------------------------------------------------- */
+
+.browser-source-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.browser-source-row select {
+  flex: 1;
+  min-width: 0;
+}
+
+.source-status {
+  font-size: 0.78rem;
+  opacity: 0.8;
+  white-space: nowrap;
+}
+
+.source-status.connected {
+  color: #66ddaa;
+}
+
+.source-status.unavailable {
+  color: #ffb27a;
+}

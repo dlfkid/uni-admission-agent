@@ -1,4 +1,4 @@
-import type { CrawlPayload, ShowStatusFn, TaskInfo } from "./types";
+import type { BrowserProvider, CrawlPayload, ShowStatusFn, TaskInfo } from "./types";
 
 // ---------------------------------------------------------------------------
 //  Pure utilities
@@ -61,6 +61,10 @@ export interface CrawlApiCallbacks {
         hintTopK: number;
         overrideEnabled: boolean;
     };
+    // Returns the user-selected browser source. The popup auto-defaults
+    // to "client" when at least one adm-agent-client is connected (better
+    // anti-detection), otherwise "server". User can override via dropdown.
+    getBrowserSource?: () => { provider: BrowserProvider; clientId?: string };
     reinit: () => Promise<void>;
 }
 
@@ -129,6 +133,14 @@ export async function submitCrawl(
         payload.export_path = opts.exportPath;
     }
 
+    const browserSource = callbacks.getBrowserSource?.();
+    if (browserSource) {
+        payload.browser_provider = browserSource.provider;
+        if (browserSource.clientId) {
+            payload.client_id = browserSource.clientId;
+        }
+    }
+
     const res = await fetch(`${apiBase}/crawl`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -172,6 +184,15 @@ export async function submitAgentRun(
     callbacks: CrawlApiCallbacks,
 ): Promise<string> {
     const taxonomyOptions = callbacks.getTaxonomyOptions();
+    const browserSource = callbacks.getBrowserSource?.();
+    const policyProfile: Record<string, unknown> = {
+        taxonomy_keep_threshold: taxonomyOptions.lowThreshold,
+        taxonomy_auto_threshold: taxonomyOptions.highThreshold,
+        auto_run_max_candidates: taxonomyOptions.hintTopK * 10,
+    };
+    if (browserSource) {
+        policyProfile.prefer_browser_provider = browserSource.provider;
+    }
     const payload = {
         url: opts.url,
         univ_slug: opts.slug,
@@ -179,12 +200,8 @@ export async function submitAgentRun(
         page_type_hint: opts.pageType,
         auto_paginate: opts.autoPaginate ?? false,
         runtime: "pydanticai",
-        autonomous: true,  // Extension uses autonomous mode (server-side LLM drives all decisions)
-        policy_profile: {
-            taxonomy_keep_threshold: taxonomyOptions.lowThreshold,
-            taxonomy_auto_threshold: taxonomyOptions.highThreshold,
-            auto_run_max_candidates: taxonomyOptions.hintTopK * 10,
-        },
+        autonomous: true,
+        policy_profile: policyProfile,
     };
 
     const res = await fetch(`${apiBase}/agent/run`, {

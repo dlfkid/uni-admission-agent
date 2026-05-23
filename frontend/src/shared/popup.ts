@@ -17,6 +17,8 @@
 
 import {
     batchSummaryText,
+    browserProviderSelect,
+    browserSourceStatus,
     closeConfigBtn,
     closeExportBtn,
     closePreviewBtn,
@@ -98,7 +100,8 @@ import {
     initSlugAutocomplete,
 } from "./popup/slugAutocomplete";
 import { initCrawlFlow } from "./popup/crawlFlow";
-import type { TaskInfo } from "./popup/types";
+import { applyPlatformBodyClass, isExtensionContext } from "./platform";
+import type { BrowserProvider, ClientInfo, TaskInfo } from "./popup/types";
 
 const API_BASE = "http://localhost:8910";
 
@@ -109,6 +112,7 @@ const API_BASE = "http://localhost:8910";
 let currentWindowId: number | null = null;
 let monitorFlow: ReturnType<typeof initMonitorFlow> | null = null;
 let serverAgentEnabled = false;  // Whether server currently allows the default agent path
+let connectedClients: ClientInfo[] = [];
 
 // ---------------------------------------------------------------------------
 //  UI Helpers
@@ -118,6 +122,7 @@ function setFormEnabled(enabled: boolean) {
     slugInput.disabled = !enabled;
     yearInput.disabled = !enabled;
     pageTypeSelect.disabled = !enabled;
+    browserProviderSelect.disabled = !enabled;
     exportMdCheckbox.disabled = !enabled;
     exportPathInput.disabled = !enabled;
     taxonomyEnabledCheckbox.disabled = !enabled;
@@ -199,6 +204,76 @@ function getTaxonomyOptions(): {
     };
 }
 
+// ---------------------------------------------------------------------------
+//  Browser source — server vs connected adm-agent-client (Playwright).
+//
+//  Default behavior: when at least one client is connected, the popup
+//  defaults to "client" (better anti-detection). Otherwise "server".
+//  The user can override at any time via the dropdown; their last
+//  explicit choice is remembered for the session.
+// ---------------------------------------------------------------------------
+
+let userOverrodeBrowserProvider = false;
+
+function getBrowserSource(): { provider: BrowserProvider; clientId?: string } {
+    const provider = (browserProviderSelect.value as BrowserProvider) || "server";
+    if (provider === "client" && connectedClients.length > 0) {
+        return { provider, clientId: connectedClients[0].client_id };
+    }
+    return { provider };
+}
+
+function updateBrowserSourceStatus(): void {
+    const provider = browserProviderSelect.value as BrowserProvider;
+    const count = connectedClients.length;
+    browserSourceStatus.classList.remove("connected", "unavailable");
+    if (provider === "client") {
+        if (count > 0) {
+            const label = connectedClients[0].client_name || connectedClients[0].client_id;
+            browserSourceStatus.textContent = count === 1
+                ? `Connected: ${label}`
+                : `${count} clients available`;
+            browserSourceStatus.classList.add("connected");
+        } else {
+            browserSourceStatus.textContent = "⚠ No client connected — will fall back to server";
+            browserSourceStatus.classList.add("unavailable");
+        }
+        return;
+    }
+    if (count > 0) {
+        browserSourceStatus.textContent = `${count} client${count > 1 ? "s" : ""} available`;
+    } else {
+        browserSourceStatus.textContent = "No client connected";
+    }
+}
+
+async function refreshConnectedClients(): Promise<void> {
+    try {
+        const res = await fetch(`${API_BASE}/clients`);
+        if (!res.ok) {
+            connectedClients = [];
+        } else {
+            const data = await res.json();
+            connectedClients = Array.isArray(data) ? (data as ClientInfo[]) : [];
+        }
+    } catch (err) {
+        console.warn("Failed to fetch /clients:", err);
+        connectedClients = [];
+    }
+    // Only auto-pick default if user hasn't explicitly chosen yet.
+    if (!userOverrodeBrowserProvider) {
+        browserProviderSelect.value = connectedClients.length > 0 ? "client" : "server";
+    }
+    updateBrowserSourceStatus();
+}
+
+function initBrowserSourceListeners(): void {
+    browserProviderSelect.addEventListener("change", () => {
+        userOverrodeBrowserProvider = true;
+        updateBrowserSourceStatus();
+    });
+}
+
 function switchView(view: "input" | "link-selection" | "monitor") {
     inputSection.classList.add("hidden");
     linkSelectionSection.classList.add("hidden");
@@ -266,8 +341,16 @@ function updateLogsState(expanded: boolean) {
 /**
  * Update the displayed URL from the current active tab.
  * Called on init and whenever tab changes.
+ *
+ * In web mode (no chrome.tabs), shows a placeholder asking the user to
+ * paste a URL into the input field below — there's no concept of
+ * "current tab" outside the extension popup.
  */
 function updateCurrentUrl() {
+    if (!isExtensionContext) {
+        urlDisplay.textContent = "(paste URL below — web mode)";
+        return;
+    }
     chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
         const tab = tabs[0];
         if (tab?.url) {
@@ -284,8 +367,10 @@ function updateCurrentUrl() {
 
 /**
  * Setup listeners to auto-update URL when user switches tabs or navigates.
+ * Extension-only — web mode has no tab concept.
  */
 function setupTabListeners() {
+    if (!isExtensionContext) return;
     // When user switches to a different tab
     chrome.tabs.onActivated.addListener((activeInfo) => {
         // Only update if it's in our window
@@ -309,6 +394,10 @@ function setupTabListeners() {
 // ---------------------------------------------------------------------------
 
 async function init() {
+    // Tag <body> with platform-extension or platform-web so CSS can
+    // hide extension-only UI in web mode.
+    applyPlatformBodyClass();
+
     // Restore cached preferences
     restoreCachedPreferences({
         updateTaxonomySettingsVisibility,
@@ -333,6 +422,12 @@ async function init() {
         console.warn("Failed to check server agent status:", err);
         serverAgentEnabled = false;
     }
+
+    // Detect connected adm-agent-client(s) and set the browser-source
+    // default ("client" if any connected, else "server"). Runs in
+    // parallel with university load — both hit the same backend but
+    // don't depend on each other.
+    await refreshConnectedClients();
 
     // Load university slugs for autocomplete
     await loadUniversities(API_BASE);
@@ -397,12 +492,14 @@ initCrawlFlow({
     appendPreflightLog,
     clearPreflightLogs,
     getTaxonomyOptions,
+    getBrowserSource,
     getMonitorFlow: () => monitorFlow,
     serverAgentEnabled: () => serverAgentEnabled,
     reinit: init,
 });
 
 initPreferenceListeners({ updateTaxonomySettingsVisibility });
+initBrowserSourceListeners();
 
 init();
 

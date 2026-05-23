@@ -21,6 +21,7 @@ import {
     urlDisplay,
     yearInput,
 } from "./dom";
+import { isExtensionContext } from "../platform";
 import { DETAIL_BATCH_SIZE } from "./preferences";
 import { initLinkSelectionFlow } from "./linkSelectionFlow";
 import { captureDetailPagesBatch, chunkUrls, clampAutomationConcurrency } from "./automationQueue";
@@ -31,7 +32,7 @@ import {
     waitForTaskTerminal,
     type CrawlApiCallbacks,
 } from "./crawlApi";
-import type { AnalyzeResult, CrawlPayload, ShowStatusFn } from "./types";
+import type { AnalyzeResult, BrowserProvider, CrawlPayload, ShowStatusFn } from "./types";
 import type { initMonitorFlow } from "./monitorFlow";
 
 type MonitorFlow = ReturnType<typeof initMonitorFlow>;
@@ -66,6 +67,7 @@ export interface CrawlFlowDeps {
         hintTopK: number;
         overrideEnabled: boolean;
     };
+    getBrowserSource?: () => { provider: BrowserProvider; clientId?: string };
     getMonitorFlow: () => MonitorFlow | null;
     serverAgentEnabled: () => boolean;
     reinit: () => Promise<void>;
@@ -76,6 +78,11 @@ export interface CrawlFlowDeps {
 // ---------------------------------------------------------------------------
 
 export async function getCurrentPageHTML(): Promise<string | null> {
+    // Web mode has no concept of a "current tab" — return null so callers
+    // fall back to server-side fetching of the URL the user typed.
+    if (!isExtensionContext) {
+        return null;
+    }
     return new Promise((resolve) => {
         chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
             const tab = tabs[0];
@@ -118,6 +125,7 @@ export function initCrawlFlow(deps: CrawlFlowDeps): void {
         appendPreflightLog,
         clearPreflightLogs,
         getTaxonomyOptions,
+        getBrowserSource,
         getMonitorFlow,
         serverAgentEnabled,
         reinit,
@@ -127,6 +135,7 @@ export function initCrawlFlow(deps: CrawlFlowDeps): void {
         showStatus,
         setFormEnabled,
         getTaxonomyOptions,
+        getBrowserSource,
         reinit,
     };
 

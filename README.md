@@ -794,29 +794,36 @@ Minimal OpenClaw message (copy-paste):
 请在当前环境完成 adm-agent-client 配置并上线：1) 运行 adm-agent-client init（host=<SERVE_HOST>, port=<SERVE_PORT>, client_name=当前机器名）；2) 运行 adm-agent-client status 并确认配置可读取；3) 运行 adm-agent-client start --continuous；4) 若连接失败先检查 host/port 与本机防火墙。请逐步执行并回显每一步结果。
 ```
 
-### Chrome Extension
+### Frontend (Chrome Extension + Web UI)
 
-The extension provides a UI to interact with the agent.
+The frontend is a single Vite bundle that ships in two forms:
+
+- **Chrome Extension** — load `frontend/dist/` as unpacked extension (auto-detects current tab URL, multi-tab automation).
+- **Web UI** — same bundle served by the backend at `http://<host>:<port>/ui/`. Open in any browser; no extension install required.
+
+Source layout: `frontend/src/{shared,extension,web}/` — `shared/` holds the UI used by both targets, `extension/` is extension-only (background service worker), `web/` is reserved for web-only entries.
 
 **Build & Install:**
-1.  **Build the extension package**:
+1.  **Build the frontend bundle**:
     ```bash
-    cd extension
+    cd frontend
     npm install  # First time only
     npm run build
     ```
     This will generate:
-    - `extension/dist/`: The unpackaged extension folder.
-    - `extension/uni-admission-extension.zip`: A ready-to-share zip file.
+    - `frontend/dist/`: The unpacked bundle (load this as the Chrome extension; served at `/ui/` by the backend).
+    - `frontend/uni-admission-extension.zip`: A ready-to-share zip file for the extension form.
 
-2.  **Load into Chrome**:
+2.  **Load into Chrome** (extension form):
     - Open Chrome and navigate to `chrome://extensions`.
     - Enable **Developer mode** (top right toggle).
     - Click **Load unpacked**.
-    - Select the `extension/dist` folder.
+    - Select the `frontend/dist` folder.
+
+3.  **Or just open the Web UI** (no install): start the server with `adm-agent serve`, then visit the `🌐 Web UI` URL printed on startup.
 
 **Usage:**
-- Click the extension icon in your browser toolbar.
+- Click the extension icon in your browser toolbar (extension form), or open `/ui/` (web form).
 - Configure settings (database URL, LLM keys) via the gear icon.
 - Enter a university slug (e.g., `hku`) and year, then start crawling.
 - Adjust per-task taxonomy overrides in popup (enable, low/high thresholds, top-k hints, override toggle).
