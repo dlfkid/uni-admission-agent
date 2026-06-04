@@ -1,5 +1,6 @@
 import re
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Optional
 
 from dotenv import find_dotenv, load_dotenv
@@ -7,17 +8,40 @@ from dotenv import find_dotenv, load_dotenv
 from src.models.admission import StudyMode
 
 
+def _load_env_file(env_file: str) -> bool:
+    """Load one .env with encoding fallbacks. Returns True on success."""
+    for encoding in ("utf-8-sig", "utf-8", "gb18030"):
+        try:
+            load_dotenv(env_file, encoding=encoding, override=True)
+            return True
+        except (UnicodeDecodeError, LookupError):
+            continue
+    return False
+
+
 def load_database_env() -> None:
-    """Load .env with encoding fallbacks for Windows GBK/GB18030 locales."""
+    """Load .env with encoding fallbacks for Windows GBK/GB18030 locales.
+
+    Discovery order:
+      1. cwd-based search (``find_dotenv(usecwd=True)``) — dev mode, where
+         the project ``.env`` sits at the repo root the user runs from.
+      2. caller-file-based search (``find_dotenv()``) — secondary heuristic.
+      3. ``~/.uni-agent/.env`` — the canonical location written by the
+         install flow for a packaged binary. A user who installed via the
+         skill and runs ``adm-agent serve`` from their HOME dir (or anywhere
+         that isn't ~/.uni-agent) would otherwise never load their keys.
+
+    cwd/caller discovery wins over the home fallback so dev work with a
+    project-local ``.env`` is unaffected.
+    """
     env_file = find_dotenv(usecwd=True) or find_dotenv()
-    if env_file:
-        for encoding in ("utf-8-sig", "utf-8", "gb18030"):
-            try:
-                load_dotenv(env_file, encoding=encoding, override=True)
-                break
-            except (UnicodeDecodeError, LookupError):
-                continue
+    if env_file and _load_env_file(env_file):
         return
+
+    home_env = Path.home() / ".uni-agent" / ".env"
+    if home_env.is_file() and _load_env_file(str(home_env)):
+        return
+
     load_dotenv()
 
 

@@ -67,6 +67,13 @@ class AIServiceError(EnvironmentError):
         super().__init__(message)
 
 
+class LLMConfigError(EnvironmentError):
+    """Raised when no usable LLM provider API key is configured."""
+
+    def __init__(self, message: str = "No LLM provider key configured"):
+        super().__init__(message)
+
+
 class ScraperError(Exception):
     """Raised when scraping operations fail (network, parsing, etc.)."""
 
@@ -424,10 +431,54 @@ def _check_data_processing() -> None:
         raise DataProcessingError(error_msg)
 
 
+# Provider API-key env vars that make at least one LLM usable. Mirrors the
+# names read by src/agents/factory.py + provider modules.
+_LLM_PROVIDER_KEY_VARS = (
+    "DEEPSEEK_API_KEY",
+    "GEMINI_API_KEY",
+    "GOOGLE_API_KEY",
+    "VOLC_API_KEY",
+    "CUSTOM_LLM_API_KEY",
+)
+
+
+def _is_placeholder_key(value: str) -> bool:
+    """True for empty or .env.example-style placeholder values."""
+    v = value.strip().lower()
+    if not v:
+        return True
+    # .env.example ships values like "your_deepseek_api_key_here".
+    return v.startswith("your_") or v.endswith("_here") or v in {"changeme", "todo"}
+
+
+def _check_llm_providers() -> None:
+    """Verify at least one LLM provider key is set to a real (non-placeholder)
+    value.
+
+    Without this, ``adm-agent check`` would report success even with zero
+    usable keys, and the first crawl would crash with ``LLMProviderError``.
+    This surfaces the misconfiguration at check time instead.
+    """
+    logger.info("Checking LLM provider configuration...")
+    configured = [
+        name
+        for name in _LLM_PROVIDER_KEY_VARS
+        if not _is_placeholder_key(os.environ.get(name, ""))
+    ]
+    if not configured:
+        raise LLMConfigError(
+            "No usable LLM provider API key found. Set at least one of:\n"
+            "  " + ", ".join(_LLM_PROVIDER_KEY_VARS) + "\n"
+            "in your .env (a SQLite DB needs no setup, but crawling needs an "
+            "LLM). Placeholder values like 'your_..._here' don't count."
+        )
+    logger.info("✓ LLM provider configured: %s", ", ".join(configured))
+
+
 def _check_ai_services() -> None:
     """
     Check availability of AI service libraries.
-    
+
     Verifies:
     1. google-genai (google.genai) is importable
     """
@@ -627,6 +678,7 @@ def ensure_ready(verbose: bool = False) -> bool:
         _check_alembic()
         _check_data_processing()
         _check_ai_services()
+        _check_llm_providers()
         
         logger.info("=" * 60)
         logger.info("✅ All environment checks passed!")
