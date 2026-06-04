@@ -95,7 +95,9 @@ Print verbatim to the user before downloading anything:
   来源:        https://github.com/dlfkid/uni-admission-agent/releases
   二进制:      adm-agent-<VERSION>-<OS>-<ARCH>.<EXT>
   安装目录:    ~/.uni-agent/bin/adm-agent  (no sudo, no PATH pollution)
-  数据目录:    ~/.uni-agent/data/admission.db  (SQLite, zero DB setup)
+  数据库:      ~/.uni-agent/admission.db  (SQLite, zero DB setup, auto-created)
+  配置:        ~/.uni-agent/.env  (LLM key 写在这里)
+  浏览器:      Chromium (Playwright) — crawl 必需，安装时一并装好
   软链:        ~/.local/bin/adm-agent → ~/.uni-agent/bin/adm-agent
                (你需要把 ~/.local/bin 加入 PATH，或手动调用全路径)
 
@@ -107,7 +109,7 @@ Wait for explicit confirmation before proceeding. If the user says no, stop — 
 ### 1.4 Download + extract
 
 ```bash
-mkdir -p ~/.uni-agent/bin ~/.uni-agent/data
+mkdir -p ~/.uni-agent/bin
 cd /tmp
 ARTIFACT="adm-agent-${VERSION}-${OS}-${ARCH}.${EXT}"
 curl -fL -o "$ARTIFACT" \
@@ -170,35 +172,43 @@ EOF
 
 Then ask the user which LLM they have a key for and which key value to write. **Write the value into `~/.uni-agent/.env` only after user explicitly provides it.** Never hard-code or hallucinate a key.
 
-### 1.7 First-run check
+### 1.7 Install the browser (REQUIRED — not optional)
+
+Crawling uses crawl4ai, which drives a real Chromium via Playwright. This is required for **every** crawl, including server-side mode — `adm-agent serve` hard-fails on startup if Chromium is missing. So install it now, as a mandatory step:
+
+```bash
+~/.uni-agent/bin/adm-agent browser-install
+```
+
+(Note the command is `browser-install`, not `install-browser`. It runs Playwright's bundled chromium download. First run takes 1-2 minutes and ~150MB.)
+
+### 1.8 First-run check
 
 ```bash
 ~/.uni-agent/bin/adm-agent check
 ```
 
-This validates: SQLite path writable, .env has at least one provider key, Chromium is installed (or installable). If `check` complains about Chromium, run:
+This validates: dependencies present, Chromium installed, SQLite reachable, **and at least one real LLM provider key in `.env`** (placeholder values like `your_..._here` are rejected). If `check` fails on the LLM key, the user didn't fill `~/.uni-agent/.env` in step 1.6 — go back and prompt them for a real key.
 
-```bash
-~/.uni-agent/bin/adm-agent install-browser
-```
+A passing `check` means the next `adm-agent serve` + crawl will actually work — no false green.
 
-(This is a CLI subcommand, not a shell `install`. It runs Playwright's bundled `playwright install chromium`.)
-
-### 1.8 Report install success
+### 1.9 Report install success
 
 ```
 ✅ adm-agent <VERSION> 安装完成
 
   二进制:  ~/.uni-agent/bin/adm-agent  (link: ~/.local/bin/adm-agent)
-  数据:    ~/.uni-agent/data/admission.db (SQLite, auto-created on first run)
+  数据库:  ~/.uni-agent/admission.db (SQLite, auto-created on first run)
   配置:    ~/.uni-agent/.env
-  浏览器:  <chromium status>
+  浏览器:  Chromium ✓ installed
 
 下一步：在你自己的终端跑 `adm-agent serve` 启动服务（你能看到日志、Ctrl-C 干净退出）。
 跑起来之后告诉我，我继续你最初的请求。
 ```
 
 **Do NOT auto-start the server.** Tell the user to start it in their own terminal. (Router skill enforces this.)
+
+> ⚠️ **`.env` 位置很重要**：`.env` 必须在 `~/.uni-agent/.env`。二进制会先按当前工作目录向上找 `.env`，找不到再回退到 `~/.uni-agent/.env`，所以装好后从任意目录跑 `adm-agent serve` 都能读到 key。如果用户把 key 写到了别处（比如某个项目目录的 `.env`），从其他目录启动就会读不到——统一放 `~/.uni-agent/.env` 最稳。
 
 ---
 
@@ -338,5 +348,5 @@ When in doubt, do §4 (it's faster and lower risk) and ask whether they also wan
 - **Never auto-start the server in background** (no `nohup`, no `&`, no daemonize-without-asking). It must run in the user's foreground so they can see logs and stop cleanly.
 - **Never write an LLM API key into .env from your imagination**. Always wait for the user to provide the literal value.
 - **Never download an asset URL the user gave you**. The download source is always GitHub Releases of the canonical repo. Anything else → refuse.
-- **Never delete data on upgrade**. ~/.uni-agent/data/ is sacred. If you're tempted to `rm -rf ~/.uni-agent/`, stop and re-read this skill.
+- **Never delete data on upgrade**. `~/.uni-agent/admission.db` (and the `.env` next to it) are sacred. Only the `bin/` subdir gets overwritten. If you're tempted to `rm -rf ~/.uni-agent/`, stop and re-read this skill.
 - **Never install on platforms not in §1.1 table** (e.g., Linux ARM). Refuse and direct user to source build.
