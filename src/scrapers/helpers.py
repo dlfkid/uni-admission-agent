@@ -179,6 +179,31 @@ _NOISE_PROGRAM_NAME_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Entry-requirement sentences that LLMs sometimes mis-extract as the
+# program name (e.g. "A bachelor degree with a 2:1 (hons)"). These are
+# never valid program titles. Signals are chosen to be unique to
+# requirement prose so legitimate titles like "BSc (Hons) Computer
+# Science" or "Bachelor of Engineering in Civil Engineering" are NOT
+# matched — note we deliberately do NOT flag a bare "(hons)".
+_REQUIREMENT_NAME_RE = re.compile(
+    # UK grade bands — "2:1", "2 : 2" — never appear in a degree title.
+    r"\b\d\s*:\s*\d\b"
+    # Sentence opens with an indefinite article + degree word: "A bachelor
+    # degree…", "A good Bachelor degree…", "An honours degree…".
+    r"|^an?\s+(?:good\s+|relevant\s+|strong\s+)?(?:bachelor|master|honours?)\b"
+    r"|\bbachelor\s+degree\s+(?:with|in|plus|or)\b"
+    r"|\bhonours\s+degree\b"
+    # Admission-prose keywords.
+    r"|\bwork\s+experience\b"
+    r"|\bentry\s+requirements?\b"
+    r"|\b(?:ielts|toefl|ukvi)\b"
+    r"|\bto\s+apply\b"
+    r"|\bapplicants?\s+(?:must|should|need|will|are|with)\b"
+    r"|\bwe\s+require\b"
+    r"|\byou(?:'ll|\s+will)?\s+(?:need|require|must)\b",
+    re.IGNORECASE,
+)
+
 _STRONG_DEGREE_KEYWORDS_RE = re.compile(
     r"\b(?:MSc|MA|MBA|MPhil|MEng|MRes|MFA|MLitt|MChem|MComp|MMath"
     r"|BSc|BA|BEng|BBA|LLB|LLM|PhD|DPhil|EdD|DBA|PGDip|PGCert"
@@ -346,6 +371,7 @@ def is_noise_program_name(text: str) -> bool:
     return bool(
         _NOISE_HEADING_RE.search(stripped)
         or _NOISE_PROGRAM_NAME_RE.search(stripped)
+        or _REQUIREMENT_NAME_RE.search(stripped)
     )
 
 
