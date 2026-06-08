@@ -68,3 +68,52 @@ def test_no_duplicate_source_urls():
     items = _harvest()
     urls = [it["source_url"] for it in items]
     assert len(urls) == len(set(urls))
+
+
+def test_inline_degree_suffix_links_are_harvested_ucl_style():
+    """UCL lists degrees as INLINE links (not headings) whose anchor ends
+    with a degree token: [Anthropology BSc](.../degrees/anthropology-bsc).
+    These must be harvested; nav links (Search, Browse by subject) must not."""
+    md = (
+        "[Skip to main content](https://www.ucl.ac.uk/x#main)\n"
+        "[Search](https://www.ucl.ac.uk/x#tab1)\n"
+        "[Browse by subject](https://www.ucl.ac.uk/x#tab2)\n"
+        "[Ancient History BA](https://www.ucl.ac.uk/prospective-students/undergraduate/degrees/ancient-history-ba)\n"
+        "[Anthropology BSc](https://www.ucl.ac.uk/prospective-students/undergraduate/degrees/anthropology-bsc)\n"
+        "[Architecture MSci](https://www.ucl.ac.uk/prospective-students/undergraduate/degrees/architecture-msci)\n"
+        "[Arts and Sciences BASc](https://www.ucl.ac.uk/prospective-students/undergraduate/degrees/arts-sciences-basc)\n"
+    )
+    names = [it["name_en"] for it in harvest_index_program_names(md, base_url="https://www.ucl.ac.uk/")]
+    assert names == [
+        "Ancient History BA",
+        "Anthropology BSc",
+        "Architecture MSci",
+        "Arts and Sciences BASc",
+    ]
+
+
+def test_leeds_heading_harvest_unaffected_by_inline_support():
+    """Enabling inline degree-suffix capture must not change the Leeds
+    heading-based result — still exactly the 15 course cards."""
+    names = [item["name_en"] for item in _harvest()]
+    assert names == EXPECTED_LEEDS
+
+
+def test_same_name_different_url_dedupes_to_one():
+    """Edinburgh lists each course twice under URLs that differ only by a
+    /2026/ year segment. For a names-only set the anchor name is reliable,
+    so identical names collapse to one entry."""
+    md = (
+        "### [Accounting and Business MA (Hons)]"
+        "(https://study.ed.ac.uk/programmes/undergraduate/2026/189-accounting-and-business)\n"
+        "### [Accounting and Business MA (Hons)]"
+        "(https://study.ed.ac.uk/programmes/undergraduate/189-accounting-and-business)\n"
+        "### [Acoustics and Music Technology BSc (Hons)]"
+        "(https://study.ed.ac.uk/programmes/undergraduate/2026/077-acoustics)\n"
+    )
+    items = harvest_index_program_names(md, base_url="https://study.ed.ac.uk/")
+    names = [it["name_en"] for it in items]
+    assert names == [
+        "Accounting and Business MA (Hons)",
+        "Acoustics and Music Technology BSc (Hons)",
+    ]
