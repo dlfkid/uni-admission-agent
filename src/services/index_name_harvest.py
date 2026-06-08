@@ -46,8 +46,21 @@ def _looks_like_program_name(text: str) -> bool:
     return bool(_DEGREE_SUFFIX_RE.search(str(text or "").strip()))
 
 
+# A trailing course-duration annotation like "(1 year)" / "(2 years)".
+# Some sites (Manchester) merge a name/degree/duration table row into the
+# link text; the duration is never part of the program name. Only the
+# TRAILING one is stripped, so a real parenthetical such as "(Paediatrics)"
+# or "(Hons)" earlier in the name survives.
+_DURATION_SUFFIX_RE = re.compile(
+    r"\s*\(\s*\d+(?:\s*(?:or|to|and|-|–|/)\s*\d+)?\s*years?\s*\)\s*$",
+    re.IGNORECASE,
+)
+
+
 def _clean_name(text: str) -> str:
-    return re.sub(r"\s+", " ", str(text or "")).strip()
+    name = re.sub(r"\s+", " ", str(text or "")).strip()
+    name = _DURATION_SUFFIX_RE.sub("", name).strip()
+    return name
 
 
 def _canonical_url_key(url: str) -> str:

@@ -70,6 +70,30 @@ def test_no_duplicate_source_urls():
     assert len(urls) == len(set(urls))
 
 
+def test_trailing_duration_suffix_is_stripped_manchester_style():
+    """Manchester merges name/degree/duration columns into the link text
+    ([Accounting MSc (1 year)](...)). The trailing duration is not part of
+    the program name and must be stripped — but a real parenthetical like
+    (Paediatrics) must survive."""
+    md = (
+        "[Accounting MSc (1 year)](https://www.manchester.ac.uk/study/masters/courses/list/10867/msc-accounting/)\n"
+        "[Adult Nursing MSc (2 years)](https://www.manchester.ac.uk/study/masters/courses/list/18749/msc-adult-nursing/)\n"
+        "[Advanced Clinical Practice (Paediatrics) MSc (3 years)](https://www.manchester.ac.uk/study/masters/courses/list/12526/x/)\n"
+        "[Advanced Clinical Optometric Practice MSc](https://www.manchester.ac.uk/study/masters/courses/list/18940/y/)\n"
+        "[Linguistics MA (1 or 2 years)](https://www.manchester.ac.uk/study/masters/courses/list/18941/z/)\n"
+        "[Human Rights (Standard Route) MA (1 or 2 years)](https://www.manchester.ac.uk/study/masters/courses/list/18942/w/)\n"
+    )
+    names = [it["name_en"] for it in harvest_index_program_names(md, base_url="https://www.manchester.ac.uk/")]
+    assert names == [
+        "Accounting MSc",
+        "Adult Nursing MSc",
+        "Advanced Clinical Practice (Paediatrics) MSc",
+        "Advanced Clinical Optometric Practice MSc",
+        "Linguistics MA",
+        "Human Rights (Standard Route) MA",
+    ]
+
+
 def test_inline_degree_suffix_links_are_harvested_ucl_style():
     """UCL lists degrees as INLINE links (not headings) whose anchor ends
     with a degree token: [Anthropology BSc](.../degrees/anthropology-bsc).
