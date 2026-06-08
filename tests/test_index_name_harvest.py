@@ -123,6 +123,32 @@ def test_leeds_heading_harvest_unaffected_by_inline_support():
     assert names == EXPECTED_LEEDS
 
 
+def test_polyu_blob_anchor_name_is_extracted():
+    """PolyU merges code | entry | mode-duration | NAME - DEGREE - Master… |
+    Chinese | deadlines into one link text. The English program name sits
+    between the duration and the ' - <Degree> - Master' marker; extract it
+    (with the degree token) and drop the rest."""
+    md = (
+        "[ 02022 | Sept 2026 Entry  Full-time - 1 year  Business Management - MSc - Master of Science  "
+        "商業管理理學碩士學位 Local Application Deadline: 30 Apr 2026 ]"
+        "(https://www.polyu.edu.hk/study/pg/tpg/2026/02022)\n"
+        "[ 02029 | Sept 2026 Entry  Mixed Mode - 1 year (Full-time)2 years (Part-time)  "
+        "Asset and Wealth Management - MSc - Master of Science  資產和財富管理理學碩士學位 "
+        "Local Application Deadline: 30 Apr 2026 ]"
+        "(https://www.polyu.edu.hk/study/pg/tpg/2026/02029-dfm)\n"
+        "[ 02021 | Sept 2026 Entry  Full-time - 1 year including summer term  "
+        "Business Administration - Master - Master (of)  工商管理碩士學位 "
+        "Local Application Deadline: 30 Apr 2026 ]"
+        "(https://www.polyu.edu.hk/study/pg/tpg/2026/02021)\n"
+    )
+    names = [it["name_en"] for it in harvest_index_program_names(md, base_url="https://www.polyu.edu.hk/")]
+    assert names == [
+        "Business Management MSc",
+        "Asset and Wealth Management MSc",
+        "Business Administration Master",
+    ]
+
+
 def test_same_name_different_url_dedupes_to_one():
     """Edinburgh lists each course twice under URLs that differ only by a
     /2026/ year segment. For a names-only set the anchor name is reliable,

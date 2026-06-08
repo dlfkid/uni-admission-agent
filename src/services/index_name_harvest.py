@@ -46,6 +46,30 @@ def _looks_like_program_name(text: str) -> bool:
     return bool(_DEGREE_SUFFIX_RE.search(str(text or "").strip()))
 
 
+# PolyU merges a whole table row into one link text:
+#   "<code> | <entry>  <mode> - <duration>  <NAME> - <DEGREE> - Master…  <中文>  Deadlines…"
+# The English program name sits right before the " - <DEGREE> - Master" marker,
+# separated from the duration block by 2+ spaces.
+_BLOB_NAME_RE = re.compile(
+    # Anchor the name's start to the END of the duration block (…year(s) /
+    # …term / …(Part-time)) so the duration text isn't swallowed into it.
+    r"(?:years?|term|\))\s{2,}([A-Z][A-Za-z0-9 ,&'./-]+?)\s+-\s+"
+    r"(MSc|MA|MBA|MEng|MArch|MFin|MPhil|LLM|MSocSc|MScM|Master|PhD|EdD|DBA)\s+-\s+Master"
+)
+
+
+def _extract_blob_name(text: str) -> str | None:
+    """If the anchor is a PolyU-style merged blob, return '<name> <degree>'."""
+    match = _BLOB_NAME_RE.search(str(text or ""))
+    if not match:
+        return None
+    name = re.sub(r"\s+", " ", match.group(1)).strip()
+    degree = match.group(2).strip()
+    if not name:
+        return None
+    return f"{name} {degree}"
+
+
 # A trailing course-duration annotation like "(1 year)" / "(2 years)".
 # Some sites (Manchester) merge a name/degree/duration table row into the
 # link text; the duration is never part of the program name. Only the
@@ -98,8 +122,12 @@ def harvest_index_program_names(
     for match in _ANY_LINK_RE.finditer(markdown or ""):
         if match.start() in heading_spans:
             continue
-        if _looks_like_program_name(match.group(1)):
-            candidates.append((match.group(1), match.group(2)))
+        anchor = match.group(1)
+        blob_name = _extract_blob_name(anchor)
+        if blob_name is not None:
+            candidates.append((blob_name, match.group(2)))
+        elif _looks_like_program_name(anchor):
+            candidates.append((anchor, match.group(2)))
 
     out: List[Dict[str, Any]] = []
     seen_urls: set[str] = set()
