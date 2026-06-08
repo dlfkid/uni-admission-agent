@@ -74,7 +74,10 @@ def test_signal_priority_anchor_then_url_then_heading(monkeypatch) -> None:
             "raw_pages": [
                 _raw_page(
                     url="https://www.polyu.edu.hk/programmes/asset-wealth-management",
-                    markdown="# What's New\n\nProgram details",
+                    # Use a legitimate heading: a noise heading like
+                    # "What's New" is now correctly rejected by
+                    # extract_program_name and would not appear as a signal.
+                    markdown="# Asset and Wealth Management\n\nProgram details",
                     selected_anchor_text="Master of Science in Asset and Wealth Management",
                 )
             ]
@@ -83,7 +86,7 @@ def test_signal_priority_anchor_then_url_then_heading(monkeypatch) -> None:
 
     assert captured_signals[0] == "Master of Science in Asset and Wealth Management"
     assert "asset wealth management" in captured_signals[1].lower()
-    assert captured_signals[-1] == "What's New"
+    assert captured_signals[-1] == "Asset and Wealth Management"
 
 
 def test_inject_hint_only_when_low_threshold_met(monkeypatch) -> None:

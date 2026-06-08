@@ -210,11 +210,6 @@ _STRONG_DEGREE_KEYWORDS_RE = re.compile(
     r"|Master|Bachelor|Doctor|Diploma|Certificate|Masters)\b",
     re.IGNORECASE,
 )
-_REQUIREMENT_SENTENCE_RE = re.compile(
-    r"\b(entry requirements?|a bachelor degree|hons|ielts|to apply)\b",
-    re.IGNORECASE,
-)
-
 _MARKDOWN_LINK_RE = re.compile(r"\[([^\]]+)\]\(([^)]+)\)")
 _NUMBERED_LIST_ITEM_RE = re.compile(r"^\s*\d+\.\s+")
 _BULLET_LIST_ITEM_RE = re.compile(r"^\s*[-*+]\s+")
@@ -272,8 +267,6 @@ def _find_prominent_plain_title(markdown: str) -> str:
         if len(candidate) < 4 or len(candidate) > 120:
             continue
         if len(candidate.split()) > 18:
-            continue
-        if _REQUIREMENT_SENTENCE_RE.search(candidate):
             continue
         if is_noise_program_name(candidate):
             continue
@@ -361,7 +354,14 @@ def extract_program_name(markdown: str) -> str:
         if candidate:
             return candidate
 
-    return headings[0][1]
+    # Last-resort fallback: the first heading. Guard it with the same
+    # noise check the candidates used — otherwise a detail page whose first
+    # heading is an entry-requirement sentence ("A bachelor degree with a
+    # 2:1 (hons)") leaks straight through as the program name.
+    first_heading = headings[0][1]
+    if is_noise_program_name(first_heading):
+        return ""
+    return first_heading
 
 
 def is_noise_program_name(text: str) -> bool:
@@ -375,15 +375,34 @@ def is_noise_program_name(text: str) -> bool:
     )
 
 
+def _looks_like_course_code(raw_segment: str) -> bool:
+    """True for URL path segments that are course/catalog codes, not words.
+
+    Leeds/PolyU/etc. prefix detail URLs with a code segment — ``/f921/``,
+    ``/k198/``, ``/ap11/``, ``/02029/`` — which should not leak into the
+    program name (PolyU showed up as "02029-DFM-DPM-FFM-FPM - Master of …").
+    A code is a single token containing a digit, with no separators, short.
+    """
+    token = str(raw_segment or "").strip().lower()
+    if not token or len(token) > 6:
+        return False
+    if any(sep in token for sep in ("-", "_", " ")):
+        return False
+    return any(ch.isdigit() for ch in token)
+
+
 def build_url_name_signal(url: str) -> str:
     parsed = urlparse(str(url or "").strip())
     parts: list[str] = []
     for segment in parsed.path.split("/"):
-        cleaned = unquote(segment).strip()
+        raw = unquote(segment).strip()
+        if not raw:
+            continue
+        if _looks_like_course_code(raw):
+            continue
+        cleaned = re.sub(r"[-_]+", " ", raw)
+        cleaned = re.sub(r"[^a-zA-Z0-9 ]+", " ", cleaned)
+        cleaned = re.sub(r"\s+", " ", cleaned).strip()
         if cleaned:
-            cleaned = re.sub(r"[-_]+", " ", cleaned)
-            cleaned = re.sub(r"[^a-zA-Z0-9 ]+", " ", cleaned)
-            cleaned = re.sub(r"\s+", " ", cleaned).strip()
-            if cleaned:
-                parts.append(cleaned)
+            parts.append(cleaned)
     return " ".join(parts).strip()

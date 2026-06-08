@@ -990,16 +990,30 @@ class DatabaseManager:
                 if source_from_meta:
                     full_data["source_url"] = str(source_from_meta)
 
-            # 3) Resolve catalog identity.
+            # 3) Resolve catalog identity. Prefer source_url over name so two
+            #    courses with the same mis-extracted name don't collapse.
             group_code = full_data.get("program_group_code")
-            resolved_catalog_key = catalog_key(group_code, full_data["name_en"])
+            resolved_catalog_key = catalog_key(
+                group_code,
+                full_data["name_en"],
+                source_url=full_data.get("source_url"),
+            )
             catalog = session.exec(
                 select(ProgramCatalog).where(
                     ProgramCatalog.university_id == univ.id,
                     ProgramCatalog.catalog_key == resolved_catalog_key,
                 )
             ).first()
-            if not catalog and not value_should_apply(group_code):
+            # Legacy name-merge: only when the identity is genuinely
+            # name-based (no group code AND no source URL). When we have a
+            # URL key, matching by name would re-collapse two distinct
+            # courses that share a mis-extracted name — the very bug the
+            # URL key exists to prevent.
+            if (
+                not catalog
+                and not value_should_apply(group_code)
+                and resolved_catalog_key.startswith("name:")
+            ):
                 existing_same_name = session.exec(
                     select(Program).where(
                         Program.university_id == univ.id,

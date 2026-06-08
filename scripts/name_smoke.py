@@ -42,6 +42,7 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 from src.scrapers.helpers import extract_program_name, is_noise_program_name
+from src.scrapers.link_parser import extract_links_with_text
 from src.services.ingestion_pipeline import _extract_html_title
 from src.services.program_name_resolution import resolve_program_name
 from src.services.quality_scoring import _name_similarity
@@ -49,6 +50,12 @@ from src.services.quality_scoring import _name_similarity
 REPO_ROOT = Path(__file__).resolve().parent.parent
 LABELS_PATH = REPO_ROOT / "golden_samples" / "name_labels.json"
 CASES_DIR = REPO_ROOT / "golden_samples" / "cases"
+# Index snapshot + the course-card names that page is known to list, in
+# order. Coverage = how many cards resolve (via the index anchor) to their
+# exact card name. Guards against the Leeds bug where real courses were
+# dropped / mis-named when anchor text wasn't threaded through.
+INDEX_COVERAGE_CASE = REPO_ROOT / "golden_samples" / "cases" / "leeds_masters_ai_business" / "index.md"
+_COURSE_LINK_RE = re.compile(r"/[a-z0-9]{3,5}/[a-z]")  # detail URLs carry a /code/ segment
 
 # Default gates — a change that drops below these fails the smoke test.
 DEFAULT_NOISE_RECALL = 1.0       # every labeled noise string must be rejected
@@ -151,6 +158,56 @@ def score_resolution(sim_threshold: float) -> Dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
+# Layer 3 — index coverage (no course dropped / mis-named)
+# ---------------------------------------------------------------------------
+
+def score_index_coverage() -> Dict[str, Any]:
+    """For the Leeds index snapshot, check every course card resolves (via its
+    index anchor) to its exact card name — the end of the chain that the
+    anchor-threading fix protects."""
+    if not INDEX_COVERAGE_CASE.is_file():
+        return {"total": 0, "correct": 0, "coverage": 1.0, "misses": []}
+
+    markdown = INDEX_COVERAGE_CASE.read_text(encoding="utf-8")
+    pairs = extract_links_with_text(markdown, "https://courses.leeds.ac.uk/course-search/masters-courses")
+    seen: set[str] = set()
+    cards: List[tuple[str, str]] = []
+    for url, text in pairs:
+        if "leeds.ac.uk" not in url or "/course-search" in url:
+            continue
+        if not _COURSE_LINK_RE.search(url) or not text.strip():
+            continue
+        if url in seen:
+            continue
+        seen.add(url)
+        cards.append((url, text.strip()))
+
+    misses: List[Dict[str, str]] = []
+    correct = 0
+    for url, name in cards:
+        result = resolve_program_name(
+            markdown_name="",
+            selected_anchor_text=name,
+            detail_url=url,
+            html_title="",
+            is_index_mode=True,
+            llm_fallback_enabled=False,
+        )
+        if result.status == "resolved" and result.name == name:
+            correct += 1
+        else:
+            misses.append({"expected": name, "got": result.name or "—"})
+
+    total = len(cards)
+    return {
+        "total": total,
+        "correct": correct,
+        "coverage": (correct / total) if total else 1.0,
+        "misses": misses,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Report
 # ---------------------------------------------------------------------------
 
@@ -158,6 +215,7 @@ def run(sim_threshold: float) -> Dict[str, Any]:
     return {
         "noise": score_noise_filter(),
         "resolution": score_resolution(sim_threshold),
+        "index_coverage": score_index_coverage(),
         "sim_threshold": sim_threshold,
     }
 
@@ -191,6 +249,13 @@ def _print_human(report: Dict[str, Any]) -> None:
         print(f"       resolved: {c['resolved']!r}  "
               f"(sim={c['similarity']}, via {c['source']}/{c['reason']}){llm}")
 
+    cov = report["index_coverage"]
+    print("\n③ Index coverage (Leeds snapshot — no course dropped/mis-named)")
+    print(f"   coverage: {cov['coverage']:.0%}  ({cov['correct']}/{cov['total']} cards "
+          f"resolve to their exact name)")
+    for m in cov["misses"]:
+        print(f"     ✗ expected {m['expected']!r}, got {m['got']!r}")
+
 
 def _gates_pass(report: Dict[str, Any], args: argparse.Namespace) -> bool:
     noise = report["noise"]
@@ -205,6 +270,10 @@ def _gates_pass(report: Dict[str, Any], args: argparse.Namespace) -> bool:
     if res["accuracy"] < args.resolution_accuracy:
         print(f"❌ resolution accuracy {res['accuracy']:.0%} < gate {args.resolution_accuracy:.0%}")
         ok = False
+    cov = report["index_coverage"]
+    if cov["coverage"] < args.index_coverage:
+        print(f"❌ index coverage {cov['coverage']:.0%} < gate {args.index_coverage:.0%}")
+        ok = False
     return ok
 
 
@@ -215,6 +284,7 @@ def main() -> None:
     parser.add_argument("--noise-recall", type=float, default=DEFAULT_NOISE_RECALL)
     parser.add_argument("--valid-precision", type=float, default=DEFAULT_VALID_PRECISION)
     parser.add_argument("--resolution-accuracy", type=float, default=DEFAULT_RESOLUTION_ACCURACY)
+    parser.add_argument("--index-coverage", type=float, default=1.0)
     args = parser.parse_args()
 
     report = run(args.sim_threshold)

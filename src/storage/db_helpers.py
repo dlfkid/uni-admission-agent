@@ -69,9 +69,44 @@ def normalize_text_payload(value: Any) -> Any:
     return value
 
 
-def catalog_key(program_group_code: Optional[str], name_en: str) -> str:
+def _canonical_source_url(url: Optional[str]) -> str:
+    """scheme://host/path of a URL (lowercased host, no query/fragment/trailing
+    slash) — a stable per-program identity key."""
+    raw = str(url or "").strip()
+    if not raw:
+        return ""
+    from urllib.parse import urlsplit  # pylint: disable=import-outside-toplevel
+    try:
+        parts = urlsplit(raw)
+    except ValueError:
+        return ""
+    if not parts.scheme or not parts.netloc:
+        return ""
+    path = parts.path.rstrip("/") or "/"
+    return f"{parts.scheme.lower()}://{parts.netloc.lower()}{path}"
+
+
+def catalog_key(
+    program_group_code: Optional[str],
+    name_en: str,
+    source_url: Optional[str] = None,
+) -> str:
+    """Stable identity key for a program catalog row.
+
+    Priority:
+      1. ``group:<code>``  — explicit group code, most authoritative.
+      2. ``url:<canonical>`` — the program's source URL. Each course has a
+         unique detail URL, so this is collision-proof. Keying on the
+         (error-prone) name instead let two courses whose names were both
+         mis-extracted to the same string collapse into one catalog row —
+         silently dropping a course. URL keying prevents that.
+      3. ``name:<normalized>`` — last resort when neither is available.
+    """
     if program_group_code and program_group_code.strip():
         return f"group:{program_group_code.strip().lower()}"
+    url_key = _canonical_source_url(source_url)
+    if url_key:
+        return f"url:{url_key}"
     normalized = re.sub(r"[^a-z0-9]+", "-", (name_en or "").lower()).strip("-")
     return f"name:{normalized or 'unnamed'}"
 

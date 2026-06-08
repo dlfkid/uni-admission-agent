@@ -12,10 +12,9 @@ from src.scrapers.helpers import build_url_name_signal, is_noise_program_name
 
 _LOW_THRESHOLD_DEFAULT = 0.80
 _CONFLICT_DELTA_DEFAULT = 0.05
-_REQUIREMENT_SENTENCE_RE = re.compile(
-    r"\b(entry requirements?|a bachelor degree|hons|ielts|to apply)\b",
-    re.IGNORECASE,
-)
+# Requirement-sentence rejection is now centralized in is_noise_program_name
+# (src/scrapers/helpers.py via _REQUIREMENT_NAME_RE) so there's a single,
+# stronger source of truth — no separate weak regex here.
 _GENERIC_TITLE_RE = re.compile(r"^(study with us|courses?|programmes?)$", re.IGNORECASE)
 
 
@@ -123,24 +122,30 @@ def _build_candidates(
             continue
         if item["source"] == "title" and _GENERIC_TITLE_RE.search(name):
             continue
-        if _REQUIREMENT_SENTENCE_RE.search(name):
-            continue
         candidates.append({"name": name, "source": item["source"]})
     return candidates
 
 
 def _rank_candidates(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
     source_weight = {"anchor": 0.98, "slug": 0.76, "title": 0.82, "markdown": 0.62}
+    # Score first, THEN dedupe — so when two sources yield the same name
+    # (e.g. slug "ai for business msc" and title "AI for Business MSc"),
+    # the higher-confidence source survives. Deduping in list order before
+    # sorting would keep whichever appeared first and could drop a stronger
+    # candidate, sinking the top score below the resolve threshold.
+    scored = [
+        {**candidate, "score": source_weight.get(candidate["source"], 0.5)}
+        for candidate in candidates
+    ]
+    scored.sort(key=lambda item: item["score"], reverse=True)
     ranked = []
     seen = set()
-    for candidate in candidates:
+    for candidate in scored:
         key = candidate["name"].casefold()
         if key in seen:
             continue
         seen.add(key)
-        score = source_weight.get(candidate["source"], 0.5)
-        ranked.append({**candidate, "score": score})
-    ranked.sort(key=lambda item: item["score"], reverse=True)
+        ranked.append(candidate)
     return ranked
 
 
