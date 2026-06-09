@@ -172,3 +172,17 @@ Read `status` from the JSON and act per this table. Relay the tool's
 | `unsupported` | Relay `message_for_user`. The phenomenon report was exported to `report_zip` — tell the user to send that file to the developer to add support. |
 
 Never open or interpret the report's contents; that is the developer's job.
+
+### Crawl range (how many to fetch)
+
+The caller chooses how much to crawl; the tool paginates and auto-stops.
+
+| Want | Command |
+|---|---|
+| Default (first batch, ≤30) | `adm-agent crawl-index <url>` |
+| First N | `adm-agent crawl-index <url> --limit N` |
+| Everything (safety-capped) | `adm-agent crawl-index <url> --all` |
+
+The result JSON carries `pages_fetched` and `stopped_reason`
+(`reached_limit` / `exhausted` / `unusable` / `no_growth` / `safety_cap`).
+Relay `message_for_user` verbatim — it already explains why crawling stopped.
