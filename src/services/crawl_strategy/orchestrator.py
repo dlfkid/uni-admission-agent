@@ -12,7 +12,7 @@ from typing import Callable, Optional, Tuple
 from urllib.parse import urlsplit
 
 from src.services.crawl_strategy import registry as registry_mod
-from src.services.crawl_strategy.classifier import classify
+from src.services.crawl_strategy.classifier import classify, feature_signals
 from src.services.crawl_strategy.extractors import get_extractor
 from src.services.crawl_strategy.fetch_ladder import (
     content_is_usable, fetch_with_escalation,
@@ -41,7 +41,13 @@ def _do_fetch(
         html, md = server_fetch(index_url)
         return html, md, "server", ["server"]
     if pinned:
-        html, md = client_fetch(index_url, **pinned.params)
+        if pinned.fetch is FetchMode.CLIENT_WAIT:
+            # Merge wait=True first so params can override if already present,
+            # preventing a duplicate-keyword-argument TypeError.
+            kwargs = {"wait": True, **pinned.params}
+            html, md = client_fetch(index_url, **kwargs)
+        else:
+            html, md = client_fetch(index_url, **pinned.params)
         return html, md, pinned.fetch.value, [pinned.fetch.value]
     fr = fetch_with_escalation(
         index_url, server_fetch=server_fetch, client_fetch=client_fetch
@@ -79,6 +85,7 @@ def crawl_index(
 
     if pinned:
         kind, confident = pinned.extract, True
+        cr = None
     else:
         cr = classify(md, index_url)
         kind, confident = cr.kind, cr.confident
@@ -96,7 +103,13 @@ def crawl_index(
             message_for_user=f"成功抓取 {len(names)} 门课程名字（策略 {strat}）。",
         )
 
-    scores = classify(md, index_url).scores
+    # Compute feature signals for the report — reuse classify result when
+    # available (unknown path), otherwise compute signals directly (pinned path).
+    if cr is not None:
+        report_scores = cr.scores
+    else:
+        report_scores = feature_signals(md, index_url)
+
     zip_path = export_report_zip(
         out_dir=report_out, index_url=index_url, html=html, markdown=md,
         params={
@@ -105,8 +118,8 @@ def crawl_index(
             "fetch_levels_tried": levels_tried,
             "content_signal": {"chars": len(md or ""),
                                "usable": content_is_usable(md)},
-            "feature_signals": scores,
-            "strategy_scores": scores,
+            "feature_signals": report_scores,
+            "strategy_scores": report_scores,
             "llm_classified_as": None,
             "llm_extract_count": 0,
             "outcome": "unsupported",
@@ -114,9 +127,17 @@ def crawl_index(
         run_log="\n".join(str(lvl) for lvl in levels_tried),
         timestamp=timestamp,
     )
+    if pinned:
+        msg = (
+            f"已知策略（{pinned.label()}）抓取失败：页面内容不足或结构已变。"
+            f"现象报告已导出到 {zip_path}。"
+        )
+    else:
+        msg = (
+            f"这所大学（{uni}）暂不支持。现象报告已导出到 {zip_path}，"
+            "发给开发者即可加入支持。"
+        )
     return CrawlOutcome(
         status="unsupported", university=uni, report_zip=zip_path,
-        message_for_user=(
-            f"这所大学（{uni}）暂不支持。现象报告已导出到 {zip_path}，"
-            "发给开发者即可加入支持。"),
+        message_for_user=msg,
     )

@@ -32,7 +32,13 @@ def _clean_browser_path() -> Optional[str]:
 def _run_client_fetch(url: str, *, wait: bool = False,
                       wait_selector: Optional[str] = None) -> dict:
     from src.client.native_browser import fetch_browser_payload
+    # wait / wait_selector are accepted for interface compatibility but are NOT
+    # yet forwarded — real wait-for-render lands with the NUS client_wait work.
+    # Today client and client_wait fetch identically.
     del wait, wait_selector
+    # page_type_hint="detail" is intentional even for an index page: it makes
+    # the browser return raw html_content without anchor pre-selection, which is
+    # exactly what the orchestrator needs.  Do NOT change to "index".
     return fetch_browser_payload(
         url=url, page_type_hint="detail",
         browser_path=_clean_browser_path(), debug_port=9333, launch_timeout=45.0)
@@ -60,8 +66,13 @@ def client_fetch(url: str, *, wait: bool = False,
 
     Args:
         url:           Target URL.
-        wait:          Passed to the browser payload helper (future use).
-        wait_selector: CSS selector to wait for before returning (future use).
+        wait:          Accepted for interface compatibility but NOT yet forwarded.
+        wait_selector: Accepted for interface compatibility but NOT yet forwarded.
+
+    Note:
+        wait / wait_selector are accepted for interface compatibility but are NOT
+        yet forwarded — real wait-for-render lands with the NUS client_wait work.
+        Today client and client_wait fetch identically.
 
     Returns:
         ``(html, markdown)`` tuple; either field is an empty string on failure.

@@ -1,0 +1,46 @@
+2026-06-04 18:05:34 - src.core.environment - INFO - ============================================================
+2026-06-04 18:05:34 - src.core.environment - INFO - ============================================================
+2026-06-04 18:05:34 - src.core.environment - INFO - ENVIRONMENT CHECK
+2026-06-04 18:05:34 - src.core.environment - INFO - ENVIRONMENT CHECK
+2026-06-04 18:05:34 - src.core.environment - INFO - ============================================================
+2026-06-04 18:05:34 - src.core.environment - INFO - ============================================================
+2026-06-04 18:05:34 - src.core.environment - INFO - Checking uv package manager...
+2026-06-04 18:05:34 - src.core.environment - INFO - Checking uv package manager...
+2026-06-04 18:05:34 - src.core.environment - DEBUG - UV version: uv 0.11.3 (45da18ac3 2026-04-01 aarch64-apple-darwin)
+2026-06-04 18:05:34 - src.core.environment - DEBUG - UV version: uv 0.11.3 (45da18ac3 2026-04-01 aarch64-apple-darwin)
+2026-06-04 18:05:34 - src.core.environment - INFO - ✓ UV package manager is available
+2026-06-04 18:05:34 - src.core.environment - INFO - ✓ UV package manager is available
+2026-06-04 18:05:34 - src.core.environment - INFO - Checking dependency sync status...
+2026-06-04 18:05:34 - src.core.environment - INFO - Checking dependency sync status...
+2026-06-04 18:05:34 - src.core.environment - ERROR - Dependencies are not synced with uv.lock
+2026-06-04 18:05:34 - src.core.environment - ERROR - Dependencies are not synced with uv.lock
+2026-06-04 18:05:34 - src.core.environment - DEBUG - UV sync check output: Would use project environment at: .venv
+Resolved 160 packages in 7ms
+Found up-to-date lockfile at: uv.lock
+Would uninstall 6 packages
+ - coverage==7.13.4
+ - iniconfig==2.3.0
+ - pluggy==1.6.0
+ - pytest==9.0.2
+ - pytest-asyncio==1.3.0
+ - pytest-cov==7.0.0
+The environment is outdated; run `uv sync` to update the environment
+
+2026-06-04 18:05:34 - src.core.environment - DEBUG - UV sync check output: Would use project environment at: .venv
+Resolved 160 packages in 7ms
+Found up-to-date lockfile at: uv.lock
+Would uninstall 6 packages
+ - coverage==7.13.4
+ - iniconfig==2.3.0
+ - pluggy==1.6.0
+ - pytest==9.0.2
+ - pytest-asyncio==1.3.0
+ - pytest-cov==7.0.0
+The environment is outdated; run `uv sync` to update the environment
+
+2026-06-04 18:05:34 - src.core.environment - INFO - ============================================================
+2026-06-04 18:05:34 - src.core.environment - INFO - ============================================================
+2026-06-04 18:05:34 - src.core.environment - ERROR - ❌ Environment check failed
+2026-06-04 18:05:34 - src.core.environment - ERROR - ❌ Environment check failed
+2026-06-04 18:05:34 - src.core.environment - INFO - ============================================================
+2026-06-04 18:05:34 - src.core.environment - INFO - ============================================================

@@ -80,9 +80,10 @@ def get_help_text() -> str:
 ╚══════════════════════════════════════════════════════════════╝
 
 UNIVERSITY DATA MANAGEMENT:
-    crawl      Crawl university admission pages and import data
-    import     Import data from Excel files 
-    export     Export data to Excel format
+    crawl        Crawl university admission pages and import data
+    crawl-index  Classify an index page and extract program names (deterministic tier)
+    import       Import data from Excel files
+    export       Export data to Excel format
     
 DATABASE & STATUS:
     status     Show database statistics and connection info
@@ -519,8 +520,10 @@ def crawl_index_cmd(
     report_out: Optional[str] = typer.Option(None, "--report-out",
                                              help="Directory for phenomenon report zips"),
     as_json: bool = typer.Option(False, "--json", help="Print outcome as JSON"),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Debug logging"),
 ) -> None:
     """Classify an index page and crawl program names (deterministic tier)."""
+    _setup_logging(verbose)
     import dataclasses
     import json as _json
     from datetime import datetime, timezone
