@@ -553,6 +553,7 @@ def crawl_index_cmd(
         crawl_range=crawl_range,
         server_fetch=fetch_adapters.server_fetch,
         client_fetch=fetch_adapters.client_fetch,
+        api_fetch=fetch_adapters.api_fetch,
         report_out=out_dir, timestamp=timestamp,
     )
     if as_json:

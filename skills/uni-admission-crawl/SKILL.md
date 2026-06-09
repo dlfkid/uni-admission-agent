@@ -186,3 +186,6 @@ The caller chooses how much to crawl; the tool paginates and auto-stops.
 The result JSON carries `pages_fetched` and `stopped_reason`
 (`reached_limit` / `exhausted` / `unusable` / `safety_cap`).
 Relay `message_for_user` verbatim — it already explains why crawling stopped.
+
+- NUS (`study.nus.edu.sg`) returns its **full** programme catalogue via its
+  Salesforce Apex API (`api×json_api`), not just the ~10 rendered on screen.
