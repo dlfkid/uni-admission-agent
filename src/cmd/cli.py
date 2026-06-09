@@ -33,7 +33,7 @@ from sqlalchemy_utils import create_database, database_exists, drop_database
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 # Must run before any Playwright import to redirect browser lookup
-from src.core.paths import configure_playwright_path  # noqa: E402
+from src.core.paths import configure_playwright_path, get_data_dir  # noqa: E402
 
 configure_playwright_path()
 
@@ -64,6 +64,8 @@ from src.services.subject_taxonomy import (
 )
 from src.core.environment import install_playwright_browser
 from src.storage.db_manager import DatabaseManager
+from src.services.crawl_strategy.orchestrator import crawl_index
+from src.services.crawl_strategy import fetch_adapters
 
 
 # ---------------------------------------------------------------------------
@@ -507,6 +509,39 @@ def crawl(
     except Exception as e:
         logger.exception("Crawl failed: %s", e)
         raise typer.Exit(code=1)
+
+
+@app.command(name="crawl-index")
+def crawl_index_cmd(
+    index_url: str = typer.Argument(..., help="University programme index URL"),
+    names_only: bool = typer.Option(True, "--names-only/--with-details",
+                                    help="Names only (default) or also crawl details"),
+    report_out: Optional[str] = typer.Option(None, "--report-out",
+                                             help="Directory for phenomenon report zips"),
+    as_json: bool = typer.Option(False, "--json", help="Print outcome as JSON"),
+) -> None:
+    """Classify an index page and crawl program names (deterministic tier)."""
+    import dataclasses
+    import json as _json
+    from datetime import datetime, timezone
+
+    del names_only  # detail crawl is a future plan; names-only for now
+    out_dir = report_out or str(get_data_dir() / "reports")
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    outcome = crawl_index(
+        index_url,
+        server_fetch=fetch_adapters.server_fetch,
+        client_fetch=fetch_adapters.client_fetch,
+        report_out=out_dir, timestamp=timestamp,
+    )
+    if as_json:
+        payload = dataclasses.asdict(outcome)
+        payload.pop("items", None)
+        typer.echo(_json.dumps(payload, ensure_ascii=False))
+    else:
+        typer.echo(outcome.message_for_user)
+        for name in outcome.names:
+            typer.echo(f"  - {name}")
 
 
 @app.command()
