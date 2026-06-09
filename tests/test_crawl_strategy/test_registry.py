@@ -27,3 +27,17 @@ def test_known_nus_pinned_to_client_wait_text_heading():
     s = lookup("https://study.nus.edu.sg/programme")
     assert s.fetch is FetchMode.CLIENT_WAIT
     assert s.extract is ExtractKind.TEXT_HEADING
+
+
+def test_known_sites_pin_paginate_mechanism():
+    from src.services.crawl_strategy.types import PaginateMode
+    assert lookup("https://study.nus.edu.sg/programme").paginate is PaginateMode.SCROLL
+    assert lookup("https://courses.leeds.ac.uk/x").paginate is PaginateMode.URL_PAGES
+    assert lookup("https://www.ucl.ac.uk/x").paginate is PaginateMode.NONE
+    assert lookup("https://www.manchester.ac.uk/x").paginate is PaginateMode.NONE
+    assert lookup("https://www.polyu.edu.hk/x").paginate is PaginateMode.NONE
+
+
+def test_leeds_carries_url_page_param():
+    s = lookup("https://courses.leeds.ac.uk/x")
+    assert s.params.get("page_param") == "page"
