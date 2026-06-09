@@ -5,7 +5,7 @@ notice behavior.
 """
 from __future__ import annotations
 
-import src.cmd.cli as cli
+from src.cmd import cli
 
 
 def _stub_common(monkeypatch):
@@ -14,7 +14,7 @@ def _stub_common(monkeypatch):
         def init_db(self):
             return None
 
-    monkeypatch.setattr(cli, "DatabaseManager", lambda: _FakeDB())
+    monkeypatch.setattr(cli, "DatabaseManager", _FakeDB)
     monkeypatch.setattr(cli, "bootstrap_subject_taxonomy", lambda: None)
 
 
