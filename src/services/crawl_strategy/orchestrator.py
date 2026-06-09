@@ -1,0 +1,122 @@
+"""Orchestrator — wires registry → fetch → classify/extract → outcome.
+
+Fetch callables are injected so the orchestrator is fully unit-testable
+without a real network or browser.  The LLM fallback tier is a future
+plan; an unknown page that cannot be classified yields ``unsupported``
+and exports a phenomenon report for developer review.
+"""
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Callable, Optional, Tuple
+from urllib.parse import urlsplit
+
+from src.services.crawl_strategy import registry as registry_mod
+from src.services.crawl_strategy.classifier import classify
+from src.services.crawl_strategy.extractors import get_extractor
+from src.services.crawl_strategy.fetch_ladder import (
+    content_is_usable, fetch_with_escalation,
+)
+from src.services.crawl_strategy.reporter import export_report_zip
+from src.services.crawl_strategy.types import CrawlOutcome, FetchMode, Strategy
+
+ServerFetch = Callable[[str], Tuple[str, str]]
+ClientFetch = Callable[..., Tuple[str, str]]
+
+
+def _university_slug(index_url: str) -> str:
+    host = urlsplit(index_url).netloc.lower()
+    parts = [p for p in host.split(".") if p not in ("www", "study", "courses")]
+    return parts[0] if parts else host
+
+
+def _do_fetch(
+    index_url: str,
+    pinned: Optional[Strategy],
+    server_fetch: ServerFetch,
+    client_fetch: ClientFetch,
+) -> Tuple[str, str, str, list]:
+    """Return (html, md, fetch_level, levels_tried) using pinned or escalation."""
+    if pinned and pinned.fetch is FetchMode.SERVER:
+        html, md = server_fetch(index_url)
+        return html, md, "server", ["server"]
+    if pinned:
+        html, md = client_fetch(index_url, **pinned.params)
+        return html, md, pinned.fetch.value, [pinned.fetch.value]
+    fr = fetch_with_escalation(
+        index_url, server_fetch=server_fetch, client_fetch=client_fetch
+    )
+    return fr.html, fr.markdown, fr.level_used, fr.levels_tried
+
+
+def crawl_index(
+    index_url: str,
+    *,
+    server_fetch: ServerFetch,
+    client_fetch: ClientFetch,
+    report_out: "Path | str",
+    timestamp: str,
+) -> CrawlOutcome:
+    """Crawl a programme-index page and return a :class:`CrawlOutcome`.
+
+    Args:
+        index_url:    URL of the university's programme-listing page.
+        server_fetch: Callable ``(url) -> (html, markdown)`` for plain HTTP.
+        client_fetch: Callable ``(url, **kw) -> (html, markdown)`` for headless browser.
+        report_out:   Directory to write phenomenon reports when the page is unsupported.
+        timestamp:    ISO-ish timestamp string used in the report zip filename.
+
+    Returns:
+        A :class:`CrawlOutcome` with ``status="ok"`` on success, or
+        ``status="unsupported"`` when no strategy matched (report zip included).
+    """
+    uni = _university_slug(index_url)
+    pinned: Optional[Strategy] = registry_mod.lookup(index_url)
+
+    html, md, fetch_level, levels_tried = _do_fetch(
+        index_url, pinned, server_fetch, client_fetch
+    )
+
+    if pinned:
+        kind, confident = pinned.extract, True
+    else:
+        cr = classify(md, index_url)
+        kind, confident = cr.kind, cr.confident
+
+    items = []
+    if confident and kind is not None and content_is_usable(md):
+        items = get_extractor(kind)(md, index_url)
+
+    if items:
+        names = [it.name_en for it in items]
+        strat = f"{fetch_level}×{kind.value}"
+        return CrawlOutcome(
+            status="ok", university=uni, names=names, items=items,
+            names_count=len(names), strategy_used=strat,
+            message_for_user=f"成功抓取 {len(names)} 门课程名字（策略 {strat}）。",
+        )
+
+    scores = classify(md, index_url).scores
+    zip_path = export_report_zip(
+        out_dir=report_out, index_url=index_url, html=html, markdown=md,
+        params={
+            "university_guess": uni,
+            "fetch_level_used": fetch_level,
+            "fetch_levels_tried": levels_tried,
+            "content_signal": {"chars": len(md or ""),
+                               "usable": content_is_usable(md)},
+            "feature_signals": scores,
+            "strategy_scores": scores,
+            "llm_classified_as": None,
+            "llm_extract_count": 0,
+            "outcome": "unsupported",
+        },
+        run_log="\n".join(str(lvl) for lvl in levels_tried),
+        timestamp=timestamp,
+    )
+    return CrawlOutcome(
+        status="unsupported", university=uni, report_zip=zip_path,
+        message_for_user=(
+            f"这所大学（{uni}）暂不支持。现象报告已导出到 {zip_path}，"
+            "发给开发者即可加入支持。"),
+    )
