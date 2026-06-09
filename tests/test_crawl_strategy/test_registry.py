@@ -23,10 +23,22 @@ def test_subdomain_and_scheme_insensitive():
     assert lookup("http://COURSES.leeds.ac.uk/anything") is not None
 
 
-def test_known_nus_pinned_to_client_wait_text_heading():
+def test_known_nus_pinned_to_api():
     s = lookup("https://study.nus.edu.sg/programme")
-    assert s.fetch is FetchMode.CLIENT_WAIT
-    assert s.extract is ExtractKind.TEXT_HEADING
+    assert s.fetch is FetchMode.API
+    assert s.extract is ExtractKind.JSON_API
+
+
+def test_nus_pinned_to_api_json_strategy():
+    from src.services.crawl_strategy.types import ExtractKind, FetchMode
+    s = lookup("https://study.nus.edu.sg/programme")
+    assert s.fetch is FetchMode.API
+    assert s.extract is ExtractKind.JSON_API
+    assert s.params["items_path"] == "returnValue"
+    assert s.params["name_path"] == "programme.Title__c"
+    assert s.params["detail_url_path"] == "programme.Program_Page_Link__c"
+    assert s.params["body"]["method"] == "searchProgrammes"
+    assert "apex/execute" in s.params["endpoint"]
 
 
 def test_known_sites_pin_paginate_mechanism():

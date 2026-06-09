@@ -25,13 +25,26 @@ REGISTRY: Dict[str, Strategy] = {
     "www.polyu.edu.hk": Strategy(
         FetchMode.CLIENT, ExtractKind.BLOB,
         paginate=PaginateMode.NONE),
-    # NONE, not SCROLL: a live probe showed the rendered DOM is byte-for-byte
-    # constant across 15 scroll rounds (10 visible programmes), so scrolling
-    # loads nothing and would only waste a second browser session. NUS's full
-    # catalogue (Master's/Bachelor's) sits behind a filter/search interaction
-    # or backend API — a mechanism out of scope for this pagination feature.
+    # NUS serves its full catalogue from a guest Salesforce Apex endpoint in one
+    # POST (searchProgrammes, empty filters) — fetchable server-side, no browser.
+    # The classname carries an internal Salesforce ID that may change on a NUS
+    # redeploy; if it does, the api fetch yields unusable content and the normal
+    # "known strategy failed" report fires so a developer can update it here.
     "study.nus.edu.sg": Strategy(
-        FetchMode.CLIENT_WAIT, ExtractKind.TEXT_HEADING,
+        FetchMode.API, ExtractKind.JSON_API,
+        params={
+            "endpoint": "https://study.nus.edu.sg/webruntime/api/apex/execute"
+                        "?language=en-US&asGuest=true&htmlEncode=false",
+            "body": {"namespace": "", "classname": "@udd/01pIW000000Rkpx",
+                     "method": "searchProgrammes", "isContinuation": False,
+                     "params": {"programmeType": "", "interestArea": "[]",
+                                "keyword": "", "modeOfStudy": "", "facultyIds": "",
+                                "intakePeriod": ""},
+                     "cacheable": False},
+            "items_path": "returnValue",
+            "name_path": "programme.Title__c",
+            "detail_url_path": "programme.Program_Page_Link__c",
+        },
         paginate=PaginateMode.NONE),
 }
 
