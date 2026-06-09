@@ -134,3 +134,61 @@ def test_pinned_strategy_failed_message_mentions_known_strategy(tmp_path, monkey
     assert "暂不支持" not in out.message_for_user, (
         f"Unexpected '暂不支持' in known-strategy-failure message: {out.message_for_user!r}"
     )
+
+
+from src.services.crawl_strategy.types import CrawlRange, PaginateMode
+
+
+def test_default_range_caps_known_single_page_at_30(tmp_path):
+    # UCL-like: one page with 60 inline-degree links; default caps at 30.
+    md = "".join(
+        f"[Programme {i} BSc](https://www.ucl.ac.uk/p{i})\n" for i in range(60))
+
+    def client(url, **kw):
+        return ("<html>", md)
+
+    out = crawl_index(
+        "https://www.ucl.ac.uk/degrees",
+        server_fetch=lambda u: ("", ""), client_fetch=client,
+        report_out=tmp_path, timestamp="t")
+    assert out.status == "ok"
+    assert out.names_count == 30
+    assert out.stopped_reason == "reached_limit"
+    assert out.pages_fetched == 1
+
+
+def test_explicit_all_returns_everything(tmp_path):
+    md = "".join(
+        f"[Programme {i} BSc](https://www.ucl.ac.uk/p{i})\n" for i in range(60))
+
+    def client(url, **kw):
+        return ("<html>", md)
+
+    out = crawl_index(
+        "https://www.ucl.ac.uk/degrees", crawl_range=CrawlRange.all_(),
+        server_fetch=lambda u: ("", ""), client_fetch=client,
+        report_out=tmp_path, timestamp="t")
+    assert out.names_count == 60
+    assert out.stopped_reason == "exhausted"
+
+
+def test_leeds_url_pages_paginates_when_limit_given(tmp_path):
+    def make_md(tag, n):
+        return "".join(
+            f"##  [{tag} {i} MSc](https://courses.leeds.ac.uk/{tag}{i}) D\n"
+            for i in range(n))
+
+    def server(url):
+        import urllib.parse as up
+        q = dict(up.parse_qsl(up.urlsplit(url).query))
+        page = int(q.get("page", 1))
+        return ("<html>", make_md(f"p{page}", 15))
+
+    out = crawl_index(
+        "https://courses.leeds.ac.uk/search", crawl_range=CrawlRange.of(40),
+        server_fetch=server, client_fetch=lambda u, **k: ("", ""),
+        report_out=tmp_path, timestamp="t")
+    assert out.status == "ok"
+    assert out.names_count == 40        # 15 + 15 + 10 (truncated)
+    assert out.pages_fetched == 3
+    assert out.stopped_reason == "reached_limit"

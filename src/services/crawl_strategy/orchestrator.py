@@ -17,8 +17,19 @@ from src.services.crawl_strategy.extractors import get_extractor
 from src.services.crawl_strategy.fetch_ladder import (
     content_is_usable, fetch_with_escalation,
 )
+from src.services.crawl_strategy.paginator import detect_mechanism, paginate
 from src.services.crawl_strategy.reporter import export_report_zip
-from src.services.crawl_strategy.types import CrawlOutcome, FetchMode, Strategy
+from src.services.crawl_strategy.types import (
+    CrawlOutcome, CrawlRange, FetchMode, Strategy,
+)
+
+_REASON_ZH = {
+    "reached_limit": "因达到上限停止",
+    "exhausted": "已抓完全部",
+    "unusable": "因翻页中遇到无法解析的页面停止",
+    "no_growth": "因内容不再增长停止",
+    "safety_cap": "因达到安全翻页上限停止",
+}
 
 ServerFetch = Callable[[str], Tuple[str, str]]
 ClientFetch = Callable[..., Tuple[str, str]]
@@ -58,6 +69,7 @@ def _do_fetch(
 def crawl_index(
     index_url: str,
     *,
+    crawl_range: Optional[CrawlRange] = None,
     server_fetch: ServerFetch,
     client_fetch: ClientFetch,
     report_out: "Path | str",
@@ -76,6 +88,8 @@ def crawl_index(
         A :class:`CrawlOutcome` with ``status="ok"`` on success, or
         ``status="unsupported"`` when no strategy matched (report zip included).
     """
+    if crawl_range is None:
+        crawl_range = CrawlRange.default()
     uni = _university_slug(index_url)
     pinned: Optional[Strategy] = registry_mod.lookup(index_url)
 
@@ -86,21 +100,39 @@ def crawl_index(
     if pinned:
         kind, confident = pinned.extract, True
         cr = None
+        strategy, mechanism = pinned, pinned.paginate
     else:
         cr = classify(md, index_url)
         kind, confident = cr.kind, cr.confident
+        mechanism = detect_mechanism(html, md, index_url, fetch_level)
+        strategy = (
+            Strategy(FetchMode(fetch_level), kind, paginate=mechanism)
+            if kind is not None else None)
 
     items = []
+    pages_fetched = 0
+    stopped_reason = ""
     if confident and kind is not None and content_is_usable(md):
-        items = get_extractor(kind)(md, index_url)
+        pr = paginate(
+            mechanism=mechanism, crawl_range=crawl_range, index_url=index_url,
+            strategy=strategy, first_html=html, first_md=md,
+            server_fetch=server_fetch, client_fetch=client_fetch,
+            extract=get_extractor(kind))
+        items = pr.items
+        pages_fetched = pr.pages_fetched
+        stopped_reason = pr.stopped_reason
 
     if items:
         names = [it.name_en for it in items]
         strat = f"{fetch_level}×{kind.value}"
+        reason_zh = _REASON_ZH.get(stopped_reason, "")
         return CrawlOutcome(
             status="ok", university=uni, names=names, items=items,
             names_count=len(names), strategy_used=strat,
-            message_for_user=f"成功抓取 {len(names)} 门课程名字（策略 {strat}）。",
+            pages_fetched=pages_fetched, stopped_reason=stopped_reason,
+            message_for_user=(
+                f"成功抓取 {len(names)} 门课程名字"
+                f"（策略 {strat}，翻页 {mechanism.value}，{reason_zh}）。"),
         )
 
     # Compute feature signals for the report — reuse classify result when
