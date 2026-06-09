@@ -152,3 +152,23 @@ Skimmable. Short. The user might be reading at 2 AM.
 - Don't run a paginated crawl without telling the user the cost estimate first.
 - Don't debug a failed crawl here — route to [[uni-admission-diagnose]].
 - Don't try to start the server if /health is down — route to [[uni-admission-install]] §"Start an existing install".
+
+## Strategy-based crawl (preferred entry)
+
+Run the tool — it classifies the page and picks a strategy itself. You do
+NOT analyze the page or choose a strategy.
+
+```bash
+adm-agent crawl-index '<INDEX_URL>' --json
+```
+
+Read `status` from the JSON and act per this table. Relay the tool's
+`message_for_user` verbatim — do not write your own analysis.
+
+| status | what you do |
+|---|---|
+| `ok` | Relay `message_for_user`, then list the names. |
+| `llm_fallback` | Relay `message_for_user`. Tell the user the result came via the generic path and the report at `report_zip` can be sent to the developer to add a proper strategy. |
+| `unsupported` | Relay `message_for_user`. The phenomenon report was exported to `report_zip` — tell the user to send that file to the developer to add support. |
+
+Never open or interpret the report's contents; that is the developer's job.
