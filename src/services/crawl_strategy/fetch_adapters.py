@@ -17,10 +17,15 @@ _PROGRAM_RENDER_RE = re.compile(
     r"Doctor of |Master of |Bachelor of |Graduate (?:Diploma|Certificate)",
     re.IGNORECASE,
 )
-_CLIENT_WAIT_SCROLL_ROUNDS = 12
 _CLIENT_WAIT_SCROLL_PIXELS = 3500
 _CLIENT_WAIT_TICK_MS = 1500
-_CLIENT_WAIT_MIN_MATCHES = 5
+
+
+def _enough_matches(html: str, target_count: Optional[int]) -> bool:
+    """True when *html* already shows >= target_count programme names."""
+    if target_count is None:
+        return False
+    return len(_PROGRAM_RENDER_RE.findall(html or "")) >= target_count
 
 
 def _run_server_crawl(url: str):
@@ -53,12 +58,14 @@ def _run_client_fetch(url: str, *, wait: bool = False,
         browser_path=_clean_browser_path(), debug_port=9333, launch_timeout=45.0)
 
 
-def _run_client_wait_fetch(url: str) -> str:  # noqa: C901
-    """Fetch *url* via Playwright headless Chromium with scroll-and-wait.
+def _run_client_wait_fetch(url: str, *, target_count: Optional[int] = None,
+                           max_rounds: int = 40) -> str:  # noqa: C901
+    """Fetch *url* via Playwright headless Chromium, scrolling to a target.
 
-    Launches a fresh Playwright browser, navigates to *url*, then scrolls
-    incrementally and checks page content until enough programme headings are
-    visible (or the scroll budget is exhausted).  Returns the final HTML.
+    Scrolls until the rendered HTML shows >= ``target_count`` programme names,
+    OR its byte length stops growing for two consecutive rounds, OR
+    ``max_rounds`` is reached.  ``target_count=None`` (the 'all' case) scrolls
+    to the no-growth / max_rounds ceiling.  Returns the final HTML.
     """
     from playwright.sync_api import sync_playwright  # pylint: disable=import-outside-toplevel
     browser = None
@@ -68,12 +75,21 @@ def _run_client_wait_fetch(url: str) -> str:  # noqa: C901
             page = browser.new_page()
             page.goto(url, wait_until="domcontentloaded", timeout=60000)
             html = ""
-            for _ in range(_CLIENT_WAIT_SCROLL_ROUNDS):
+            prev_len = 0
+            stale = 0
+            for _ in range(max_rounds):
                 page.mouse.wheel(0, _CLIENT_WAIT_SCROLL_PIXELS)
                 page.wait_for_timeout(_CLIENT_WAIT_TICK_MS)
                 html = page.content()
-                if len(_PROGRAM_RENDER_RE.findall(html)) >= _CLIENT_WAIT_MIN_MATCHES:
+                if _enough_matches(html, target_count):
                     break
+                if len(html) <= prev_len:
+                    stale += 1
+                    if stale >= 2:
+                        break
+                else:
+                    stale = 0
+                prev_len = len(html)
             if not html:
                 html = page.content()
             return html
@@ -104,21 +120,25 @@ def server_fetch(url: str) -> Tuple[str, str]:
 
 
 def client_fetch(url: str, *, wait: bool = False,
-                 wait_selector: Optional[str] = None, **_: Any) -> Tuple[str, str]:
-    """Fetch *url* via native Chrome CDP or Playwright render-and-scroll.
+                 wait_selector: Optional[str] = None,
+                 target_count: Optional[int] = None, **_: Any) -> Tuple[str, str]:
+    """Fetch *url* via native Chrome CDP or Playwright range-aware scroll.
 
     Args:
         url:           Target URL.
-        wait:          When True, use Playwright scroll-and-wait render
-                       (``_run_client_wait_fetch``).  When False, use the
+        wait:          When True, use the Playwright scroll-and-wait render
+                       (``_run_client_wait_fetch``), scrolling toward
+                       ``target_count`` programme names.  When False, use the
                        native Chrome CDP path (``_run_client_fetch``).
         wait_selector: Accepted for interface compatibility; not forwarded.
+        target_count:  Scroll target (programme-name count); None scrolls to the
+                       no-growth / max-rounds ceiling.
 
     Returns:
         ``(html, markdown)`` tuple; either field is an empty string on failure.
     """
     if wait:
-        html = _run_client_wait_fetch(url)
+        html = _run_client_wait_fetch(url, target_count=target_count)
         return (html, _html_to_markdown(html, url) if html else "")
     payload = _run_client_fetch(url, wait_selector=wait_selector)
     html = str(payload.get("html_content") or "")
