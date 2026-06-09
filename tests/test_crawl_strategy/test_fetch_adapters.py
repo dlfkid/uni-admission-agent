@@ -52,3 +52,41 @@ def test_enough_matches_gates_the_scroll_stop():
     assert fa._enough_matches("Doctor of A Doctor of B", 2) is True
     assert fa._enough_matches("Doctor of A", 2) is False
     assert fa._enough_matches("anything", None) is False   # target=None never "enough"
+
+
+def test_api_fetch_posts_body_and_returns_text(monkeypatch):
+    captured = {}
+
+    class _Resp:
+        status_code = 200
+        text = '{"returnValue":[1,2]}'
+
+    def fake_post(url, json=None, headers=None, timeout=None):
+        captured["url"] = url
+        captured["json"] = json
+        captured["headers"] = headers
+        return _Resp()
+
+    monkeypatch.setattr("httpx.post", fake_post)
+    out = fa.api_fetch("https://x.edu/api", body={"method": "searchProgrammes"})
+    assert out == '{"returnValue":[1,2]}'
+    assert captured["url"] == "https://x.edu/api"
+    assert captured["json"] == {"method": "searchProgrammes"}
+    assert "content-type" in {k.lower() for k in captured["headers"]}
+
+
+def test_api_fetch_returns_empty_on_non_2xx(monkeypatch):
+    class _Resp:
+        status_code = 500
+        text = "err"
+
+    monkeypatch.setattr("httpx.post", lambda *a, **k: _Resp())
+    assert fa.api_fetch("https://x.edu/api", body={}) == ""
+
+
+def test_api_fetch_returns_empty_on_exception(monkeypatch):
+    def boom(*a, **k):
+        raise RuntimeError("network down")
+
+    monkeypatch.setattr("httpx.post", boom)
+    assert fa.api_fetch("https://x.edu/api", body={}) == ""

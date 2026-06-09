@@ -19,6 +19,8 @@ _PROGRAM_RENDER_RE = re.compile(
 )
 _CLIENT_WAIT_SCROLL_PIXELS = 3500
 _CLIENT_WAIT_TICK_MS = 1500
+_API_USER_AGENT = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                   "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36")
 
 
 def _enough_matches(html: str, target_count: Optional[int]) -> bool:
@@ -143,3 +145,25 @@ def client_fetch(url: str, *, wait: bool = False,
     payload = _run_client_fetch(url, wait_selector=wait_selector)
     html = str(payload.get("html_content") or "")
     return (html, _html_to_markdown(html, url) if html else "")
+
+
+def api_fetch(endpoint: str, *, body: dict,
+              headers: Optional[dict] = None) -> str:
+    """POST *body* as JSON to *endpoint*; return the response text.
+
+    Returns "" on any non-2xx status or transport error.  Sends a browser-like
+    User-Agent and ``content-type: application/json`` by default; *headers*
+    (from the strategy params) override/extend these.
+    """
+    import httpx  # pylint: disable=import-outside-toplevel
+    hdrs = {"content-type": "application/json; charset=utf-8",
+            "user-agent": _API_USER_AGENT}
+    if headers:
+        hdrs.update(headers)
+    try:
+        resp = httpx.post(endpoint, json=body, headers=hdrs, timeout=30.0)
+        if resp.status_code // 100 != 2:
+            return ""
+        return resp.text
+    except Exception:  # pylint: disable=broad-except
+        return ""
