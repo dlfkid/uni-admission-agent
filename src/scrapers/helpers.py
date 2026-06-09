@@ -179,17 +179,37 @@ _NOISE_PROGRAM_NAME_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Entry-requirement sentences that LLMs sometimes mis-extract as the
+# program name (e.g. "A bachelor degree with a 2:1 (hons)"). These are
+# never valid program titles. Signals are chosen to be unique to
+# requirement prose so legitimate titles like "BSc (Hons) Computer
+# Science" or "Bachelor of Engineering in Civil Engineering" are NOT
+# matched — note we deliberately do NOT flag a bare "(hons)".
+_REQUIREMENT_NAME_RE = re.compile(
+    # UK grade bands — "2:1", "2 : 2" — never appear in a degree title.
+    r"\b\d\s*:\s*\d\b"
+    # Sentence opens with an indefinite article + degree word: "A bachelor
+    # degree…", "A good Bachelor degree…", "An honours degree…".
+    r"|^an?\s+(?:good\s+|relevant\s+|strong\s+)?(?:bachelor|master|honours?)\b"
+    r"|\bbachelor\s+degree\s+(?:with|in|plus|or)\b"
+    r"|\bhonours\s+degree\b"
+    # Admission-prose keywords.
+    r"|\bwork\s+experience\b"
+    r"|\bentry\s+requirements?\b"
+    r"|\b(?:ielts|toefl|ukvi)\b"
+    r"|\bto\s+apply\b"
+    r"|\bapplicants?\s+(?:must|should|need|will|are|with)\b"
+    r"|\bwe\s+require\b"
+    r"|\byou(?:'ll|\s+will)?\s+(?:need|require|must)\b",
+    re.IGNORECASE,
+)
+
 _STRONG_DEGREE_KEYWORDS_RE = re.compile(
     r"\b(?:MSc|MA|MBA|MPhil|MEng|MRes|MFA|MLitt|MChem|MComp|MMath"
     r"|BSc|BA|BEng|BBA|LLB|LLM|PhD|DPhil|EdD|DBA|PGDip|PGCert"
     r"|Master|Bachelor|Doctor|Diploma|Certificate|Masters)\b",
     re.IGNORECASE,
 )
-_REQUIREMENT_SENTENCE_RE = re.compile(
-    r"\b(entry requirements?|a bachelor degree|hons|ielts|to apply)\b",
-    re.IGNORECASE,
-)
-
 _MARKDOWN_LINK_RE = re.compile(r"\[([^\]]+)\]\(([^)]+)\)")
 _NUMBERED_LIST_ITEM_RE = re.compile(r"^\s*\d+\.\s+")
 _BULLET_LIST_ITEM_RE = re.compile(r"^\s*[-*+]\s+")
@@ -247,8 +267,6 @@ def _find_prominent_plain_title(markdown: str) -> str:
         if len(candidate) < 4 or len(candidate) > 120:
             continue
         if len(candidate.split()) > 18:
-            continue
-        if _REQUIREMENT_SENTENCE_RE.search(candidate):
             continue
         if is_noise_program_name(candidate):
             continue
@@ -336,7 +354,14 @@ def extract_program_name(markdown: str) -> str:
         if candidate:
             return candidate
 
-    return headings[0][1]
+    # Last-resort fallback: the first heading. Guard it with the same
+    # noise check the candidates used — otherwise a detail page whose first
+    # heading is an entry-requirement sentence ("A bachelor degree with a
+    # 2:1 (hons)") leaks straight through as the program name.
+    first_heading = headings[0][1]
+    if is_noise_program_name(first_heading):
+        return ""
+    return first_heading
 
 
 def is_noise_program_name(text: str) -> bool:
@@ -346,18 +371,38 @@ def is_noise_program_name(text: str) -> bool:
     return bool(
         _NOISE_HEADING_RE.search(stripped)
         or _NOISE_PROGRAM_NAME_RE.search(stripped)
+        or _REQUIREMENT_NAME_RE.search(stripped)
     )
+
+
+def _looks_like_course_code(raw_segment: str) -> bool:
+    """True for URL path segments that are course/catalog codes, not words.
+
+    Leeds/PolyU/etc. prefix detail URLs with a code segment — ``/f921/``,
+    ``/k198/``, ``/ap11/``, ``/02029/`` — which should not leak into the
+    program name (PolyU showed up as "02029-DFM-DPM-FFM-FPM - Master of …").
+    A code is a single token containing a digit, with no separators, short.
+    """
+    token = str(raw_segment or "").strip().lower()
+    if not token or len(token) > 6:
+        return False
+    if any(sep in token for sep in ("-", "_", " ")):
+        return False
+    return any(ch.isdigit() for ch in token)
 
 
 def build_url_name_signal(url: str) -> str:
     parsed = urlparse(str(url or "").strip())
     parts: list[str] = []
     for segment in parsed.path.split("/"):
-        cleaned = unquote(segment).strip()
+        raw = unquote(segment).strip()
+        if not raw:
+            continue
+        if _looks_like_course_code(raw):
+            continue
+        cleaned = re.sub(r"[-_]+", " ", raw)
+        cleaned = re.sub(r"[^a-zA-Z0-9 ]+", " ", cleaned)
+        cleaned = re.sub(r"\s+", " ", cleaned).strip()
         if cleaned:
-            cleaned = re.sub(r"[-_]+", " ", cleaned)
-            cleaned = re.sub(r"[^a-zA-Z0-9 ]+", " ", cleaned)
-            cleaned = re.sub(r"\s+", " ", cleaned).strip()
-            if cleaned:
-                parts.append(cleaned)
+            parts.append(cleaned)
     return " ".join(parts).strip()

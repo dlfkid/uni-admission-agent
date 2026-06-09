@@ -150,6 +150,34 @@ def _extract_html_title(html_text: str) -> str:
     return normalized.split("|", 1)[0].strip()
 
 
+def _canonical_url_key(url: Any) -> str:
+    """Normalize a URL for use as an anchor-text lookup key.
+
+    The index page's candidate links carry tracking query strings (e.g.
+    ``?searchOrigin=query%3D...``) and sometimes trailing slashes. After
+    crawl4ai fetches the page, ``page.url`` may come back redirected or
+    stripped of that query — so a raw-string lookup of the anchor map
+    misses, the program name falls back to detail-page body text, and we
+    get entry-requirement sentences instead of the course title. Keying
+    both sides on scheme+host+path (lowercased host, no query/fragment,
+    no trailing slash) makes the match robust.
+    """
+    from urllib.parse import urlsplit  # pylint: disable=import-outside-toplevel
+
+    raw = str(url or "").strip()
+    if not raw:
+        return ""
+    try:
+        parts = urlsplit(raw)
+    except ValueError:
+        return raw.rstrip("/")
+    if not parts.scheme and not parts.netloc:
+        # Relative or opaque — fall back to the trimmed string.
+        return raw.split("?", 1)[0].split("#", 1)[0].rstrip("/")
+    path = parts.path.rstrip("/") or "/"
+    return f"{parts.scheme.lower()}://{parts.netloc.lower()}{path}"
+
+
 class StagePoisonedError(RuntimeError):
     """Raised when a stage exceeds retry budget and enters POISONED state."""
 
@@ -1915,9 +1943,19 @@ class IngestionPipeline:
         selected_link_texts: Optional[Dict[str, str]] = None,
     ) -> List[Dict[str, Any]]:
         selected_link_texts = selected_link_texts or {}
+        # Build a canonical-keyed view so a redirected / query-stripped
+        # page.url still resolves to the index card's anchor text.
+        canonical_texts: Dict[str, str] = {}
+        for key, text in selected_link_texts.items():
+            ckey = _canonical_url_key(key)
+            if ckey and ckey not in canonical_texts:
+                canonical_texts[ckey] = text
         out: List[Dict[str, Any]] = []
         for page in pages:
             page_url = str(page.url or "").strip()
+            anchor = selected_link_texts.get(page_url)
+            if not anchor:
+                anchor = canonical_texts.get(_canonical_url_key(page_url))
             out.append(
                 {
                     "url": page.url,
@@ -1928,7 +1966,7 @@ class IngestionPipeline:
                     "html": page.html,
                     "crawl_depth": depth,
                     "from_browser": from_browser,
-                    "selected_anchor_text": selected_link_texts.get(page_url),
+                    "selected_anchor_text": anchor,
                 }
             )
         return out

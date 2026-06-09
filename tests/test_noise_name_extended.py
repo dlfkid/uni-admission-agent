@@ -39,6 +39,24 @@ NOISE_CASES = [
 ]
 
 
+# Entry-requirement sentences the LLM occasionally mis-extracts as the
+# program name. These are REAL failures observed in a Leeds masters crawl
+# (the program title is the actual name; the requirement leaked into name_en).
+REQUIREMENT_NOISE_CASES = [
+    "A bachelor degree with a 2:1 (hons)",
+    "A bachelor degree with a 2:1 (hons) in an engineering discipline.",
+    "A bachelor degree with a 2:1 (hons) in any subject.",
+    "A bachelor degree with a 2:1 (hons) in computer science.",
+    "A bachelor degree with a 2:1 (hons) in health-related subject + current registration",
+    "A bachelor degree with a 2:1 (hons) in Music or Business.",
+    "A good Bachelor degree plus management work experience",
+    # Common phrasings of the same failure mode.
+    "Applicants must hold a 2:1 honours degree",
+    "We require an IELTS score of 6.5",
+    "Entry requirements: a relevant undergraduate degree",
+]
+
+
 # Real program names that MUST NOT be flagged.
 LEGITIMATE_CASES = [
     "MSc Finance",
@@ -54,6 +72,12 @@ LEGITIMATE_CASES = [
     # Programs that contain "faculty" or "school" or similar as part of name
     # (these are tricky but legitimate):
     "Master of Education (Faculty of Education option)",
+    # Real Leeds masters titles from the same crawl — must survive the
+    # requirement-sentence filter (regression guard against over-matching).
+    "Advanced Computer Science (Artificial Intelligence) MSc",
+    "Advanced Mechanical Engineering MSc (Eng)",
+    "Accounting and Finance",
+    "Applied and Professional Ethics PGDip",
 ]
 
 
@@ -61,6 +85,13 @@ LEGITIMATE_CASES = [
 def test_noise_names_are_rejected(name: str) -> None:
     assert is_noise_program_name(name) is True, (
         f"expected {name!r} to be flagged as noise"
+    )
+
+
+@pytest.mark.parametrize("name", REQUIREMENT_NOISE_CASES)
+def test_requirement_sentences_are_rejected(name: str) -> None:
+    assert is_noise_program_name(name) is True, (
+        f"expected requirement sentence {name!r} to be flagged as noise"
     )
 
 

@@ -277,7 +277,16 @@ def _init_db(verbose: bool = False) -> None:
                 status["current_revision"] or "unversioned",
                 status["head_revision"],
             )
+            # Surface to the user via stdout — a schema ALTER can take
+            # tens of seconds to minutes (especially the first run after
+            # an upgrade), and silent blocking reads as a hang.
+            typer.echo(
+                f"🔧 Applying database migration "
+                f"({status['current_revision'] or 'unversioned'} → "
+                f"{status['head_revision']})… this can take a minute, please wait."
+            )
             run_db_migrations(verbose=verbose)
+            typer.echo("✅ Database schema up to date.")
     except MigrationError as e:
         if verbose:
             logger.warning("Database migration warning: %s", e)
