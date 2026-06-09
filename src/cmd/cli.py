@@ -66,6 +66,7 @@ from src.core.environment import install_playwright_browser
 from src.storage.db_manager import DatabaseManager
 from src.services.crawl_strategy.orchestrator import crawl_index
 from src.services.crawl_strategy import fetch_adapters
+from src.services.crawl_strategy.types import CrawlRange
 
 
 # ---------------------------------------------------------------------------
@@ -512,6 +513,17 @@ def crawl(
         raise typer.Exit(code=1)
 
 
+def _resolve_crawl_range(*, limit: Optional[int], all_: bool) -> CrawlRange:
+    """Map CLI --limit/--all to a CrawlRange. Mutually exclusive."""
+    if all_ and limit is not None:
+        raise ValueError("--limit and --all are mutually exclusive")
+    if all_:
+        return CrawlRange.all_()
+    if limit is not None:
+        return CrawlRange.of(limit)
+    return CrawlRange.default()
+
+
 @app.command(name="crawl-index")
 def crawl_index_cmd(
     index_url: str = typer.Argument(..., help="University programme index URL"),
@@ -521,6 +533,10 @@ def crawl_index_cmd(
                                              help="Directory for phenomenon report zips"),
     as_json: bool = typer.Option(False, "--json", help="Print outcome as JSON"),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Debug logging"),
+    limit: Optional[int] = typer.Option(
+        None, "--limit", help="抓取前 N 门课程名字（翻页直到 N）。"),
+    all_: bool = typer.Option(
+        False, "--all", help="抓取全部（翻页到底，有安全上限）。"),
 ) -> None:
     """Classify an index page and crawl program names (deterministic tier)."""
     _setup_logging(verbose)
@@ -531,8 +547,10 @@ def crawl_index_cmd(
     del names_only  # detail crawl is a future plan; names-only for now
     out_dir = report_out or str(get_data_dir() / "reports")
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    crawl_range = _resolve_crawl_range(limit=limit, all_=all_)
     outcome = crawl_index(
         index_url,
+        crawl_range=crawl_range,
         server_fetch=fetch_adapters.server_fetch,
         client_fetch=fetch_adapters.client_fetch,
         report_out=out_dir, timestamp=timestamp,
