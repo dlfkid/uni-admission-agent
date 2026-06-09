@@ -56,7 +56,7 @@ def test_url_pages_accumulates_across_pages_and_truncates():
         index_url="https://x.edu/p", strategy=_STRAT,
         first_html="<html>", first_md=pages[1],
         server_fetch=server, client_fetch=lambda u, **k: ("", ""),
-        extract=_extract_from_marker)
+        extract=_extract_from_marker, is_usable=bool)
     assert len(r.items) == 12         # 5 + 5 + 2 (truncated)
     assert r.stopped_reason == "reached_limit"
     assert r.pages_fetched == 3
@@ -72,7 +72,7 @@ def test_url_pages_stops_exhausted_on_zero_new():
         index_url="https://x.edu/p", strategy=_STRAT,
         first_html="<html>", first_md="P:a:5",
         server_fetch=server, client_fetch=lambda u, **k: ("", ""),
-        extract=_extract_from_marker)
+        extract=_extract_from_marker, is_usable=bool)
     assert len(r.items) == 5
     assert r.stopped_reason == "exhausted"
 
@@ -86,7 +86,7 @@ def test_url_pages_stops_unusable():
         index_url="https://x.edu/p", strategy=_STRAT,
         first_html="<html>", first_md="P:a:5",
         server_fetch=server, client_fetch=lambda u, **k: ("", ""),
-        extract=_extract_from_marker)
+        extract=_extract_from_marker, is_usable=bool)
     assert len(r.items) == 5
     assert r.stopped_reason == "unusable"
 
@@ -103,7 +103,7 @@ def test_url_pages_safety_cap():
         index_url="https://x.edu/p", strategy=_STRAT,
         first_html="<html>", first_md="P:first:3",
         server_fetch=server, client_fetch=lambda u, **k: ("", ""),
-        extract=_extract_from_marker)
+        extract=_extract_from_marker, is_usable=bool)
     assert r.stopped_reason == "safety_cap"
     assert r.pages_fetched == 50
 

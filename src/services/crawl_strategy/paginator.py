@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from typing import Callable, List, Optional, Tuple
 from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 
+from src.services.crawl_strategy.fetch_ladder import content_is_usable
 from src.services.crawl_strategy.types import (
     CrawlRange, ExtractItem, FetchMode, PaginateMode, Strategy,
 )
@@ -105,7 +106,8 @@ def _single(first_md: str, index_url: str, crawl_range: CrawlRange,
 
 def _paginate_url(*, index_url: str, strategy: Strategy, first_md: str,
                   crawl_range: CrawlRange, server_fetch: Fetch,
-                  client_fetch: Fetch, extract: Extract) -> PaginateResult:
+                  client_fetch: Fetch, extract: Extract,
+                  is_usable: Callable[[str], bool]) -> PaginateResult:
     fetch = _fetch_for(strategy, server_fetch, client_fetch)
     acc: List[ExtractItem] = []
     seen: set = set()
@@ -122,7 +124,7 @@ def _paginate_url(*, index_url: str, strategy: Strategy, first_md: str,
             return PaginateResult(acc, pages, "exhausted")
         _html, md = fetch(nxt)
         pages += 1
-        if not md:
+        if not is_usable(md):
             return PaginateResult(acc, pages, "unusable")
         before = len(acc)
         _absorb(acc, seen, extract(md, nxt))
@@ -144,7 +146,8 @@ def _paginate_scroll(*, index_url: str, crawl_range: CrawlRange,
 def paginate(*, mechanism: PaginateMode, crawl_range: CrawlRange, index_url: str,
              strategy: Strategy, first_html: str, first_md: str,
              server_fetch: Fetch, client_fetch: Fetch,
-             extract: Extract) -> PaginateResult:
+             extract: Extract,
+             is_usable: Callable[[str], bool] = content_is_usable) -> PaginateResult:
     """Collect programme items per *mechanism*, honouring *crawl_range*.
 
     ``paginate=False`` (the default range) keeps url_pages on page 1; scroll is
@@ -159,5 +162,6 @@ def paginate(*, mechanism: PaginateMode, crawl_range: CrawlRange, index_url: str
         return _paginate_url(
             index_url=index_url, strategy=strategy, first_md=first_md,
             crawl_range=crawl_range, server_fetch=server_fetch,
-            client_fetch=client_fetch, extract=extract)
+            client_fetch=client_fetch, extract=extract,
+            is_usable=is_usable)
     return _single(first_md, index_url, crawl_range, extract)
