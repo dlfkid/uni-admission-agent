@@ -31,7 +31,10 @@ def test_known_nus_pinned_to_client_wait_text_heading():
 
 def test_known_sites_pin_paginate_mechanism():
     from src.services.crawl_strategy.types import PaginateMode
-    assert lookup("https://study.nus.edu.sg/programme").paginate is PaginateMode.SCROLL
+    # NUS renders 10 programmes once and does not scroll-load more (probe-
+    # confirmed), so it is pinned NONE — its full catalogue needs a filter/API
+    # mechanism that is out of scope here.
+    assert lookup("https://study.nus.edu.sg/programme").paginate is PaginateMode.NONE
     assert lookup("https://courses.leeds.ac.uk/x").paginate is PaginateMode.URL_PAGES
     assert lookup("https://www.ucl.ac.uk/x").paginate is PaginateMode.NONE
     assert lookup("https://www.manchester.ac.uk/x").paginate is PaginateMode.NONE

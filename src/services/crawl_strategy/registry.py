@@ -25,9 +25,14 @@ REGISTRY: Dict[str, Strategy] = {
     "www.polyu.edu.hk": Strategy(
         FetchMode.CLIENT, ExtractKind.BLOB,
         paginate=PaginateMode.NONE),
+    # NONE, not SCROLL: a live probe showed the rendered DOM is byte-for-byte
+    # constant across 15 scroll rounds (10 visible programmes), so scrolling
+    # loads nothing and would only waste a second browser session. NUS's full
+    # catalogue (Master's/Bachelor's) sits behind a filter/search interaction
+    # or backend API — a mechanism out of scope for this pagination feature.
     "study.nus.edu.sg": Strategy(
         FetchMode.CLIENT_WAIT, ExtractKind.TEXT_HEADING,
-        paginate=PaginateMode.SCROLL),
+        paginate=PaginateMode.NONE),
 }
 
 
