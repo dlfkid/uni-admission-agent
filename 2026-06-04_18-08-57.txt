@@ -1,0 +1,8 @@
+2026-06-04 18:08:57 - src.storage.db_manager - INFO - Database initialized successfully.
+2026-06-04 18:08:57 - alembic.runtime.migration - INFO - Context impl PostgresqlImpl.
+2026-06-04 18:08:57 - alembic.runtime.migration - INFO - Will assume transactional DDL.
+2026-06-04 18:08:57 - __main__ - INFO - Pending DB migration detected (20260521_0008 -> 20260522_0009), applying...
+2026-06-04 18:08:57 - alembic.runtime.migration - INFO - Context impl PostgresqlImpl.
+2026-06-04 18:08:57 - alembic.runtime.migration - INFO - Will assume transactional DDL.
+2026-06-04 18:08:57 - alembic.runtime.migration - INFO - Context impl PostgresqlImpl.
+2026-06-04 18:08:57 - alembic.runtime.migration - INFO - Will assume transactional DDL.
