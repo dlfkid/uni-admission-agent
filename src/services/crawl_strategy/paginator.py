@@ -165,3 +165,19 @@ def paginate(*, mechanism: PaginateMode, crawl_range: CrawlRange, index_url: str
             client_fetch=client_fetch, extract=extract,
             is_usable=is_usable)
     return _single(first_md, index_url, crawl_range, extract)
+
+
+def detect_mechanism(first_html: str, first_md: str, index_url: str,
+                     fetch_level: str) -> PaginateMode:
+    """Infer how an unknown site paginates, from its first page.
+
+    Conservative: only return URL_PAGES when a concrete next-page URL can be
+    derived; only return SCROLL when the page is a JS app (client_wait); else
+    NONE.  Never guesses url_pages blindly (would burn tokens — requirement 4).
+    """
+    del first_html
+    if _derive_next_url(index_url, 1, first_md, {}) is not None:
+        return PaginateMode.URL_PAGES
+    if fetch_level == FetchMode.CLIENT_WAIT.value:
+        return PaginateMode.SCROLL
+    return PaginateMode.NONE

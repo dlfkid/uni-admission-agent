@@ -1,4 +1,4 @@
-from src.services.crawl_strategy.paginator import paginate, PaginateResult
+from src.services.crawl_strategy.paginator import detect_mechanism, paginate, PaginateResult
 from src.services.crawl_strategy.types import (
     CrawlRange, ExtractItem, ExtractKind, FetchMode, PaginateMode, Strategy,
 )
@@ -120,3 +120,26 @@ def test_url_pages_paginate_false_stays_on_first_page():
         extract=_extract_from_marker)
     assert len(r.items) == 9
     assert r.pages_fetched == 1
+
+
+def test_detect_url_pages_from_page_query_link():
+    md = "[Next](https://x.edu/p?page=2)\n[Course MSc](https://x.edu/c1)\n"
+    assert detect_mechanism("<html>", md, "https://x.edu/p", "server") is PaginateMode.URL_PAGES
+
+
+def test_detect_url_pages_from_existing_page_param_in_url():
+    assert detect_mechanism(
+        "<html>", "[c](u)\n", "https://x.edu/p?page=1", "server"
+    ) is PaginateMode.URL_PAGES
+
+
+def test_detect_scroll_for_client_wait_app():
+    assert detect_mechanism(
+        "<html>", "## Doctor of X\n", "https://x.edu/p", "client_wait"
+    ) is PaginateMode.SCROLL
+
+
+def test_detect_none_for_static_single_page():
+    assert detect_mechanism(
+        "<html>", "[Course MSc](https://x.edu/c1)\n", "https://x.edu/p", "server"
+    ) is PaginateMode.NONE
