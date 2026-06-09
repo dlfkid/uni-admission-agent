@@ -143,3 +143,44 @@ def test_detect_none_for_static_single_page():
     assert detect_mechanism(
         "<html>", "[Course MSc](https://x.edu/c1)\n", "https://x.edu/p", "server"
     ) is PaginateMode.NONE
+
+
+def test_scroll_passes_target_count_and_truncates():
+    received = {}
+
+    def client(url, **kw):
+        received.update(kw)
+        return ("<html>", "P:a:25")   # browser rendered 25 after scrolling
+
+    r = paginate(
+        mechanism=PaginateMode.SCROLL, crawl_range=CrawlRange.of(10),
+        index_url="https://x.edu/p",
+        strategy=Strategy(FetchMode.CLIENT_WAIT, ExtractKind.TEXT_HEADING,
+                          paginate=PaginateMode.SCROLL),
+        first_html="<html>", first_md="P:a:5",
+        server_fetch=lambda u: ("", ""), client_fetch=client,
+        extract=_extract_from_marker)
+    assert received.get("wait") is True
+    assert received.get("target_count") == 10
+    assert len(r.items) == 10
+    assert r.stopped_reason == "reached_limit"
+
+
+def test_scroll_all_passes_none_target():
+    received = {}
+
+    def client(url, **kw):
+        received.update(kw)
+        return ("<html>", "P:a:8")
+
+    r = paginate(
+        mechanism=PaginateMode.SCROLL, crawl_range=CrawlRange.all_(),
+        index_url="https://x.edu/p",
+        strategy=Strategy(FetchMode.CLIENT_WAIT, ExtractKind.TEXT_HEADING,
+                          paginate=PaginateMode.SCROLL),
+        first_html="<html>", first_md="",
+        server_fetch=lambda u: ("", ""), client_fetch=client,
+        extract=_extract_from_marker)
+    assert received.get("target_count") is None
+    assert len(r.items) == 8
+    assert r.stopped_reason == "exhausted"

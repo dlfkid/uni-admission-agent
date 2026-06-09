@@ -136,9 +136,9 @@ def _paginate_url(*, index_url: str, strategy: Strategy, first_md: str,
 def _paginate_scroll(*, index_url: str, crawl_range: CrawlRange,
                      client_fetch: Fetch, extract: Extract,
                      first_md: str) -> PaginateResult:
-    # Temporary stub — Task 5 makes this re-fetch with a scroll target_count.
-    del client_fetch
-    items = extract(first_md, index_url)
+    del first_md  # scroll always re-fetches with the proper target_count
+    _html, md = client_fetch(index_url, wait=True, target_count=crawl_range.limit)
+    items = extract(md, index_url)
     reason = "reached_limit" if _over(items, crawl_range.limit) else "exhausted"
     return PaginateResult(_truncate(items, crawl_range.limit), 1, reason)
 
