@@ -111,7 +111,7 @@ Pure, browser-free, fully unit-testable with injected fetch/extract callables.
 class PaginateResult:
     items: List[ExtractItem]
     pages_fetched: int
-    stopped_reason: str  # reached_limit|exhausted|unusable|no_growth|safety_cap
+    stopped_reason: str  # reached_limit|exhausted|unusable|safety_cap
 
 def paginate(
     *, mechanism: PaginateMode, crawl_range: CrawlRange, index_url: str,
@@ -150,14 +150,17 @@ first page truncated to 30.
 | Reached | accumulated ≥ `limit` | `reached_limit` | normal (then truncate) |
 | Exhausted | a page/round yields 0 **new** names | `exhausted` | hit the end |
 | Unusable | a fetched page fails `content_is_usable` | `unusable` | req 4 (can't get data) |
-| No growth | accumulated count unchanged 2 pages/rounds running | `no_growth` | URL drift / repeat content |
 | Safety cap | url_pages ≤ **50 pages**; scroll ≤ **40 rounds** | `safety_cap` | req 4 (even `all` can't run away) |
 
 Notes:
 - `url_pages` exhaustion fires on **one** zero-new-names page (over-paging a URL
-  listing usually yields an empty/repeat page immediately).
-- `scroll` no-growth tolerates one extra round (render latency): stop after
-  **2** consecutive rounds where the HTML byte length does not grow.
+  listing usually yields an empty/repeat page immediately) → `exhausted`.
+- `scroll` no-growth tolerates one extra round (render latency): scrolling stops
+  after **2** consecutive rounds where the HTML byte length does not grow. This
+  no-growth/`max_rounds` ceiling lives **inside** the `client_wait` fetch adapter
+  and surfaces at the outcome level as `exhausted` — there is no distinct
+  `no_growth` `stopped_reason` (the four emitted reasons are `reached_limit`,
+  `exhausted`, `unusable`, `safety_cap`).
 - Any signal stops the loop immediately; no signal is skipped to "try once more".
 
 ### Auto-detect (`detect_mechanism`, unknown sites, after first fetch)
@@ -166,10 +169,14 @@ Notes:
 1. First HTML/MD shows pagination controls?
      URL contains ?page= / &page= / /page/N, OR link text matches
      Next / 下一页 / › — AND a concrete next-page URL can be derived  → URL_PAGES
-2. Else, was the first page fetched via client_wait (a JS app)?
-     Scroll one more leg; HTML byte length grows > 10%               → SCROLL
+2. Else, was the first page fetched via client_wait (a JS app)?    → SCROLL
 3. Else                                                              → NONE
 ```
+
+(As shipped, step 2 returns SCROLL for any `client_wait` page without a
+separate growth-probe: a scroll site needs scrolling anyway, and the scroll
+fetch self-limits via `target_count` and the 40-round cap, so a wasted scroll
+on a non-scrolling JS page is bounded — see the NUS note below.)
 
 Conservative by design: if no concrete next-page URL can be derived, do **not**
 guess `url_pages` — prefer `none` (under-fetch) over blind paging that burns
@@ -215,10 +222,20 @@ Each of the 5 known universities gains a pinned `paginate`:
 | `www.ucl.ac.uk` | `none` | full list on one page |
 | `www.manchester.ac.uk` | `none` | confirmed during implementation; default `none` if single-page |
 | `www.polyu.edu.hk` | `none` | filter-gated completeness is out of scope |
-| `study.nus.edu.sg` | `scroll` | Salesforce lazy-load |
+| `study.nus.edu.sg` | `none` | see note — scroll loads nothing more |
 
 The exact `url_pages` params for Leeds (page-query name, start index) are
 verified against the live site during the implementing task.
+
+> **NUS update (from live acceptance):** NUS was expected to be `scroll`, but a
+> probe showed its rendered DOM is byte-for-byte constant across 15 scroll
+> rounds (10 programmes, no Load More control) — scrolling loads nothing more.
+> It is therefore pinned `none` (the `client_wait` fetch still renders the 10;
+> `none` avoids a pointless second browser session). NUS's full catalogue sits
+> behind a filter/search interaction or backend API — a mechanism out of scope
+> for this feature. The `url_pages` mechanism is instead validated live on Leeds
+> (60 names across 5 pages); `scroll` is validated by unit tests and remains
+> available for a future scroll-paginating site or an auto-detected unknown one.
 
 ## Module 6 — CLI + skill (`cli.py`, `SKILL.md`, extended)
 
@@ -240,8 +257,8 @@ both). The skill decision table gains a row noting the range parameter and that
 - `CrawlRange`: `default` / `of` / `all_` produce the right `limit`·`paginate`.
 - `paginate` × 3 mechanisms: a fake multi-page fetch proves accumulation,
   dedup, and truncation to exactly N.
-- Each stop signal has its own case: `reached_limit` / `exhausted` /
-  `unusable` / `no_growth` / `safety_cap`.
+- Each emitted stop signal has its own case: `reached_limit` / `exhausted` /
+  `unusable` / `safety_cap`.
 - `detect_mechanism`: feed (a) a first page with `?page=` links, (b) a JS app
   that grows on scroll, (c) a static single page → assert URL_PAGES / SCROLL /
   NONE.
@@ -249,7 +266,8 @@ both). The skill decision table gains a row noting the range parameter and that
 
 **Integration / acceptance** (manual, like `naming_smoke` today):
 
-- NUS `scroll` with `--all` returns substantially more than the first-batch 10.
+- NUS `--all` returns its 10 rendered programmes and stops `exhausted` (it does
+  not scroll-load more — see the NUS update above; pinned `none`).
 - A Leeds `--limit 200` run paginates by URL and truncates at 200.
 - A `--all` run on a deep listing stops at a `safety_cap` rather than running
   away.

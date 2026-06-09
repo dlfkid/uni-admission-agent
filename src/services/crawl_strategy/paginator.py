@@ -35,7 +35,7 @@ class PaginateResult:
 
     items: List[ExtractItem]
     pages_fetched: int
-    stopped_reason: str  # reached_limit|exhausted|unusable|no_growth|safety_cap
+    stopped_reason: str  # reached_limit|exhausted|unusable|safety_cap
 
 
 def _key(item: ExtractItem) -> str:

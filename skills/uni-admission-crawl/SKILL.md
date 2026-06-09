@@ -184,5 +184,5 @@ The caller chooses how much to crawl; the tool paginates and auto-stops.
 | Everything (safety-capped) | `adm-agent crawl-index <url> --all` |
 
 The result JSON carries `pages_fetched` and `stopped_reason`
-(`reached_limit` / `exhausted` / `unusable` / `no_growth` / `safety_cap`).
+(`reached_limit` / `exhausted` / `unusable` / `safety_cap`).
 Relay `message_for_user` verbatim — it already explains why crawling stopped.

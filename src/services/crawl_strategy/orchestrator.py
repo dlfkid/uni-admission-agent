@@ -27,7 +27,6 @@ _REASON_ZH = {
     "reached_limit": "因达到上限停止",
     "exhausted": "已抓完全部",
     "unusable": "因翻页中遇到无法解析的页面停止",
-    "no_growth": "因内容不再增长停止",
     "safety_cap": "因达到安全翻页上限停止",
 }
 
