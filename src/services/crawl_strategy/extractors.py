@@ -22,6 +22,14 @@ _BLOB_NAME_RE = re.compile(
 _TEXT_HEADING_RE = re.compile(r"^\s{0,3}#{2,4}\s+(.+?)\s*$", re.MULTILINE)
 _LEARN_MORE_RE = re.compile(r"\[(?:\s*Learn More[^\]]*)\]\(\s*([^)\s]+)", re.IGNORECASE)
 
+_PROGRAM_PREFIX_RE = re.compile(
+    r"^(?:Doctor of |Master of |Bachelor of |"
+    r"Graduate Diploma (?:in|of) |Graduate Certificate (?:in|of) )",
+    re.IGNORECASE,
+)
+_DETAIL_URL_PATH_RE = re.compile(r"(?:programme|course)", re.IGNORECASE)
+_DETAIL_URL_EXCLUDE_RE = re.compile(r"(?:resource|org-asset)", re.IGNORECASE)
+
 
 def _clean(text: str) -> str:
     name = re.sub(r"\s+", " ", str(text or "")).strip()
@@ -95,20 +103,58 @@ def extract_blob(markdown: str, base_url: str) -> List[ExtractItem]:
     return _dedup(out)
 
 
+def _is_program_heading(text: str) -> bool:
+    """Return True if *text* looks like a degree-programme name."""
+    stripped = str(text or "").strip()
+    if not stripped or is_noise_program_name(stripped):
+        return False
+    return bool(_PROGRAM_PREFIX_RE.match(stripped) or _DEGREE_SUFFIX_RE.search(stripped))
+
+
+def _pick_detail_url(lines_between: List[str], base_url: str) -> str | None:
+    """Return the first link URL from *lines_between* that looks like a programme
+    detail page (path contains 'programme' or 'course', NOT 'resource'/'org-asset').
+    Returns None if no qualifying URL is found.
+    """
+    for line in lines_between:
+        for m in _ANY_LINK_RE.finditer(line):
+            raw_url = m.group(2)
+            try:
+                path = urlsplit(raw_url).path
+            except ValueError:
+                path = raw_url
+            if (_DETAIL_URL_PATH_RE.search(path)
+                    and not _DETAIL_URL_EXCLUDE_RE.search(path)):
+                return urljoin(base_url, raw_url)
+    return None
+
+
 def extract_text_heading(markdown: str, base_url: str) -> List[ExtractItem]:
-    """Program name is a heading; detail URL is the next 'Learn More' link."""
+    """Emit every heading whose text matches a programme-name shape.
+
+    detail_url is set only when a link whose URL path contains 'programme' or
+    'course' (but not 'resource'/'org-asset') appears between this heading and
+    the next one.  Works for both simple ``[Learn More](url)`` and complex
+    Salesforce-style pages where the real URL is only in the outer link target.
+    """
     out: List[ExtractItem] = []
-    pending_name: str | None = None
-    for line in (markdown or "").splitlines():
-        heading = _TEXT_HEADING_RE.match(line)
+    lines = (markdown or "").splitlines()
+    n = len(lines)
+    i = 0
+    while i < n:
+        heading = _TEXT_HEADING_RE.match(lines[i])
         if heading:
             cand = _clean(heading.group(1))
-            pending_name = cand if cand and not is_noise_program_name(cand) else None
-            continue
-        learn = _LEARN_MORE_RE.search(line)
-        if learn and pending_name:
-            out.append(ExtractItem(pending_name, urljoin(base_url, learn.group(1))))
-            pending_name = None
+            if _is_program_heading(cand):
+                # Collect lines until the next heading
+                j = i + 1
+                while j < n and not _TEXT_HEADING_RE.match(lines[j]):
+                    j += 1
+                detail = _pick_detail_url(lines[i + 1:j], base_url)
+                out.append(ExtractItem(cand, detail))
+            i += 1
+        else:
+            i += 1
     return _dedup(out)
 
 

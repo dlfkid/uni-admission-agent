@@ -21,3 +21,11 @@ def test_client_adapter_converts_payload_to_markdown():
         html, md = fetch_adapters.client_fetch("https://x/")
     assert html == "<html>c</html>"
     assert md == "# client md"
+
+
+def test_client_fetch_wait_uses_render_path():
+    with patch.object(fetch_adapters, "_run_client_wait_fetch", return_value="<html>nus</html>"), \
+         patch.object(fetch_adapters, "_html_to_markdown", return_value="### Doctor of X"):
+        html, md = fetch_adapters.client_fetch("https://study.nus.edu.sg/programme", wait=True)
+    assert html == "<html>nus</html>"
+    assert "Doctor of X" in md

@@ -14,6 +14,7 @@ REGISTRY: Dict[str, Strategy] = {
     "www.ucl.ac.uk": Strategy(FetchMode.CLIENT, ExtractKind.INLINE_DEGREE),
     "www.manchester.ac.uk": Strategy(FetchMode.CLIENT, ExtractKind.MERGED_COLUMNS),
     "www.polyu.edu.hk": Strategy(FetchMode.CLIENT, ExtractKind.BLOB),
+    "study.nus.edu.sg": Strategy(FetchMode.CLIENT_WAIT, ExtractKind.TEXT_HEADING),
 }
 
 

@@ -21,3 +21,9 @@ def test_unknown_domain_returns_none():
 
 def test_subdomain_and_scheme_insensitive():
     assert lookup("http://COURSES.leeds.ac.uk/anything") is not None
+
+
+def test_known_nus_pinned_to_client_wait_text_heading():
+    s = lookup("https://study.nus.edu.sg/programme")
+    assert s.fetch is FetchMode.CLIENT_WAIT
+    assert s.extract is ExtractKind.TEXT_HEADING
