@@ -22,3 +22,8 @@ def test_crawl_outcome_defaults():
     assert out.status == "unsupported"
     assert out.names == []
     assert out.report_zip is None
+
+
+def test_json_api_extract_kind_exists():
+    from src.services.crawl_strategy.types import ExtractKind
+    assert ExtractKind.JSON_API.value == "json_api"

@@ -23,6 +23,7 @@ class ExtractKind(str, Enum):
     MERGED_COLUMNS = "merged_columns"
     BLOB = "blob"
     TEXT_HEADING = "text_heading"
+    JSON_API = "json_api"
     LLM = "llm"
 
 
