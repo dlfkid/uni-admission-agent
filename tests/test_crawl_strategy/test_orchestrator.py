@@ -192,3 +192,57 @@ def test_leeds_url_pages_paginates_when_limit_given(tmp_path):
     assert out.names_count == 40        # 15 + 15 + 10 (truncated)
     assert out.pages_fetched == 3
     assert out.stopped_reason == "reached_limit"
+
+
+import json as _json
+
+
+def _nus_api_json(n=5):
+    return _json.dumps({"returnValue": [
+        {"programme": {"Title__c": f"Master of Thing {i}",
+                       "Program_Page_Link__c": f"https://study.nus.edu.sg/p{i}"}}
+        for i in range(n)]})
+
+
+def test_nus_api_strategy_returns_full_catalogue(tmp_path):
+    captured = {}
+
+    def api(endpoint, *, body, headers=None):
+        captured["endpoint"] = endpoint
+        captured["body"] = body
+        return _nus_api_json(5)
+
+    out = crawl_index(
+        "https://study.nus.edu.sg/programme", crawl_range=CrawlRange.all_(),
+        server_fetch=lambda u: ("", ""), client_fetch=lambda u, **k: ("", ""),
+        api_fetch=api, report_out=tmp_path, timestamp="t")
+    assert out.status == "ok"
+    assert out.names_count == 5
+    assert out.strategy_used == "api×json_api"
+    assert "apex/execute" in captured["endpoint"]
+    assert captured["body"]["method"] == "searchProgrammes"
+
+
+def test_nus_api_strategy_respects_limit(tmp_path):
+    def api(endpoint, *, body, headers=None):
+        return _nus_api_json(50)
+
+    out = crawl_index(
+        "https://study.nus.edu.sg/programme", crawl_range=CrawlRange.of(20),
+        server_fetch=lambda u: ("", ""), client_fetch=lambda u, **k: ("", ""),
+        api_fetch=api, report_out=tmp_path, timestamp="t")
+    assert out.names_count == 20
+    assert out.stopped_reason == "reached_limit"
+
+
+def test_nus_api_failure_reports(tmp_path):
+    def api(endpoint, *, body, headers=None):
+        return ""   # stale ID / endpoint error -> empty
+
+    out = crawl_index(
+        "https://study.nus.edu.sg/programme",
+        server_fetch=lambda u: ("", ""), client_fetch=lambda u, **k: ("", ""),
+        api_fetch=api, report_out=tmp_path, timestamp="20260609-120000")
+    assert out.status == "unsupported"
+    assert out.report_zip is not None
+    assert "已知策略" in out.message_for_user

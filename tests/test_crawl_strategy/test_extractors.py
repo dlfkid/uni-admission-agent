@@ -72,8 +72,11 @@ def test_nus_golden_fixture_text_heading():
         )
 
 
-def test_every_extractkind_except_llm_is_registered():
+def test_every_markdown_extractkind_is_registered():
+    # LLM (future) and JSON_API (config-driven via make_json_api_extractor, not
+    # a markdown extractor) are intentionally absent from the EXTRACTORS dict.
+    exempt = {ExtractKind.LLM, ExtractKind.JSON_API}
     for kind in ExtractKind:
-        if kind is ExtractKind.LLM:
+        if kind in exempt:
             continue
         assert kind in EXTRACTORS
