@@ -153,7 +153,16 @@ Skimmable. Short. The user might be reading at 2 AM.
 - Don't debug a failed crawl here — route to [[uni-admission-diagnose]].
 - Don't try to start the server if /health is down — route to [[uni-admission-install]] §"Start an existing install".
 
-## Strategy-based crawl (preferred entry)
+## Strategy-based name harvest (`crawl-index`)
+
+**Names only.** `crawl-index` returns a fast, deterministic list of programme
+**names** as JSON. It does **NOT** extract detail fields (tuition / deadlines /
+requirements) and does **NOT** write to the database — so its results do **not**
+appear in the web UI. Use it when the user just wants "what programmes does this
+page list?" or a quick name count.
+
+For a full crawl whose records land in the database and show up in the web UI,
+use the paginated `/agent/run` flow in Steps 1–5 above, not this command.
 
 Run the tool — it classifies the page and picks a strategy itself. You do
 NOT analyze the page or choose a strategy.

@@ -33,10 +33,13 @@ This skill covers reading data out of the local store — either to a file (Exce
 
 ```bash
 adm-agent export \
-  --university <SLUG> \
+  --name <SLUG> \
   --year <YEAR> \
   --output <OUTPUT_PATH>
 ```
+
+(The `export` command's slug flag is `--name` — not `--university`. `--year`
+is optional; omit it to export all years.)
 
 Output is an Excel workbook with one sheet per year (or single sheet if year filter applied). Columns:
 
