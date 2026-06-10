@@ -448,6 +448,10 @@ def crawl(
         "--candidate-taxonomy-filter-top-k",
         help="Maximum candidate links retained after taxonomy filter",
     ),
+    limit: Optional[int] = typer.Option(
+        None, "--limit", help="只爬取 index 页发现的前 N 门课程（含详情入库）。"),
+    crawl_all: bool = typer.Option(
+        False, "--all", help="爬取发现的全部课程（有安全上限）。"),
     verbose: bool = typer.Option(False, "--verbose", "-v"),
 ) -> None:
     """Crawl a URL and import admission data."""
@@ -504,6 +508,8 @@ def crawl(
                 candidate_taxonomy_filter_enabled=candidate_taxonomy_filter_enabled,
                 candidate_taxonomy_filter_threshold=candidate_taxonomy_filter_threshold,
                 candidate_taxonomy_filter_top_k=candidate_taxonomy_filter_top_k,
+                limit=limit,
+                crawl_all=crawl_all,
             )
         )
         typer.echo(f"✅ Crawl complete: {result.imported_count} programs imported")

@@ -673,6 +673,8 @@ async def api_crawl(body: CrawlRequest) -> CrawlResponse:
                     name_resolution_llm_enabled=body.name_resolution_llm_enabled,
                     name_resolution_low_threshold=body.name_resolution_low_threshold,
                     name_resolution_conflict_delta=body.name_resolution_conflict_delta,
+                    limit=body.limit,
+                    crawl_all=body.crawl_all,
                     progress_callback=_on_ingestion_event,
                 )
             finally:

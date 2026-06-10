@@ -53,6 +53,14 @@ class CrawlRequest(BaseModel):
         default="auto",
         description="Page type hint: 'auto', 'index', or 'detail'. Used to skip auto-detection.",
     )
+    limit: Optional[int] = Field(
+        default=None, ge=1,
+        description="Crawl only the first N programmes discovered on the index page",
+    )
+    crawl_all: bool = Field(
+        default=False,
+        description="Crawl every discovered programme (safety-capped)",
+    )
     export_md: bool = Field(
         default=False,
         description="Whether to export crawled markdown files to disk",
@@ -163,6 +171,12 @@ class CrawlRequest(BaseModel):
         default=None,
         description="Optional per-request policy profile overrides from client",
     )
+
+    @model_validator(mode="after")
+    def _limit_xor_all(self) -> "CrawlRequest":
+        if self.crawl_all and self.limit is not None:
+            raise ValueError("limit and crawl_all are mutually exclusive")
+        return self
 
     @model_validator(mode="after")
     def _validate_taxonomy_thresholds(self) -> "CrawlRequest":
