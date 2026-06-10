@@ -14,16 +14,19 @@ from pathlib import Path
 
 from loguru import logger
 
+from src.core.paths import get_data_dir
+
 
 def resolve_log_dir() -> Path:
     """Return the directory where log files should be written.
 
-    * **Debug / dev mode** — current working directory.
+    * **Debug / dev mode** — ``<project>/data/logs/`` (kept out of the repo via
+      ``.gitignore``, so smoke-run logs no longer land in the working tree).
     * **Production / frozen** — same directory as the executable.
     """
     if getattr(sys, "frozen", False):
         return Path(sys.executable).parent
-    return Path.cwd()
+    return get_data_dir() / "logs"
 
 
 class InterceptHandler(logging.Handler):

@@ -22,12 +22,12 @@ def _clean_loguru_sinks():
 class TestResolveLogDir:
     """Tests for resolve_log_dir()."""
 
-    def test_returns_cwd_in_dev_mode(self, tmp_path, monkeypatch):
-        """Non-frozen mode returns current working directory."""
-        monkeypatch.chdir(tmp_path)
+    def test_returns_data_logs_in_dev_mode(self, monkeypatch):
+        """Non-frozen mode returns <project>/data/logs (gitignored), not CWD."""
         monkeypatch.delattr(sys, "frozen", raising=False)
+        from src.core.paths import get_data_dir
         result = resolve_log_dir()
-        assert result == tmp_path
+        assert result == get_data_dir() / "logs"
 
     def test_returns_executable_parent_in_frozen_mode(self, monkeypatch):
         """Frozen mode returns parent directory of sys.executable."""
@@ -82,18 +82,20 @@ class TestIntegration:
     """Verify setup_logging activates file logging."""
 
     def test_setup_logging_creates_log_file(self, tmp_path, monkeypatch):
-        """Calling setup_logging() should produce a .txt log file in cwd."""
+        """Calling setup_logging() should produce a .txt log file in data/logs."""
         from src.core.environment import setup_logging
 
-        monkeypatch.chdir(tmp_path)
         monkeypatch.delattr(sys, "frozen", raising=False)
+        # Redirect the data dir to a temp location so the log lands there
+        # (resolve_log_dir now returns get_data_dir()/logs, not cwd).
+        monkeypatch.setattr("src.core.file_logger.get_data_dir", lambda: tmp_path)
 
         setup_logging(verbose=False)
 
         logging.getLogger("integration.test").info("integration check")
         time.sleep(0.1)
 
-        txt_files = list(tmp_path.glob("*.txt"))
-        assert len(txt_files) >= 1, f"No log files created in {tmp_path}"
+        txt_files = list((tmp_path / "logs").glob("*.txt"))
+        assert len(txt_files) >= 1, f"No log files created in {tmp_path / 'logs'}"
         content = txt_files[0].read_text(encoding="utf-8")
         assert "integration check" in content

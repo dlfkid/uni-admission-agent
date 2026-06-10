@@ -41,6 +41,14 @@ MANIFEST
 release/
 uni-admission-extension.zip
 
+# Runtime data dir: DB, logs (data/logs/<timestamp>.txt), crawl reports.
+# Keep these out of the repo — smoke runs used to dump <timestamp>.txt at root.
+data/
+# Stray smoke/CI output that used to be committed at the repo root
+/20[0-9][0-9]-[0-9][0-9]-[0-9][0-9]_*.txt
+pytest_output*.txt
+pylint_final_report.txt
+
 # Installer logs
 pip-log.txt
 pip-delete-this-directory.txt
