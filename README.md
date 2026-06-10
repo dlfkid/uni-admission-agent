@@ -1,1047 +1,395 @@
 # UniAdmission Agent
 
-**Autonomous LLM-powered engine for aggregating and synchronizing global university admission requirements into a structured database.**
+**Autonomous LLM-powered engine for aggregating and synchronising global university admission requirements into a structured database.**
 
-## 🎯 Overview
-This project automates the collection of admission criteria from world-renowned universities. It uses an **Agentic Workflow** to handle dynamic web content, bypass anti-detection mechanisms, and transform unstructured web data into verified JSON schemas.
+## Overview
 
-## 🛠 Tech Stack
-- **Engine:** Python 3.12+ (managed by `pyenv`)
-- **Intelligence:** Gemini 2.0 Flash / DeepSeek / VolcEngine (豆包)
-- **Automation:** Playwright with Stealth Plugin
-- **Extraction:** Crawl4AI / Firecrawl (Markdown-first approach)
-- **Validation:** Pydantic (Strongly typed schemas)
-- **Storage:** PostgreSQL (via SQLModel)
-- **API:** FastAPI + MCP Server
-- **CLI:** Typer
+UniAdmission Agent crawls university programme pages, extracts structured admission data, and stores it in a queryable database. It handles dynamic web content and anti-detection using Playwright stealth, converts HTML to Markdown for token-efficient LLM processing, and validates all output through Pydantic schemas.
 
-## 📐 Architecture
+**Tech stack:** Python 3.12, FastAPI, MCP server, crawl4ai + Playwright, SQLModel / SQLite (default) / PostgreSQL (opt-in), PydanticAI agent runtime, Typer CLI, Chrome extension.
+
+## Architecture
 
 ```
-Entry Points                    Services Layer              Infrastructure
+Entry Points                    Services Layer                   Infrastructure
 ┌──────────────┐
 │  CLI (Typer) │──┐
-└──────────────┘  │    ┌──────────────────┐    ┌───────────────┐
-┌──────────────┐  ├──→ │ src/services/    │──→ │ src/scrapers/ │
-│ FastAPI REST │──┤    │   crawler.py     │    │ src/agents/   │
-└──────────────┘  │    └──────────────────┘    │ src/storage/  │
-┌──────────────┐  │                            │ src/core/     │
-│  MCP Server  │──┘                            └───────────────┘
-└──────────────┘
-┌──────────────┐
-│Chrome Plugin │──→ POST /crawl (REST)
+└──────────────┘  │    ┌─────────────────────────┐    ┌──────────────────────┐
+┌──────────────┐  ├──→ │ src/services/           │──→ │ src/scrapers/        │
+│ FastAPI REST │──┤    │   crawler.py            │    │ src/agent_runtime/   │
+└──────────────┘  │    │   crawl_strategy/       │    │ src/storage/         │
+┌──────────────┐  │    │   (orchestrator,        │    │ src/core/            │
+│  MCP Server  │──┘    │    registry, fetch      │    └──────────────────────┘
+└──────────────┘       │    ladder, classifier)  │
+┌──────────────┐       └─────────────────────────┘
+│Chrome Plugin │──→ POST /crawl (REST) / WS /clients/ws
 └──────────────┘
 ```
 
-## 📘 Upgrade Changelog
-- [Phase 1: Data-Layer Upgrade (fact + dimensions + evidence + versioning)](docs/changelog_phase1_data_layer.md)
-- [Phase 2: Execution-Layer Decoupling (ingestion_job/task + staged pipeline + resume)](docs/changelog_phase2_execution_layer.md)
-- [Phase 3: Quality System Seed (golden samples + scoring + CI gate)](docs/changelog_phase3_quality_system.md)
-- [Consolidated Progress Log](change_log.md)
+`src/services/crawl_strategy/` is the deterministic crawl tier — it classifies an index page's layout, selects the right extractor, and dispatches fetch via a ladder (server → client → API). `src/agent_runtime/` contains the PydanticAI-based agent loop (s01–s12).
 
-## ✅ Current Optimization Status (2026-04-06)
-- Phase 1 complete: versioned requirement data model and evidence chain are in place.
-- Phase 2 complete: crawl flow now runs through staged ingestion pipeline by default, including `--continue > 0` paths.
-- Phase 3 seed complete: golden sample collection, offline quality scoring, and CI regression gate are enabled.
-- Taxonomy-guided name accuracy is enabled for crawl requests (hint injection + optional high-confidence override).
-- Latest benchmark includes 4 cases (UCL/Manchester/Leeds/PolyU) and passes global threshold `0.60`.
-- **Agent Runtime (s01–s12)**: Full LLM-driven agent loop with tool dispatch, task DAG, subagents, team coordination, background execution, context compression, and git worktree isolation.
-- **Schema-based extraction**: agent auto-fetch now learns per-template CSS selectors from the first detail page, reuses them on sibling pages, and falls back to field-level or full-page LLM extraction when coverage drops.
-- Agent streaming boundary:
-  - Agent lifecycle progress is available via task events / SSE.
-  - Final user-visible agent summary may stream token deltas or fall back to one-shot text.
-  - Structured extraction paths remain non-streaming for stability, including cleaner extraction, page-type classification, and name resolution.
-- **Agent chat mode**: free-form server-side agent chat is available via `POST /agent/chat`, with the same `/tasks/{id}/events` SSE channel used for thinking/tool/summary updates.
-- **Automatic file logging**: backend CLI/server runs now emit rotated timestamped `.txt` logs automatically.
+## Quick Start (Plugin Users)
 
-## Production Usage (No Code Required)
+This repo ships as a **plugin** with a router skill and 4 sub-skills (install / crawl / diagnose / export) plus 5 slash commands. Auto-detects `claude`, `codex`, `opencode`, and `openclaw`.
 
-If you just want to *use* the agent without writing code, download the latest release for your platform.
-
-### 1. Download
-Go to the [Releases Page](../../releases) and download the artifact for your OS:
-- **Windows**: `adm-agent-vX.Y.Z-windows-x86_64.zip`
-- **macOS**: `adm-agent-vX.Y.Z-macos-arm64.tar.gz` (Apple Silicon) or `x86_64` (Intel)
-- **Linux**: `adm-agent-vX.Y.Z-linux-x86_64.tar.gz`
-
-### 2. Installation & Run
-
-#### Windows
-1. Unzip the file.
-2. Open `cmd` or `PowerShell` in the unzipped folder.
-3. Run:
-   ```powershell
-   # Check environment
-   .\adm-agent.exe check
-
-   # Install browser (required for crawling, only needed once)
-   .\adm-agent.exe browser-install
-
-   # Start host + client together (recommended for single-machine use)
-   .\adm-agent.exe up
-   # Press Ctrl+C to stop both processes cleanly.
-
-   # --- Advanced: run host and client separately ---
-   # Start the server only
-   .\adm-agent.exe serve
-
-   # Stop the running server (from another terminal)
-   .\adm-agent.exe serve-stop
-   ```
-
-#### macOS / Linux
-1. Extract the archive:
-   ```bash
-   tar -xzf adm-agent-*.tar.gz
-   cd adm-agent-*
-   ```
-2. Run via terminal:
-   ```bash
-
-   # For Mac OS you need run this first to override the safety control
-   xattr -cr /path/to/your/adm-agent
-
-   # Check environment
-   ./adm-agent check
-
-   # Install browser (required for crawling, only needed once)
-   ./adm-agent browser-install
-
-   # Start host + client together (recommended for single-machine use)
-   ./adm-agent up
-   # Press Ctrl+C to stop both processes cleanly.
-
-   # --- Advanced: run host and client separately ---
-   # Start the server only
-   ./adm-agent serve
-
-   # Stop the running server (from another terminal)
-   ./adm-agent serve-stop
-   ```
-   > **macOS Note**: If you see "System cannot verify the developer", go to **Settings > Privacy & Security** and click "Allow Anyway".
-
-### 3. Setup
-1. Create a `.env` file next to the executable. The minimum is one LLM provider key — the database needs no extra setup (a local SQLite file is created automatically at first start). Copy the content below:
-   ```bash
-   # Database URL (optional)
-   # Default — leave commented: a local SQLite file is created at
-   # ./data/admission.db (dev) or ~/.uni-agent/admission.db (frozen).
-   # Advanced — point at a Postgres instance (requires psycopg2):
-   #   DATABASE_URL=postgresql+psycopg2://postgres:postgres@localhost:5432/uni_admission
-
-   # Gemini APIKey config
-   GEMINI_API_KEY=your_gemini_api_key_here
-   GEMINI_MODEL_NAME=gemini-2.0-flash
-
-   # DeepSeek APIKey config
-   DEEPSEEK_API_KEY=your_deepseek_api_key_here
-   DEEPSEEK_BASE_URL=https://api.deepseek.com
-   DEEPSEEK_MODEL_NAME=deepseek-chat
-
-   # VolcEngine (豆包) config
-   VOLC_API_KEY=your_volc_api_key_here
-   VOLC_MODEL_ID=your_model_endpoint_id
-
-   # Custom LLM Provider (OpenAI-compatible API)
-   CUSTOM_LLM_BASE_URL=https://api.openai.com/v1
-   CUSTOM_LLM_API_KEY=your_openai_api_key_here
-   CUSTOM_LLM_MODEL_NAME=gpt-4o-mini
-
-   # LLM Priority config (drag to reorder in Chrome extension)
-   # Supported providers: deepseek, gemini, volcengine, custom
-   LLM_PRIORITY_LIST=deepseek, gemini, volcengine, custom
-
-   # Agent runtime (enabled by default; can still be overridden explicitly)
-   AGENT_ENABLED=true
-   AGENT_RUNTIME=pydanticai
-   AGENT_ALLOW_INTERNAL_LLM=true
-   AGENT_ALLOW_EXTERNAL_LLM=true
-   ```
-2. Set API keys in `.env`. `DATABASE_URL` is optional — leave it unset to use SQLite (recommended), or point at a Postgres instance if you have one. See [Database Configuration](#database-configuration) for details on storage location, switching engines, and platform caveats.
-
-## 🤖 Using with LLM CLIs (Claude Code / Codex / OpenCode / OpenClaw)
-
-This repo ships as a **plugin** with a router skill + 4 focused sub-skills (install / crawl / diagnose / export) plus 5 slash commands. The repo is its own marketplace so Claude Code users get auto-updates; Codex / OpenCode / OpenClaw users get the same skills via symlink.
-
-### One-line install (auto-detects your CLI)
+### One-line install
 
 ```bash
 git clone https://github.com/dlfkid/uni-admission-agent.git ~/.uni-admission-agent && \
   bash ~/.uni-admission-agent/install-plugin.sh
 ```
 
-The installer detects `claude`, `codex`, `opencode`, and `openclaw` and configures each one it finds. Safe to re-run — refreshes the install.
+The installer detects which CLI(s) you have and configures each. Safe to re-run — refreshes the install.
 
-### Manual install per CLI
-
-If you'd rather not run the script, use the CLI-specific path:
+### Manual install
 
 **Claude Code** (native plugin + auto-update):
-
 ```bash
 claude plugin marketplace add https://github.com/dlfkid/uni-admission-agent
 claude plugin install uni-admission-agent
 ```
 
-**Codex CLI** (symlink skills to the universal `~/.agents/skills/` path):
-
+**Codex / OpenCode / OpenClaw** — symlink the skills:
 ```bash
+# Codex: ~/.agents/skills/   |  OpenCode: ~/.config/opencode/skills/  |  OpenClaw: ~/.openclaw/skills/
 git clone https://github.com/dlfkid/uni-admission-agent.git ~/.uni-admission-agent
 mkdir -p ~/.agents/skills
 for s in using-uni-admission-agent uni-admission-install uni-admission-crawl uni-admission-diagnose uni-admission-export; do
   ln -sfn ~/.uni-admission-agent/skills/$s ~/.agents/skills/$s
 done
 ```
-
-**OpenCode** (symlink to `~/.config/opencode/skills/`):
-
-```bash
-git clone https://github.com/dlfkid/uni-admission-agent.git ~/.uni-admission-agent
-mkdir -p ~/.config/opencode/skills
-for s in using-uni-admission-agent uni-admission-install uni-admission-crawl uni-admission-diagnose uni-admission-export; do
-  ln -sfn ~/.uni-admission-agent/skills/$s ~/.config/opencode/skills/$s
-done
-```
-
-**OpenClaw** (symlink to `~/.openclaw/skills/` — AgentSkills-compatible managed/local path):
-
-```bash
-git clone https://github.com/dlfkid/uni-admission-agent.git ~/.uni-admission-agent
-mkdir -p ~/.openclaw/skills
-for s in using-uni-admission-agent uni-admission-install uni-admission-crawl uni-admission-diagnose uni-admission-export; do
-  ln -sfn ~/.uni-admission-agent/skills/$s ~/.openclaw/skills/$s
-done
-```
+(Adjust target path for OpenCode / OpenClaw.)
 
 ### Updates
-
 ```bash
-# Claude Code (native)
+# Claude Code
 claude plugin update uni-admission-agent
-
-# Codex / OpenCode / OpenClaw (rerun installer — does git pull + refreshes symlinks)
+# Others — rerun installer (does git pull + refreshes symlinks)
 bash ~/.uni-admission-agent/install-plugin.sh
 ```
-
-Slash commands and auto-discovery only work in Claude Code; Codex/OpenCode users invoke skills through natural-language triggers (the router skill's `description` matches the same phrases).
 
 ### Slash commands
 
 | Command | What it does |
 |---|---|
-| `/uni-admission-agent:uni-admission-agent` | Router — describe what you want in natural language, plugin decides install / crawl / diagnose / export. |
-| `/uni-admission-agent:install` | Install / upgrade / start adm-agent (`~/.uni-agent/`, no sudo, SQLite default). |
-| `/uni-admission-agent:crawl` | Crawl a university URL — single page, single index, or paginated. |
+| `/uni-admission-agent:uni-admission-agent` | Router — describe what you want; plugin routes to install / crawl / diagnose / export. |
+| `/uni-admission-agent:install` | Install / upgrade / start the agent (`~/.uni-agent/`, no sudo, SQLite default). |
+| `/uni-admission-agent:crawl` | Crawl a university URL — single page, index, or paginated. |
 | `/uni-admission-agent:diagnose` | Investigate why a crawl failed — quarantine, audit funnel, stop reasons. |
-| `/uni-admission-agent:export` | Export stored data to Excel / CSV, or preview what's in the database. |
+| `/uni-admission-agent:export` | Export stored data to Excel / CSV, or preview the database. |
 
 ### Natural-language entry
 
-You don't have to use slash commands — the plugin's router skill triggers on any adm-agent / 抓取大学 / crawl programs intent. Just describe what you want:
+Slash commands are optional — the router triggers on any *adm-agent / 抓取大学 / crawl programs* intent:
 
 ```
 请帮我抓取利兹大学 2026 年的硕士课程，入口 https://courses.leeds.ac.uk/course-search/masters-courses
 跑完后汇报：总程序数、stop_reason、quarantine top 3 原因。
 ```
 
-The router will preflight (CLI installed? server running?), route to install if needed, then to crawl. No skill switching by hand.
+The router preflights (CLI installed? server running?), routes to install if needed, then to crawl.
 
-## 🚀 Getting Started (Development)
-1. `pyenv local 3.12.0`
-2. `uv sync`
-3. Copy `.env.example` to `.env` and add your API keys.
-4. Install Git hooks for code quality: `bash .githooks/install-hooks.sh`
-## 📖 Usage
+## Developer Setup
 
-### CLI Commands
+**Prerequisites:** `pyenv` + Python 3.12, `uv`.
 
-**Unix (macOS/Linux):**
 ```bash
-# Environment check
-./adm-agent check
-
-# Configure LLM provider (interactive wizard)
-./adm-agent llm-config
-
-# Install Playwright browser (only needed once)
-./adm-agent browser-install
-
-# Start host + client together (one-command local launcher; Ctrl+C stops both)
-#   --host           Bind address (default: 127.0.0.1)
-#   --port           Port number (default: 8910)
-#   --health-timeout Seconds to wait for server health (default: 20)
-#   --skip-client    Start only the server (no client)
-./adm-agent up
-
-# Import Excel data
-#   --name: University slug (a-z0-9-)
-#   --year: Academic year (e.g., 2026)
-#   --file: Path to XLSX file
-#   --llm:  Enable LLM analysis (optional)
-./adm-agent import --name hku --year 2026 --file example/hku-26-27.xlsx
-
-# Import with LLM fallback
-./adm-agent import --name hku --year 2026 --file example/hku-26-27.xlsx --llm
-
-# Export data to Excel
-#   --name:   University slug
-#   --output: Output file path
-#   --year:   Academic year (optional)
-./adm-agent export --name hku --output hku_export.xlsx --year 2026
-
-# Check for backend updates
-./adm-agent upgrade --check
-
-# Update backend to latest version
-./adm-agent upgrade
-
-# Force update even if already on latest version
-./adm-agent upgrade --force
-
-# Apply database migrations
-./adm-agent db-migrate --yes
-
-# Destructive reset: drop + recreate + migrate
-./adm-agent db-reinit --yes
-
-# Show database migration revision status
-./adm-agent db-version
-
-# Auto-repair migration failures with rollback safety
-./adm-agent repair --auto
-
-# List recent Phase 2 ingestion jobs
-./adm-agent ingestion-jobs --limit 20
-
-# Resume a failed ingestion job
-./adm-agent ingestion-resume --job <job_uid> --stage validate_rules
-
-# Collect Phase 3 golden sample snapshots
-./adm-agent golden-collect --overwrite
-
-# Run Phase 3 quality scoring (fails on regression threshold)
-./adm-agent quality-score --threshold 0.60
-
-# Export current taxonomy snapshot (optionally include learned names)
-./adm-agent taxonomy-export --output golden_samples/program_names/cleaned_programs_names.json --include-learned --min-confidence 0.90
-
-# List extractions that failed the quality gate (per-university diagnostic)
-./adm-agent quarantine list --university hku --year 2026
-
-# Clear quarantine entries for one university (optionally filter by reason)
-#   Reasons: empty_name, name_too_short, noise_name, empty_shell,
-#            no_markdown, extraction_failed
-./adm-agent quarantine clear --university hku
-./adm-agent quarantine clear --university hku --reason empty_shell
-
-# Inspect index→detail funnel records (raw → filtered → extracted)
-#   Useful when "index had 10 programs but only 3 made it into the DB" — shows
-#   exactly where in the funnel programs were lost.
-./adm-agent audit list --university hku --year 2026 --limit 10
-
-# Drill into one audit row to see WHICH URLs got filtered at each stage
-./adm-agent audit drill 42
-
-# One-shot post-crawl summary for one university (designed for LLM CLI consumption
-# via the uni-admission-crawl skill). Quotable, includes funnel + quarantine
-# breakdown + stop_reason interpretation cues.
-./adm-agent crawl-summary --university hku --year 2026
-
-# One-shot wipe of ALL diagnostic data (quarantine + audit + audit links)
-# for one university. Use --year to scope to a single academic year.
-# The main `program` table is NOT touched — only diagnostic records.
-./adm-agent diagnostics clear --university hku
-./adm-agent diagnostics clear --university hku --year 2026
-
-# Show current version
-./adm-agent version
-
-# Show detailed version information
-./adm-agent version --verbose
-
-# Show comprehensive help
-./adm-agent help
-
-# Show detailed help with examples  
-./adm-agent help --verbose
+pyenv local 3.12.0
+uv sync
+cp .env.example .env   # add your API keys
+bash .githooks/install-hooks.sh
 ```
 
-**Windows:**
-```powershell
-# Environment check
-.\adm-agent.exe check
+### CLI entry-point clarification
 
-# Install Playwright browser (only needed once)
-.\adm-agent.exe browser-install
+| Context | Command |
+|---|---|
+| Development / source checkout | `uni-admission <cmd>` (installed by `uv sync` via `pyproject.toml`) or `uv run python -m src.cmd.cli <cmd>` |
+| Packaged binary (releases) | `./adm-agent <cmd>` (macOS/Linux) · `adm-agent.exe <cmd>` (Windows) |
 
-# Start host + client together (one-command local launcher; Ctrl+C stops both)
-.\adm-agent.exe up
+All examples below use `uni-admission` (dev). For the packaged binary, substitute `./adm-agent` (or `adm-agent.exe` on Windows — append `.exe` to the binary name).
 
-# Import Excel data
-.\adm-agent.exe import --name hku --year 2026 --file example/hku-26-27.xlsx
+### `.env` minimum
 
-# Import with LLM fallback
-.\adm-agent.exe import --name hku --year 2026 --file example/hku-26-27.xlsx --llm
-
-# Export data to Excel
-.\adm-agent.exe export --name hku --output hku_export.xlsx --year 2026
-
-# Check for backend updates
-.\adm-agent.exe upgrade --check
-
-# Update backend to latest version
-.\adm-agent.exe upgrade
-
-# Force update even if already on latest version
-.\adm-agent.exe upgrade --force
-
-# Apply database migrations
-.\adm-agent.exe db-migrate --yes
-
-# Destructive reset: drop + recreate + migrate
-.\adm-agent.exe db-reinit --yes
-
-# Show database migration revision status
-.\adm-agent.exe db-version
-
-# Auto-repair migration failures with rollback safety
-.\adm-agent.exe repair --auto
-
-# List recent Phase 2 ingestion jobs
-.\adm-agent.exe ingestion-jobs --limit 20
-
-# Resume a failed ingestion job
-.\adm-agent.exe ingestion-resume --job <job_uid> --stage validate_rules
-
-# Collect Phase 3 golden sample snapshots
-.\adm-agent.exe golden-collect --overwrite
-
-# Run Phase 3 quality scoring (fails on regression threshold)
-.\adm-agent.exe quality-score --threshold 0.60
-
-# Export current taxonomy snapshot (optionally include learned names)
-.\adm-agent.exe taxonomy-export --output golden_samples/program_names/cleaned_programs_names.json --include-learned --min-confidence 0.90
-
-# List extractions that failed the quality gate (per-university diagnostic)
-.\adm-agent.exe quarantine list --university hku --year 2026
-
-# Clear quarantine entries for one university (optionally filter by reason)
-.\adm-agent.exe quarantine clear --university hku
-.\adm-agent.exe quarantine clear --university hku --reason empty_shell
-
-# Inspect index→detail funnel records
-.\adm-agent.exe audit list --university hku --year 2026 --limit 10
-
-# Drill into one audit row to see WHICH URLs got filtered at each stage
-.\adm-agent.exe audit drill 42
-
-# One-shot post-crawl summary
-.\adm-agent.exe crawl-summary --university hku --year 2026
-
-# One-shot wipe of ALL diagnostic data for one university (quarantine + audit)
-.\adm-agent.exe diagnostics clear --university hku
-.\adm-agent.exe diagnostics clear --university hku --year 2026
-
-# Show current version
-.\adm-agent.exe version
-
-# Show detailed version information
-.\adm-agent.exe version --verbose
-
-# Show comprehensive help
-.\adm-agent.exe help
-
-# Show detailed help with examples
-.\adm-agent.exe help --verbose
-```
-
-### 4. Troubleshooting
-
-**Error: "Playwright browser not found"**
-
-If you see this error when running the executable, it means the required Chromium browser is missing.
-
-**Solution 1: Run `browser-install` command (Recommended)**
 ```bash
-# Windows
-.\adm-agent.exe browser-install
+# At least one LLM provider key is required.
+GEMINI_API_KEY=your_gemini_api_key_here
+GEMINI_MODEL_NAME=gemini-2.0-flash
 
-# macOS / Linux
-./adm-agent browser-install
+# DeepSeek (optional)
+DEEPSEEK_API_KEY=your_deepseek_api_key_here
+DEEPSEEK_BASE_URL=https://api.deepseek.com
+DEEPSEEK_MODEL_NAME=deepseek-chat
+
+# VolcEngine / 豆包 (optional)
+VOLC_API_KEY=your_volc_api_key_here
+VOLC_MODEL_ID=your_model_endpoint_id
+
+# Custom OpenAI-compatible provider (optional)
+CUSTOM_LLM_BASE_URL=https://api.openai.com/v1
+CUSTOM_LLM_API_KEY=your_openai_api_key_here
+CUSTOM_LLM_MODEL_NAME=gpt-4o-mini
+
+# Provider priority (drag to reorder in Chrome extension)
+LLM_PRIORITY_LIST=deepseek, gemini, volcengine, custom
+
+# Agent runtime (enabled by default)
+AGENT_ENABLED=true
+AGENT_RUNTIME=pydanticai
+
+# DATABASE_URL — leave unset for SQLite (recommended).
+# Opt-in to Postgres: postgresql+psycopg2://user:pass@host:port/dbname
 ```
-This will automatically download and install the Chromium browser.
 
-**Solution 2: Install Browsers Manually**
-If you have Python installed:
+## CLI Commands
+
+| Command | Description |
+|---|---|
+| `uni-admission check` | Verify environment |
+| `uni-admission llm-config` | Interactive LLM provider wizard |
+| `uni-admission browser-install` | Download Chromium (required once) |
+| `uni-admission up` | Start server + client together; Ctrl+C stops both |
+| `uni-admission serve [--port N]` | Start API + MCP server (default `0.0.0.0:8910`) |
+| `uni-admission serve-install [--port N]` | Start server as background daemon |
+| `uni-admission serve-stop` | Stop foreground or daemon server |
+| `uni-admission crawl --name <slug> --year <Y> --url <url>` | Crawl a URL and import admission data |
+| `uni-admission crawl --name hku --year 2026 --url <url> --continue 2` | Extra LLM scouting depth |
+| `uni-admission crawl-index <url> [--limit N \| --all]` | Deterministic index harvest (see below) |
+| `uni-admission import --name <slug> --year <Y> --file <xlsx>` | Import from Excel (`--llm` for LLM fallback) |
+| `uni-admission export --name <slug> --output <file> [--year Y]` | Export to Excel |
+| `uni-admission status` | DB URL, university count, program count |
+| `uni-admission db-version` | Alembic revision status |
+| `uni-admission db-migrate --yes` | Apply pending migrations |
+| `uni-admission db-reinit --yes` | Drop + recreate + migrate (destructive) |
+| `uni-admission repair --auto` | Auto-repair migration failures |
+| `uni-admission ingestion-jobs [--limit N]` | List recent ingestion jobs |
+| `uni-admission ingestion-resume --job <uid> --stage <stage>` | Resume failed job |
+| `uni-admission golden-collect [--overwrite]` | Collect quality golden samples |
+| `uni-admission quality-score [--threshold 0.60]` | Run quality scoring gate |
+| `uni-admission taxonomy-export [--output <file>] [--include-learned] [--min-confidence 0.90]` | Export taxonomy snapshot |
+| `uni-admission quarantine list --university <slug> [--year Y]` | List quarantined extractions |
+| `uni-admission quarantine clear --university <slug> [--reason <r>]` | Clear quarantine entries |
+| `uni-admission audit list --university <slug> [--year Y] [--limit N]` | Inspect index→detail funnel |
+| `uni-admission audit drill <id>` | Drill into one audit row |
+| `uni-admission crawl-summary --university <slug> [--year Y]` | Post-crawl summary (LLM-CLI friendly) |
+| `uni-admission diagnostics clear --university <slug> [--year Y]` | Wipe quarantine + audit records |
+| `uni-admission upgrade [--check \| --force]` | Update backend to latest version |
+| `uni-admission version [--verbose]` | Show version |
+| `uni-admission help [--verbose]` | Show help |
+
+## crawl-index / crawl-strategy
+
+`crawl-index` is the deterministic programme-name harvesting tier, separate from the LLM crawl pipeline:
+
 ```bash
-pip install playwright
-playwright install chromium
+uni-admission crawl-index <url>              # auto-detect layout, extract names
+uni-admission crawl-index <url> --limit 50   # stop after 50 names
+uni-admission crawl-index <url> --all        # paginate to end
+uni-admission crawl-index <url> --json       # machine-readable output
 ```
 
-**Solution 3: Use Custom Path**
-If you already have Playwright browsers installed elsewhere, set the environment variable:
-```bash
-export PLAYWRIGHT_BROWSERS_PATH=/path/to/ms-playwright
-./adm-agent serve
-```
+Internally, `src/services/crawl_strategy/` classifies each index page's layout (heading-link, inline-degree, merged-columns, blob, JSON-API) and dispatches via a fetch ladder (server fetch → client browser → API). A registry pins proven strategies for known universities:
 
-### Crawling
+| Domain | Fetch mode | Extract kind |
+|---|---|---|
+| `courses.leeds.ac.uk` | Server | Heading link (paginated) |
+| `www.ucl.ac.uk` | Client browser | Inline degree links |
+| `www.manchester.ac.uk` | Client browser | Merged columns |
+| `www.polyu.edu.hk` | Client browser | Blob |
+| `study.nus.edu.sg` | Salesforce Apex API | JSON API (full catalogue, one POST) |
 
-**Unix (macOS/Linux):**
-```bash
-# Crawl a URL and import admission data
-#   --name:      University slug (a-z0-9-)
-#   --year:      Academic year
-#   --url:       Starting URL
-#   --continue:  Extra depth for LLM scouting (default: 0)
-./adm-agent crawl --name hku --year 2026 --url https://admissions.hku.hk/programmes
-./adm-agent crawl --name hku --year 2026 --url https://admissions.hku.hk/programmes --continue 2
-```
+Unknown universities fall back to automatic classification. To add a new university: add a row to `src/services/crawl_strategy/registry.py` + a golden sample.
 
-**Windows:**
-```powershell
-.\adm-agent.exe crawl --name hku --year 2026 --url https://admissions.hku.hk/programmes
-.\adm-agent.exe crawl --name hku --year 2026 --url https://admissions.hku.hk/programmes --continue 2
-```
+## Database
 
-### Database Configuration
+`uni-admission` supports two backends. **SQLite is the default and requires no setup.**
 
-`adm-agent` supports two backends. **You do not need to configure either explicitly — SQLite is the default and works out of the box.**
-
-| | **SQLite** *(default)* | **Postgres** *(opt-in)* |
+| | **SQLite** *(default)* | **PostgreSQL** *(opt-in)* |
 |---|---|---|
 | `DATABASE_URL` | leave unset / commented out | `postgresql+psycopg2://user:pass@host:port/dbname` |
-| Install needed | none — built into Python stdlib | `psycopg2-binary` (already in `pyproject.toml`) + running Postgres server |
-| Where data lives | `./data/admission.db` (dev) · `~/.uni-agent/admission.db` (packaged binary) · `%USERPROFILE%\.uni-agent\admission.db` (Windows packaged) | wherever your Postgres instance stores it |
-| Schema bootstrap | `SQLModel.metadata.create_all()` once at startup | Alembic migrations to `head` on startup |
-| Best for | local single-user use, install skill, demos | multi-process deployments, shared databases |
+| Install needed | none (stdlib) | `psycopg2-binary` + running Postgres |
+| Data location | `./data/admission.db` (dev) · `~/.uni-agent/admission.db` (binary) · `%USERPROFILE%\.uni-agent\admission.db` (Windows binary) | your Postgres instance |
+| Schema bootstrap | `SQLModel.metadata.create_all()` at startup | Alembic migrations to `head` at startup |
+| Best for | local single-user, demos | multi-process, shared deployments |
 
-#### SQLite — what gets enabled automatically
-
-Per-connection PRAGMAs applied on every new SQLite connection:
+**SQLite PRAGMAs applied per-connection:**
 
 | PRAGMA | Value | Why |
 |---|---|---|
-| `journal_mode` | `WAL` | Readers don't block while a writer commits |
-| `busy_timeout` | `5000` ms | Wait instead of failing on transient locks |
-| `foreign_keys` | `ON` | SQLite default is **off** — we turn it on for referential integrity |
+| `journal_mode` | `WAL` | Readers don't block writers |
+| `busy_timeout` | `5000 ms` | Wait instead of failing on transient locks |
+| `foreign_keys` | `ON` | SQLite default is off; we enforce referential integrity |
 | `synchronous` | `NORMAL` | Safe under WAL, faster than `FULL` |
 
 **Platform notes:**
+- macOS / Linux / Windows — same `.db` format, fully portable.
+- Do **not** put the `.db` file in a synced folder (iCloud, OneDrive, Dropbox, Google Drive) — sync clients race `fsync` and can corrupt SQLite.
+- SQLite file-locking is unreliable over SMB / NFS — use a local disk path.
 
-- ✅ macOS · Linux · Windows — same `.db` file format, fully portable
-- ⚠️ **Avoid syncing folders** (iCloud Drive · OneDrive · Dropbox · Google Drive) — sync clients can corrupt SQLite databases by racing fsync. The default paths above are sync-safe.
-- ⚠️ **Local disk only** — SQLite's locking is unreliable on SMB / NFS. Don't put the `.db` file on a network share.
+**Postgres:** set `DATABASE_URL` and restart. Alembic runs automatically. Create the database first: `createdb uni_admission`. To switch back to SQLite, unset `DATABASE_URL`; the two engines keep separate state.
 
-#### Postgres — when you want it
-
-Set `DATABASE_URL` and restart. Alembic migrations run automatically. To create the database the first time:
-
-```bash
-createdb uni_admission   # or use any tool you prefer
-```
-
-If you previously used Postgres and now want to switch back to SQLite, just unset `DATABASE_URL` and restart — the two engines keep separate state, so the SQLite file is created fresh. (Use the REST `/export` and `/import` endpoints if you want to copy data across.)
-
-#### Inspecting / resetting
-
-| Command | What it does |
-|---|---|
-| `./adm-agent status` | Shows DB URL, university count, program count |
-| `./adm-agent db-version` | Current Alembic revision (Postgres only; SQLite reports `sqlite-create-all`) |
-| `./adm-agent db-migrate --yes` | Apply pending migrations (no-op on SQLite) |
-| `./adm-agent db-reinit --yes` | Drop all rows — **destructive**, used during development |
-
-### Database Status
-
-**Unix (macOS/Linux):**
-```bash
-./adm-agent status
-```
-
-**Windows:**
-```powershell
-.\adm-agent.exe status
-```
-
-### Database Migrations
-
-Use Alembic migration commands to keep schema in sync after upgrades:
+## Server & REST API
 
 ```bash
-# Check revision status
-./adm-agent db-version
-
-# Migrate to latest schema
-./adm-agent db-migrate --yes
-
-# Destructive reset (drops all rows)
-./adm-agent db-reinit --yes
+uni-admission serve              # start API + MCP server at 0.0.0.0:8910
+uni-admission serve --port 9000
+uni-admission serve-install      # background daemon
+uni-admission serve-stop         # stop foreground or daemon
 ```
 
-`upgrade` runs `db-migrate --yes` by default after a successful backend update.
-If migration fails during upgrade, the agent automatically runs `repair --auto`
-to rollback to a safe data state.
-`db-reinit` is a manual maintenance command and does not change the default
-upgrade delivery path (`upgrade` → `db-migrate`).
+`serve` writes `~/.adm-agent/server.pid`; `serve-stop` sends SIGTERM and removes it.  
+Agent runtime (`pydanticai`) is enabled by default; override with `AGENT_ENABLED=false` or `AGENT_RUNTIME=legacy`.
 
-### Server
+**REST endpoints (summary):**
 
-**Unix (macOS/Linux):**
-```bash
-# Start the API + MCP server (default: 0.0.0.0:8910)
-./adm-agent serve
-./adm-agent serve --port 9000
-./adm-agent serve --dry-run
+| Method | Path | Description |
+|---|---|---|
+| `POST` | `/crawl` | Submit a crawl job; returns `task_id` |
+| `POST` | `/analyze` | Analyse an entry page for link candidates |
+| `GET` | `/tasks/{id}` | Poll task status |
+| `GET` | `/tasks/{id}/events` | SSE stream — agent progress / thinking / summary |
+| `POST` | `/agent/run` | Agent orchestration request |
+| `POST` | `/agent/chat` | Free-form server-side agent chat |
+| `POST` | `/agent/review/confirm` | Confirm low-confidence onhold candidates |
+| `GET` | `/clients` | List connected browser-automation clients |
+| `GET` | `/status` | Database statistics |
+| `GET` | `/programs` | Query programs (`?univ_slug=hku&year=2026`) |
+| `GET` | `/universities` | List universities |
+| `POST` | `/export` | Export programs to XLSX |
 
-# Start server as a background daemon (does not occupy the terminal)
-./adm-agent serve-install
-./adm-agent serve-install --port 9000
+Full request/response schemas: visit **`http://localhost:8910/docs`** (FastAPI Swagger UI) while the server is running.
 
-# Stop a running server (works for both serve and serve-install)
-./adm-agent serve-stop
-```
+## MCP Server
 
-**Windows:**
-```powershell
-# Start the API + MCP server (default: 0.0.0.0:8910)
-.\adm-agent.exe serve
-.\adm-agent.exe serve --port 9000
-.\adm-agent.exe serve --dry-run
+The MCP server is mounted at `/mcp`. Tools are grouped into three sets:
 
-# Start server as a background daemon
-.\adm-agent.exe serve-install
-.\adm-agent.exe serve-install --port 9000
+- **Base toolset** (always): `analyze`, `crawl`, `crawl_detail_batch`, `ingest`, `db_query`, `runtime_status`, `program_patch`, `program_patch_batch`, `help`.
+- **Agent toolset** (default, unless agent runtime is disabled): `agent_run`, `agent_review_confirm`.
+- **Internal-LLM toolset** (when server-side LLM is available): `*_internal_llm` variants of the base tools.
 
-# Stop a running server (works for both serve and serve-install)
-.\adm-agent.exe serve-stop
-```
+**Recommended MCP interactive flow:**
 
-`serve` writes a PID file to `~/.adm-agent/server.pid`. `serve-stop` reads that file
-and sends a termination signal to the process, then removes the PID file. If the server
-is not running, `serve-stop` exits cleanly with an informational message.
+1. Call `runtime_status` — inspect available runtime path (`client_available`, `internal_llm_available`).
+2. Call `analyze` as the **single entrypoint**. Read `page_type_detected`, `requires_user_confirmation`, `next_step_options`.
+3. If `requires_user_confirmation=true`, ask the user whether to proceed with detected `index` / `detail`.
+4. Follow the selected next-step path:
+   - **detail path:** `crawl` or `crawl_internal_llm`
+   - **index + external LLM:** select candidates → structure data externally → `ingest`
+   - **index + server LLM:** `crawl_detail_batch_internal_llm` (or `crawl_detail_batch`)
+5. Apply user corrections via `program_patch` / `program_patch_batch` (partial-failure safe).
 
-`serve-install` launches `serve` as a background daemon process and redirects output to
-`~/.adm-agent/server.log`. The daemon keeps running after the terminal is closed.
-`serve-stop` terminates both foreground and daemon server instances.
+**Crawl decision details:**
+- Missing `year` blocks with `requires_user_input=true`, `missing_fields=["year"]`.
+- Taxonomy thresholds: candidate keep `>= 0.75`; auto-run `>= 0.92` with `<= 10` candidates.
+- `agent_run` auto-processes high-confidence candidates; low-confidence items return as `onhold_items` for confirmation via `agent_review_confirm`.
 
-Agent runtime is **enabled by default** for normal server startup. You can still
-override it explicitly with `AGENT_ENABLED=false` for compatibility or debugging.
-Runtime mode can be selected via `AGENT_RUNTIME=legacy|pydanticai` (default `pydanticai`),
-and `pydanticai` mode automatically falls back to `legacy` on runtime errors.
+## adm-agent-client
 
-#### Agent Capabilities (s01–s12)
-
-When `pydanticai` runtime is active, the agent loop provides a full capability stack:
-
-| Capability | Description |
-|:-----------|:------------|
-| **s01 Agent Loop** | Core `while True` loop — LLM decides tool calls, exits on final answer |
-| **s02 Tool Dispatch** | Multi-tool dispatch via `SkillRegistry` with Pydantic-typed inputs |
-| **s03 Todo Manager** | In-memory task tracking with exactly-one-in-progress rule and nag reminders |
-| **s04 Subagents** | `task` tool spawns child agent loops with isolated context |
-| **s05 Skill Loading** | Two-layer knowledge: short descriptions in system prompt + on-demand `load_skill` |
-| **s06 Context Compact** | Three-layer compression: micro-compact, auto-compact (>50k tokens), manual `compact` tool |
-| **s07 Task System** | File-persisted task DAG with `blockedBy`/`blocks` dependency edges |
-| **s08 Background Tasks** | Async skill execution with notification queue injection |
-| **s09 Agent Teams** | Persistent teammates with JSONL mailbox communication |
-| **s10 Team Protocols** | Request-response FSM for structured coordination between teammates |
-| **s11 Autonomous Agents** | WORK/IDLE lifecycle with inbox polling, task claiming, idle timeout |
-| **s12 Worktree Isolation** | Git worktree per task with lifecycle event logging |
-
-When running behind a reverse proxy (e.g. Cloudflare Tunnel), `serve` enables
-`proxy_headers=True` and `forwarded_allow_ips="*"` so the original client IP is preserved.
-
-### REST API
-
-With the server running (`uv run src/cmd/cli.py serve`):
+`adm-agent-client` is a user-side browser-automation bridge. It connects a local machine to a remote `serve` instance so MCP/REST callers can drive a real browser without an extension.
 
 ```bash
-# Submit a crawl job (returns task_id)
-curl -X POST http://localhost:8910/crawl \
-  -H "Content-Type: application/json" \
-  -d '{
-    "url": "https://admissions.hku.hk/programmes",
-    "univ_slug": "hku",
-    "year": 2026,
-    "taxonomy_enabled": true,
-    "taxonomy_low_threshold": 0.8,
-    "taxonomy_high_threshold": 0.92,
-    "taxonomy_hint_top_k": 3,
-    "taxonomy_override_enabled": true
-  }'
-
-# Force user-side browser automation client (no extension required)
-curl -X POST http://localhost:8910/crawl \
-  -H "Content-Type: application/json" \
-  -d '{
-    "url": "https://www.manchester.ac.uk/study/masters/courses/list/?k=&s=All",
-    "univ_slug": "uom",
-    "year": 2026,
-    "browser_provider": "client",
-    "strict_client": true,
-    "candidate_taxonomy_filter_enabled": true,
-    "candidate_taxonomy_filter_threshold": 0.8,
-    "candidate_taxonomy_filter_top_k": 20
-  }'
-
-# Analyze page for link selection (two-phase crawl)
-curl -X POST http://localhost:8910/analyze \
-  -H "Content-Type: application/json" \
-  -d '{"url": "https://example.com/courses", "html_content": "<html>...</html>"}'
-
-# Check task status
-curl http://localhost:8910/tasks/{task_id}
-
-# Stream task events over SSE (agent progress / thinking / summary deltas)
-curl http://localhost:8910/tasks/{task_id}/events
-
-# Run agent orchestration (enabled by default unless explicitly disabled)
-curl -X POST http://localhost:8910/agent/run \
-  -H "Content-Type: application/json" \
-  -d '{
-    "url": "https://example.com/courses",
-    "univ_slug": "hku",
-    "year": 2026,
-    "runtime": "pydanticai",
-    "policy_profile": {
-      "batch_size": 4,
-      "taxonomy_auto_threshold": 0.92
-    }
-  }'
-
-# Start a free-form agent chat task (server-side LLM only)
-curl -X POST http://localhost:8910/agent/chat \
-  -H "Content-Type: application/json" \
-  -d '{
-    "message": "Summarize the current crawl/runtime architecture for me."
-  }'
-
-# Confirm low-confidence onhold selections for one finished agent task
-# (unselected indices are discarded by default)
-curl -X POST http://localhost:8910/agent/review/confirm \
-  -H "Content-Type: application/json" \
-  -d '{
-    "task_id": "<agent_task_id>",
-    "selection_text": "continue 3,6,18"
-  }'
-
-# List connected browser-automation clients
-curl http://localhost:8910/clients
-
-# Database statistics
-curl http://localhost:8910/status
-
-# Query programs (with detailed fields: study_options, deadlines, requirements, source_url)
-curl "http://localhost:8910/programs?univ_slug=hku&year=2026"
-
-# List all universities
-curl http://localhost:8910/universities
-
-# Export programs to Excel
-curl -X POST http://localhost:8910/export \
-  -H "Content-Type: application/json" \
-  -d '{"univ_slug": "hku", "year": 2026}' \
-  --output hku_export.xlsx
-```
-
-### MCP Server
-
-The MCP server is mounted at `/mcp`.
-
-Base toolset (always registered):
-- **`analyze`** — Analyze entry page and return candidate detail links (external-LLM friendly path).
-- **`crawl_detail_batch`** — Crawl user-selected detail links in batches via client browser automation.
-- **`crawl`** — Crawl a URL and import admission data. Supports `page_type_hint=auto|index|detail`.
-- **`ingest`** — Persist caller-LLM structured program records directly (no server-side LLM extraction).
-- **`db_query`** — Query programs from the database.
-- **`runtime_status`** — Report live runtime capability (`client_available`, `client_count`, `client_ids`, `internal_llm_available`, `default_browser_provider_resolved`).
-- **`program_patch`** — Patch one persisted `program_id` from user feedback.
-- **`program_patch_batch`** — Batch patch multiple `program_id` items with partial-failure reporting.
-- **`help`** — Return CLI help text and command overview.
-
-Agent toolset (registered by default unless agent runtime is explicitly disabled):
-- **`agent_run`** — Execute one agent orchestration request (`runtime=legacy|pydanticai`). Supports `autonomous=true` for fully autonomous mode (server-side LLM drives all decisions) or `autonomous=false` (default) for external-LLM-driven mode where the calling LLM controls orchestration. Accepts optional `client_id` to target a specific browser client.
-- **`agent_review_confirm`** — Confirm low-confidence onhold indices for an existing `agent_run` task.
-
-Internal-LLM toolset (registered only when server-side LLM is available):
-- **`analyze_internal_llm`**
-- **`crawl_detail_batch_internal_llm`**
-- **`crawl_internal_llm`**
-- **`ingest_internal_llm`**
-- **`db_query_internal_llm`**
-- **`runtime_status_internal_llm`**
-- **`program_patch_internal_llm`**
-- **`program_patch_batch_internal_llm`**
-- **`help_internal_llm`**
-
-Decision and correction flow in `crawl`:
-- Missing `year` is blocked with:
-  - `requires_user_input=true`
-  - `missing_fields=["year"]`
-  - prompt asking user to confirm year (e.g., 2026)
-- For index pages, taxonomy thresholds are applied:
-  - candidate keep threshold: `>= 0.75`
-  - auto-run threshold: `>= 0.92`
-  - auto-run max candidate count: `<= 10`
-- Response includes structured decision fields:
-  - `auto_ready`
-  - `requires_user_review`
-  - `decision_reason`
-  - `candidates` (for review flows)
-
-Provider metadata is standardized in tool responses:
-- `resolved_browser_provider`
-- `client_id_used` (if client path is selected)
-
-Post-persist review loop:
-- Crawl responses include `review_token` and ordered `review_items` with stable `program_id`.
-- Apply user corrections via `program_patch` / `program_patch_batch`.
-- Batch patch returns `updated_count`, `failed_items`, and `summary` (no all-or-nothing abort).
-
-Agent onhold batch-review loop:
-- `agent_run` auto-processes high-confidence candidates.
-- Low-confidence candidates are returned in `onhold_items`, sorted by `confidence` descending with dynamic indices (`1..N`).
-- Confirm via REST `POST /agent/review/confirm` or MCP `agent_review_confirm` using either `selection_text` or explicit `selected_indices`.
-- Unselected `onhold_items` are discarded by default.
-
-Recommended MCP interactive flow (single entrypoint):
-1. Call `runtime_status` to inspect available runtime path.
-2. Call `analyze` as the **only entrypoint**. Read:
-   - `page_type_detected`
-   - `requires_user_confirmation`
-   - `next_step_options`
-3. If `requires_user_confirmation=true`, ask user whether to continue with detected `index/detail`.
-4. Follow selected next-step tool path:
-   - `detail` path: `crawl` or `crawl_internal_llm`
-   - `index` + external LLM path: select candidates, externally structure data, then `ingest`
-   - `index` + server LLM path: `crawl_detail_batch_internal_llm` (or `crawl_detail_batch`)
-5. Ask user for corrections if needed, then apply `program_patch` / `program_patch_batch`.
-
-### `adm-agent-client` (Extension Optional)
-
-When external LLMs call MCP/REST directly, users may not have extension pages open.  
-Use `adm-agent-client` to connect the user's machine to `serve` and execute browser automation.
-
-**Quickstart (source mode):**
-```bash
-uv run src/cmd/client_cli.py init
+uv run src/cmd/client_cli.py init           # configure host/port/client-name
 uv run src/cmd/client_cli.py status
-uv run src/cmd/client_cli.py start --continuous
-uv run src/cmd/client_cli.py stop
-uv run src/cmd/client_cli.py chat
-
-# Or run as a background daemon (does not occupy the terminal)
-uv run src/cmd/client_cli.py start-install
-uv run src/cmd/client_cli.py stop
-
-uv run src/cmd/client_cli.py version --verbose
-uv run src/cmd/client_cli.py upgrade --check
+uv run src/cmd/client_cli.py start --continuous    # foreground (PID → ~/.adm-agent-client/client.pid)
+uv run src/cmd/client_cli.py start-install  # background daemon (log → ~/.adm-agent-client/client.log)
+uv run src/cmd/client_cli.py stop [--force]
+uv run src/cmd/client_cli.py chat           # interactive agent chat via SSE
+uv run src/cmd/client_cli.py bootstrap --target claude --emit-prompt   # copy-paste LLM setup prompt
 ```
 
-For non-developer users, command-line launch is recommended (double-clicking executables may close immediately with no visible logs).
+- WebSocket bridge: `ws://<serve-host>:<serve-port>/clients/ws`
+- Default batch size: 4 (override: `ADM_AGENT_CLIENT_DETAIL_LIMIT`).
+- Custom fetch command: set `ADM_AGENT_CLIENT_FETCH_CMD` to a template with `{url}` and `{page_type_hint}`; command must output JSON to stdout.
 
-`start --continuous` writes PID file: `~/.adm-agent-client/client.pid`  
-`stop` reads that PID file and sends SIGTERM (or SIGKILL with `--force`).
-
-`start-install` launches `start --continuous` as a background daemon process and
-redirects output to `~/.adm-agent-client/client.log`. Use `stop` to terminate it.
-
-**Client bridge endpoint:**
-- WebSocket: `ws://<serve-host>:<serve-port>/clients/ws`
-- Status API: `GET /clients`
-
-**Browser fetch behavior:**
-- Default: built-in `adm-agent-client fetch` drives local Chrome/Edge via CDP (no Playwright required on client side).
-- Default detail batch size is `4` (`ADM_AGENT_CLIENT_DETAIL_LIMIT` can override).
-- Optional override: set env var `ADM_AGENT_CLIENT_FETCH_CMD` to a custom command template.
-- Template placeholders: `{url}`, `{page_type_hint}`
-- Command must output JSON to stdout (e.g. `{"html_content":"..."}` or `{"detail_pages_batch":[...]}`)
-- Client can carry local policy profile; when configured, RPC responses include `policy_profile`.
-
-Default fetch command:
-```bash
-uv run src/cmd/client_cli.py fetch --url "https://example.edu/list" --page-type index --json
-```
-
-Optional override example:
-```bash
-export ADM_AGENT_CLIENT_FETCH_CMD='adm-agent-client fetch --url "{url}" --page-type "{page_type_hint}" --json'
-```
-
-**Interactive agent chat:**
-- `uv run src/cmd/client_cli.py chat`
-- Connects to the configured serve endpoint, submits `POST /agent/chat`, then renders live `/tasks/{task_id}/events` SSE output in the terminal.
-
-### Runtime Logs
-
-- Backend CLI / server commands automatically write rotated timestamped `.txt` logs.
-- In source mode, logs are written to the current working directory.
-- In bundled executable mode, logs are written beside the executable.
-- `adm-agent-client start-install` still writes daemon logs to `~/.adm-agent-client/client.log`.
-
-### Platform Permissions
-
-- **macOS**: after unzip, run `xattr -cr .` once in extracted folder.
-- **Windows**: first run may show SmartScreen; choose "More info" → "Run anyway".
-- **Linux**: ensure executable bit (`chmod +x adm-agent-client`).
-
-### LLM Bootstrap Prompt (Codex / Claude / OpenClaw)
-
-Generate copy-paste setup prompt:
-
-```bash
-uv run src/cmd/client_cli.py bootstrap --target codex --emit-prompt
-uv run src/cmd/client_cli.py bootstrap --target claude --emit-prompt
-uv run src/cmd/client_cli.py bootstrap --target openclaw --emit-prompt
-```
-
-Minimal OpenClaw message (copy-paste):
-
-```text
-请在当前环境完成 adm-agent-client 配置并上线：1) 运行 adm-agent-client init（host=<SERVE_HOST>, port=<SERVE_PORT>, client_name=当前机器名）；2) 运行 adm-agent-client status 并确认配置可读取；3) 运行 adm-agent-client start --continuous；4) 若连接失败先检查 host/port 与本机防火墙。请逐步执行并回显每一步结果。
-```
-
-### Frontend (Chrome Extension + Web UI)
+## Frontend (Chrome Extension + Web UI)
 
 The frontend is a single Vite bundle that ships in two forms:
 
-- **Chrome Extension** — load `frontend/dist/` as unpacked extension (auto-detects current tab URL, multi-tab automation).
-- **Web UI** — same bundle served by the backend at `http://<host>:<port>/ui/`. Open in any browser; no extension install required.
+- **Chrome Extension** — load `frontend/dist/` as an unpacked extension; auto-detects the current tab URL, supports multi-tab automation.
+- **Web UI** — the same bundle served by the backend at `http://<host>:<port>/ui/`; no extension install required.
 
-Source layout: `frontend/src/{shared,extension,web}/` — `shared/` holds the UI used by both targets, `extension/` is extension-only (background service worker), `web/` is reserved for web-only entries.
+Source layout: `frontend/src/{shared,extension,web}/` — `shared/` holds UI common to both targets; `extension/` is extension-only (background service worker); `web/` is reserved for web-only entries.
 
-**Build & Install:**
-1.  **Build the frontend bundle**:
-    ```bash
-    cd frontend
-    npm install  # First time only
-    npm run build
-    ```
-    This will generate:
-    - `frontend/dist/`: The unpacked bundle (load this as the Chrome extension; served at `/ui/` by the backend).
-    - `frontend/uni-admission-extension.zip`: A ready-to-share zip file for the extension form.
-
-2.  **Load into Chrome** (extension form):
-    - Open Chrome and navigate to `chrome://extensions`.
-    - Enable **Developer mode** (top right toggle).
-    - Click **Load unpacked**.
-    - Select the `frontend/dist` folder.
-
-3.  **Or just open the Web UI** (no install): start the server with `adm-agent serve`, then visit the `🌐 Web UI` URL printed on startup.
-
-**Usage:**
-- Click the extension icon in your browser toolbar (extension form), or open `/ui/` (web form).
-- Configure settings (database URL, LLM keys) via the gear icon.
-- Enter a university slug (e.g., `hku`) and year, then start crawling.
-- Adjust per-task taxonomy overrides in popup (enable, low/high thresholds, top-k hints, override toggle).
-- The popup now defaults to the agent orchestration path via `POST /agent/run`. If agent runtime is explicitly disabled on the server, the popup falls back to the older analyze/manual-selection flow.
-- **Preview Database** (👁 icon): Browse stored programs with filters by university and year.
-- **Export to Excel** (📥 icon): Download program data as XLSX files.
-
-## 📦 Build & Distribution
-
-To package the agent for distribution (standalone executable + extension zip):
-
-1.  **Install PyInstaller**:
-    ```bash
-    pip install pyinstaller
-    ```
-
-2.  **Run the Build Script**:
-    ```bash
-    python scripts/build_dist.py
-    ```
-    Optional:
-    ```bash
-    python scripts/build_dist.py --client-only
-    python scripts/build_dist.py --separate-artifacts
-    ```
-
-3.  **Check Release Folder**:
-    The script generates a `release/` directory containing:
-    -   `adm-agent/`: The standalone executable (backend engine).
-    -   `adm-agent-client/`: The standalone user-side browser automation client (when built).
-    -   `extension.zip`: The packaged Chrome extension.
-    -   `README.txt`: Quick start guide for end-users.
-
-Release note template (three separate artifacts): `docs/release_notes_template.md`
-
-## 🤖 Agentic Principles
-- **Stealth First:** Never trigger bot detection; emulate human behavior.
-- **Markdown-Centric:** Convert HTML to Markdown before LLM processing to save tokens.
-- **Verified Output:** All data must pass Pydantic validation before being committed to the database.
-
-## 🔧 Development Tools
-
-### Git Hooks
-The project includes Git hooks to maintain code quality:
+**Build & load:**
 
 ```bash
-# Install all Git hooks
-bash .githooks/install-hooks.sh
-
-# Or install manually
-cp .githooks/pre-push .git/hooks/pre-push
-chmod +x .git/hooks/pre-push
+cd frontend
+npm install       # first time only
+npm run build
+# Outputs: frontend/dist/ (unpacked bundle) + frontend/uni-admission-extension.zip
 ```
 
-**Available Hooks:**
-- **pre-push**: Runs `pylint` checks before pushing to remote repository
+Load the extension: Chrome → `chrome://extensions` → **Developer mode** → **Load unpacked** → select `frontend/dist`.
 
-**Hook Behavior:**
-- ✅ **Pass**: Push proceeds normally
-- ❌ **Fail**: Push is blocked with error details
-- 🚫 **Bypass**: Use `git push --no-verify` to skip hooks (not recommended)
+Or skip the extension: run `uni-admission serve`, then open the `Web UI` URL printed at startup.
 
-**Testing Hooks:**
+**Features:** configure LLM keys and DB URL via the gear icon; set per-task taxonomy overrides; preview stored programs (filter by university / year); export to XLSX. The popup defaults to the agent orchestration path (`POST /agent/run`); falls back to the analyze/manual-selection flow if agent runtime is disabled.
+
+## Build & Distribution
+
 ```bash
-# Test hook directly
-.git/hooks/pre-push
+uv add --dev pyinstaller         # install build tooling
+python scripts/build_dist.py     # build all artifacts
+# Optional flags:
+python scripts/build_dist.py --client-only
+python scripts/build_dist.py --separate-artifacts
+```
 
-# Check code quality manually
-uv run pylint src/ scripts/
+Output in `release/`:
+- `adm-agent/` — standalone backend binary.
+- `adm-agent-client/` — standalone user-side browser-automation client.
+- `extension.zip` — packaged Chrome extension.
+- `README.txt` — quick-start guide for end-users.
+
+**Platform notes for the packaged binary:**
+- **macOS:** run `xattr -cr /path/to/adm-agent` after extracting; if "System cannot verify the developer" appears go to **Settings → Privacy & Security → Allow Anyway**.
+- **Windows:** first run may trigger SmartScreen; choose **More info → Run anyway**. Use `adm-agent.exe` (note the `.exe` suffix).
+- **Linux:** ensure the executable bit (`chmod +x adm-agent`).
+
+Release note template: `docs/release_notes_template.md`.
+
+## Development
+
+### Git Hooks
+
+```bash
+bash .githooks/install-hooks.sh   # install all hooks
+# Or manually:
+cp .githooks/pre-push .git/hooks/pre-push && chmod +x .git/hooks/pre-push
+```
+
+**pre-push** runs `pylint` before every push. Use `git push --no-verify` to bypass (not recommended).
+
+```bash
+uv run pylint src/ scripts/    # run linting manually
 ```
 
 ### Testing & Coverage
 
-**Run Tests:**
 ```bash
-# Run all tests (excluding integration tests)
-uv run pytest
+uv run pytest                                      # all tests (excluding integration)
+uv run pytest -v                                   # verbose
+uv run pytest tests/test_cleaner_validators.py     # single file
+uv run pytest -x                                   # stop at first failure
 
-# Run with verbose output
-uv run pytest -v
-
-# Run specific test file
-uv run pytest tests/test_cleaner_validators.py
-
-# Stop at first failure
-uv run pytest -x
+uv run pytest --cov=src --cov-report=term          # with coverage
+uv run pytest --cov=src --cov-report=html          # HTML report (open htmlcov/index.html)
+uv run pytest --cov=src --cov-report=term-missing  # show missing lines
 ```
 
-**Test Coverage:**
+Coverage configuration: see `[tool.coverage]` in `pyproject.toml`. Source: `src/`; excluded: `tests/`, `__pycache__/`.
+
+### CI/CD
+
+GitHub Actions runs tests with coverage on every push. Coverage reports are uploaded to Codecov (if configured); view the summary in the GitHub Actions job summary.
+
+### Troubleshooting: "Playwright browser not found"
+
 ```bash
-# Run tests with coverage report
-uv run pytest --cov=src --cov-report=term
-
-# Generate HTML coverage report
-uv run pytest --cov=src --cov-report=html
-# Open htmlcov/index.html in browser
-
-# Show missing lines in terminal
-uv run pytest --cov=src --cov-report=term-missing
-
-# Generate multiple reports (XML for CI, HTML for local)
-uv run pytest --cov=src --cov-report=term --cov-report=xml --cov-report=html
+uni-admission browser-install           # recommended — downloads Chromium automatically
+# Or, if you have uv available:
+uv run playwright install chromium
+# Or set a custom path:
+export PLAYWRIGHT_BROWSERS_PATH=/path/to/ms-playwright
+uni-admission serve
 ```
-
-**Coverage Configuration:**
-- Source: `src/` directory
-- Excluded: `tests/`, `__pycache__/`
-- Configuration: See `[tool.coverage]` in `pyproject.toml`
-
-**CI/CD:**
-- GitHub Actions automatically runs tests with coverage on every push
-- Coverage reports are uploaded to Codecov (if configured)
-- View coverage summary in GitHub Actions job summary
