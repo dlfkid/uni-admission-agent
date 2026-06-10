@@ -43,6 +43,11 @@ from src.scrapers.link_parser import (
     filter_links_by_heuristic,
 )
 from src.services import browser_provider as browser_provider_service
+from src.services.crawl_strategy.discovery import (
+    DiscoveryResult,
+    discover_with_default_adapters,
+    resolve_crawl_range,
+)
 from src.services.ingestion_pipeline import IngestionPipeline
 from src.services.subject_taxonomy import get_subject_taxonomy_service
 from src.storage.db_manager import DatabaseManager
@@ -460,6 +465,9 @@ async def crawl_url(
     name_resolution_low_threshold: Optional[float] = None,
     name_resolution_conflict_delta: Optional[float] = None,
     progress_callback: Optional[Callable[[str, dict[str, Any]], None]] = None,
+    limit: Optional[int] = None,
+    crawl_all: bool = False,
+    discovery: Optional[DiscoveryResult] = None,
 ) -> CrawlResult:
     """Crawl a university admission page and import structured data.
 
@@ -499,6 +507,10 @@ async def crawl_url(
         name_resolution_llm_enabled: Optional per-request LLM fallback toggle.
         name_resolution_low_threshold: Optional name-resolution low-confidence threshold.
         name_resolution_conflict_delta: Optional top-candidate conflict delta threshold.
+        limit: Crawl only the first N programmes discovered on an index page.
+        crawl_all: Crawl every programme discovered (safety-capped upstream).
+        discovery: Precomputed DiscoveryResult (e.g. from the /agent/run
+            short-circuit) — used as-is, never recomputed.
 
     Returns:
         CrawlResult with the number of programs imported.
@@ -525,6 +537,35 @@ async def crawl_url(
         selected_urls = resolved_browser_inputs.get("selected_urls")
     if "selected_link_texts" in resolved_browser_inputs:
         selected_link_texts = resolved_browser_inputs.get("selected_link_texts")
+
+    # Strategy-first discovery: known/classifiable index pages get accurate
+    # {detail_url: name} candidates from the crawl-strategy system; anything
+    # else falls through to today's LLM-scout path untouched.
+    if (
+        discovery is None
+        and page_type_hint == "index"
+        and not selected_urls
+        and not detail_pages_batch
+        and html_content is None
+    ):
+        crawl_range = resolve_crawl_range(limit, crawl_all)
+        discovery = await asyncio.to_thread(
+            discover_with_default_adapters, url, crawl_range)
+    if discovery is not None and discovery.matched:
+        selected_urls = list(discovery.link_texts)
+        selected_link_texts = dict(discovery.link_texts)
+        logger.info(
+            "strategy discovery matched url=%s strategy=%s names=%d nameless=%d "
+            "stopped=%s", url, discovery.strategy_used, len(selected_urls),
+            discovery.nameless_count, discovery.stopped_reason)
+        if progress_callback:
+            progress_callback("discovery_matched", {
+                "strategy_used": discovery.strategy_used,
+                "names_count": len(selected_urls),
+                "nameless_count": discovery.nameless_count,
+                "stopped_reason": discovery.stopped_reason,
+                "pages_fetched": discovery.pages_fetched,
+            })
 
     pipeline = IngestionPipeline()
     result = await pipeline.run_new_job(

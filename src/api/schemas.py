@@ -53,6 +53,14 @@ class CrawlRequest(BaseModel):
         default="auto",
         description="Page type hint: 'auto', 'index', or 'detail'. Used to skip auto-detection.",
     )
+    limit: Optional[int] = Field(
+        default=None, ge=1,
+        description="Crawl only the first N programmes discovered on the index page",
+    )
+    crawl_all: bool = Field(
+        default=False,
+        description="Crawl every discovered programme (safety-capped)",
+    )
     export_md: bool = Field(
         default=False,
         description="Whether to export crawled markdown files to disk",
@@ -165,6 +173,12 @@ class CrawlRequest(BaseModel):
     )
 
     @model_validator(mode="after")
+    def _limit_xor_all(self) -> "CrawlRequest":
+        if self.crawl_all and self.limit is not None:
+            raise ValueError("limit and crawl_all are mutually exclusive")
+        return self
+
+    @model_validator(mode="after")
     def _validate_taxonomy_thresholds(self) -> "CrawlRequest":
         low = self.taxonomy_low_threshold
         high = self.taxonomy_high_threshold
@@ -191,6 +205,14 @@ class AgentRunRequest(BaseModel):
         default="auto",
         description="Page type hint: auto/index/detail",
     )
+    limit: Optional[int] = Field(
+        default=None, ge=1,
+        description="Crawl only the first N programmes discovered on the index page",
+    )
+    crawl_all: bool = Field(
+        default=False,
+        description="Crawl every discovered programme (safety-capped)",
+    )
     runtime: Optional[str] = Field(
         default=None,
         description="Optional runtime override: legacy or pydanticai",
@@ -215,6 +237,12 @@ class AgentRunRequest(BaseModel):
         default=None,
         description="Maximum number of pages to crawl when auto_paginate is True (default: skill decides)",
     )
+
+    @model_validator(mode="after")
+    def _agent_limit_xor_all(self) -> "AgentRunRequest":
+        if self.crawl_all and self.limit is not None:
+            raise ValueError("limit and crawl_all are mutually exclusive")
+        return self
 
 
 class AgentChatRequest(BaseModel):

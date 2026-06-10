@@ -19,9 +19,9 @@ Three patterns based on the URL and user phrasing:
 |---|---|---|
 | `detail` | URL is one specific program (slug contains a degree code like `msc-finance`, `accounting-bsc`) | `adm-agent crawl ... --page-type detail` |
 | `index` | URL is a program-list / course-search page **and** user only asked for "this page" / "first page" | `adm-agent crawl ... --page-type index` |
-| `paginate` | User said "all programs" / "every page" / "complete list" / "全部" | REST `POST /agent/run` with `auto_paginate=true` |
+| `index` (full) | URL is a program-list page; user wants programmes **in the DB / web UI** (default for "爬取这个学校") | REST `POST /agent/run` with `"limit": N` or `"crawl_all": true` |
 
-**When in doubt, ask** which mode they want and what `max_pages` cap they're comfortable with. Don't guess on paginated crawls — they cost the most.
+**When in doubt, ask** which mode they want and how many programmes they want. Don't guess on full-index crawls — they cost the most.
 
 ---
 
@@ -32,7 +32,7 @@ Before invoking the tool, you need:
 - **University slug** — must match `^[a-z0-9-]+$` (see [[using-uni-admission-agent]] glossary). Ask if not provided.
 - **Year** — academic year (e.g., `2026`). Default to current year if user didn't specify.
 - **Entry URL** — verbatim from the user; never invent or normalize.
-- **For paginated mode**: confirm `max_pages` upper bound. Default to 10 if user doesn't care.
+- **Range** — how many programmes: "前 N 个" → `"limit": N`; "全部" → `"crawl_all": true`; unspecified → omit both (first batch, ≤30).
 
 ---
 
@@ -51,7 +51,7 @@ adm-agent crawl \
 
 Runs synchronously. Final line will say `N programs imported` or `0 programs imported`.
 
-### 3.2 Paginated mode
+### 3.2 Full index mode (`/agent/run`)
 
 ```bash
 curl -sS -X POST http://127.0.0.1:8910/agent/run \
@@ -61,14 +61,40 @@ curl -sS -X POST http://127.0.0.1:8910/agent/run \
     "univ_slug": "<SLUG>",
     "year": <YEAR>,
     "page_type_hint": "index",
-    "auto_paginate": true,
-    "max_pages": <N>
+    "autonomous": true,
+    "limit": <N>
   }'
 ```
 
-Response includes `task_id`. **Always tell the user the expected cost before kicking off a paginated job**:
+(`"autonomous": true` is required for the deterministic strategy-direct path —
+it persists results immediately. Omit it only when the user wants a review
+step before anything is saved; that goes through the agent loop instead.)
 
-> 这是分页爬取，预计会调用 LLM ~{20 × max_pages} 次，耗时 ~{2 × max_pages} 分钟。开始吗？
+Range semantics — pick exactly one (they are mutually exclusive):
+
+| User wants | Body field |
+|---|---|
+| First N programmes | `"limit": N` |
+| Everything (safety-capped) | `"crawl_all": true` |
+| Didn't say | omit both → first batch (≤30) |
+
+Each discovered programme is one detail-page crawl + one LLM extraction —
+**quote the cost in programme count before launching** (`crawl_all` on a large
+catalogue can be hundreds of detail pages):
+
+> 预计爬取 ~N 门课程的详情页（≈N 次 LLM 抽取）。开始吗？
+
+The response carries `mode`. `mode: "strategy_direct"` means a known/classified
+university was crawled deterministically (accurate programme names, no LLM
+index analysis — cheaper and more reliable); the result also carries
+`strategy_used`, `names_discovered`, `nameless_count`, and `stopped_reason`.
+Any other mode means the agent LLM loop handled an unrecognized layout. Either
+way, results land in the database and show up in the web UI — report completion
+the same way.
+
+**Legacy fallback knobs**: for sites the strategy system doesn't recognize, the
+agent loop's pagination still honours `"auto_paginate": true` + `"max_pages"`.
+Don't combine them with `limit`/`crawl_all` — prefer the range fields.
 
 ---
 
@@ -153,7 +179,16 @@ Skimmable. Short. The user might be reading at 2 AM.
 - Don't debug a failed crawl here — route to [[uni-admission-diagnose]].
 - Don't try to start the server if /health is down — route to [[uni-admission-install]] §"Start an existing install".
 
-## Strategy-based crawl (preferred entry)
+## Strategy-based name harvest (`crawl-index`)
+
+**Names only.** `crawl-index` returns a fast, deterministic list of programme
+**names** as JSON. It does **NOT** extract detail fields (tuition / deadlines /
+requirements) and does **NOT** write to the database — so its results do **not**
+appear in the web UI. Use it when the user just wants "what programmes does this
+page list?" or a quick name count.
+
+For a full crawl whose records land in the database and show up in the web UI,
+use the paginated `/agent/run` flow in Steps 1–5 above, not this command.
 
 Run the tool — it classifies the page and picks a strategy itself. You do
 NOT analyze the page or choose a strategy.

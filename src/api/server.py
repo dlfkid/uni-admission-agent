@@ -673,6 +673,8 @@ async def api_crawl(body: CrawlRequest) -> CrawlResponse:
                     name_resolution_llm_enabled=body.name_resolution_llm_enabled,
                     name_resolution_low_threshold=body.name_resolution_low_threshold,
                     name_resolution_conflict_delta=body.name_resolution_conflict_delta,
+                    limit=body.limit,
+                    crawl_all=body.crawl_all,
                     progress_callback=_on_ingestion_event,
                 )
             finally:
@@ -712,6 +714,63 @@ async def api_crawl(body: CrawlRequest) -> CrawlResponse:
     task_manager.register_task_object(task_id, task_obj)
     
     return CrawlResponse(task_id=task_id)
+
+
+def _probe_strategy_discovery(body: AgentRunRequest):
+    """Probe strategy-first discovery for an /agent/run index request.
+
+    Returns a DiscoveryResult; matched=False on any failure — the agent
+    loop is the universal fallback.
+
+    Strategy-direct always persists, so it only fires for autonomous,
+    non-dry-run runs.
+    """
+    from src.services.crawl_strategy.discovery import (  # pylint: disable=import-outside-toplevel
+        DiscoveryResult, discover_with_default_adapters, resolve_crawl_range,
+    )
+    if body.page_type_hint != "index" or body.dry_run or not body.autonomous:
+        return DiscoveryResult(matched=False)
+    try:
+        rng = resolve_crawl_range(body.limit, body.crawl_all)
+        return discover_with_default_adapters(body.url, rng)
+    except Exception:  # pylint: disable=broad-except
+        logger.exception("agent-run discovery probe failed; using agent loop")
+        return DiscoveryResult(matched=False)
+
+
+async def _execute_agent_job(body: AgentRunRequest, event_sink) -> dict:
+    """Run one agent job: strategy-direct when discovery matches, else LLM loop."""
+    discovery = await asyncio.to_thread(_probe_strategy_discovery, body)
+    if discovery.matched:
+        event_sink({"type": "strategy_direct_started",
+                    "strategy_used": discovery.strategy_used,
+                    "names_count": len(discovery.link_texts),
+                    "stopped_reason": discovery.stopped_reason})
+        crawl_result = await crawl_url(
+            url=body.url, univ_slug=body.univ_slug, year=body.year,
+            page_type_hint=body.page_type_hint,
+            discovery=discovery,
+            progress_callback=lambda ev, payload: event_sink(
+                {**payload, "type": ev}),
+        )
+        return {
+            "mode": "strategy_direct",
+            "status": "ok",
+            "strategy_used": discovery.strategy_used,
+            "stopped_reason": discovery.stopped_reason,
+            "names_discovered": discovery.names_total,
+            "nameless_count": discovery.nameless_count,
+            "imported_count": getattr(crawl_result, "imported_count", 0),
+        }
+    return await run_agent_crawl(
+        url=body.url, univ_slug=body.univ_slug, year=body.year,
+        page_type_hint=body.page_type_hint, runtime_mode=body.runtime,
+        autonomous=body.autonomous, dry_run=body.dry_run,
+        event_sink=event_sink,
+        policy_profile=(body.policy_profile.model_dump(exclude_none=True)
+                        if body.policy_profile else None),
+        auto_paginate=body.auto_paginate, max_pages=body.max_pages,
+    )
 
 
 @app.post("/agent/run", response_model=AgentRunResponse)
@@ -770,23 +829,7 @@ async def api_agent_run(body: AgentRunRequest) -> AgentRunResponse:
             progress_meta={"event": "agent_task_started"},
         )
         try:
-            result = await run_agent_crawl(
-                url=body.url,
-                univ_slug=body.univ_slug,
-                year=body.year,
-                page_type_hint=body.page_type_hint,
-                runtime_mode=body.runtime,
-                autonomous=body.autonomous,
-                dry_run=body.dry_run,
-                event_sink=_event_sink,
-                policy_profile=(
-                    body.policy_profile.model_dump(exclude_none=True)
-                    if body.policy_profile
-                    else None
-                ),
-                auto_paginate=body.auto_paginate,
-                max_pages=body.max_pages,
-            )
+            result = await _execute_agent_job(body, _event_sink)
             if isinstance(result, dict):
                 result["program_count"] = program_count
                 result["tokens_used"] = accumulated_tokens

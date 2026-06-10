@@ -17,3 +17,10 @@ def test_skill_documents_range_and_stop_reason():
     assert "--limit" in text
     assert "--all" in text
     assert "stopped_reason" in text
+
+
+def test_skill_documents_range_on_full_crawl():
+    text = SKILL.read_text(encoding="utf-8")
+    assert "crawl_all" in text          # /agent/run range params
+    assert '"limit"' in text
+    assert "strategy_direct" in text    # the short-circuit mode is explained
