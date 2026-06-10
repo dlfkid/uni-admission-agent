@@ -721,11 +721,14 @@ def _probe_strategy_discovery(body: AgentRunRequest):
 
     Returns a DiscoveryResult; matched=False on any failure — the agent
     loop is the universal fallback.
+
+    Strategy-direct always persists, so it only fires for autonomous,
+    non-dry-run runs.
     """
     from src.services.crawl_strategy.discovery import (  # pylint: disable=import-outside-toplevel
         DiscoveryResult, discover_with_default_adapters, resolve_crawl_range,
     )
-    if body.page_type_hint != "index":
+    if body.page_type_hint != "index" or body.dry_run or not body.autonomous:
         return DiscoveryResult(matched=False)
     try:
         rng = resolve_crawl_range(body.limit, body.crawl_all)
@@ -748,7 +751,7 @@ async def _execute_agent_job(body: AgentRunRequest, event_sink) -> dict:
             page_type_hint=body.page_type_hint,
             discovery=discovery,
             progress_callback=lambda ev, payload: event_sink(
-                {"type": ev, **payload}),
+                {**payload, "type": ev}),
         )
         return {
             "mode": "strategy_direct",

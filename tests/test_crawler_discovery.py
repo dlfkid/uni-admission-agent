@@ -53,6 +53,34 @@ async def test_unmatched_discovery_falls_back_unchanged(run_new_job_spy, monkeyp
     kwargs = run_new_job_spy.call_args.kwargs
     assert kwargs["selected_urls"] is None        # today's scout path, untouched
     assert kwargs["selected_link_texts"] is None
+    assert kwargs == {
+        "url": "https://x.edu/p",
+        "univ_slug": "xuni",
+        "year": 2026,
+        "continue_depth": 0,
+        "page_type_hint": "index",
+        "export_md": False,
+        "export_path": None,
+        "html_content": None,
+        "selected_urls": None,
+        "selected_link_texts": None,
+        "browser_automation_enabled": False,
+        "detail_pages_batch": None,
+        "batch_index": None,
+        "batch_total": None,
+        "candidate_taxonomy_filter_enabled": False,
+        "candidate_taxonomy_filter_threshold": 0.75,
+        "candidate_taxonomy_filter_top_k": 30,
+        "taxonomy_enabled": None,
+        "taxonomy_low_threshold": None,
+        "taxonomy_high_threshold": None,
+        "taxonomy_hint_top_k": None,
+        "taxonomy_override_enabled": None,
+        "name_resolution_llm_enabled": None,
+        "name_resolution_low_threshold": None,
+        "name_resolution_conflict_delta": None,
+        "event_callback": kwargs["event_callback"],
+    }
 
 
 @pytest.mark.asyncio

@@ -4,6 +4,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 import src.api.server as server_mod
+import src.services.crawl_strategy.discovery as disc_mod
 from src.api.schemas import AgentRunRequest
 from src.services.crawl_strategy.discovery import DiscoveryResult
 
@@ -35,8 +36,10 @@ async def test_matched_short_circuit_skips_agent_loop(monkeypatch):
     monkeypatch.setattr(server_mod, "crawl_url", crawl_spy)
     monkeypatch.setattr(server_mod, "run_agent_crawl", agent_spy)
 
+    # autonomous=True required: strategy-direct only fires for autonomous,
+    # non-dry-run runs (crawl_url always persists).
     body = AgentRunRequest(url="https://x.edu/p", univ_slug="x", year=2026,
-                           page_type_hint="index", limit=10)
+                           page_type_hint="index", limit=10, autonomous=True)
     events = []
     result = await server_mod._execute_agent_job(body, events.append)
 
@@ -65,3 +68,43 @@ async def test_unmatched_runs_agent_loop_unchanged(monkeypatch):
     crawl_spy.assert_not_awaited()
     agent_spy.assert_awaited_once()
     assert result == {"status": "ok"}
+    kw = agent_spy.await_args.kwargs
+    assert kw == {
+        "url": "https://x.edu/p",
+        "univ_slug": "x",
+        "year": 2026,
+        "page_type_hint": "index",
+        "runtime_mode": None,
+        "autonomous": False,
+        "dry_run": False,
+        "event_sink": kw["event_sink"],
+        "policy_profile": None,
+        "auto_paginate": False,
+        "max_pages": None,
+    }
+
+
+@pytest.mark.asyncio
+async def test_dry_run_or_review_mode_skips_short_circuit(monkeypatch):
+    # Even on a strategy-recognized page, dry_run / review mode must use the
+    # agent loop (crawl_url always persists — it has no dry-run semantics).
+    calls = []
+    monkeypatch.setattr(
+        disc_mod, "discover_with_default_adapters",
+        lambda *a, **k: calls.append(1))
+    agent_spy = AsyncMock(return_value={"status": "ok"})
+    crawl_spy = AsyncMock()
+    monkeypatch.setattr(server_mod, "run_agent_crawl", agent_spy)
+    monkeypatch.setattr(server_mod, "crawl_url", crawl_spy)
+
+    for body in (
+        AgentRunRequest(url="https://x.edu/p", univ_slug="x", year=2026,
+                        page_type_hint="index", autonomous=True, dry_run=True),
+        AgentRunRequest(url="https://x.edu/p", univ_slug="x", year=2026,
+                        page_type_hint="index", autonomous=False),
+    ):
+        result = await server_mod._execute_agent_job(body, lambda e: None)
+        assert result == {"status": "ok"}
+    crawl_spy.assert_not_awaited()
+    assert agent_spy.await_count == 2
+    assert not calls          # discovery never probed the network

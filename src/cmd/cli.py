@@ -458,6 +458,11 @@ def crawl(
     _setup_logging(verbose)
     name = _validate_slug(name)
     year = _validate_year(year)
+
+    if crawl_all and limit is not None:
+        typer.echo("Error: --limit 和 --all 互斥，只能选一个。", err=True)
+        raise typer.Exit(code=1)
+
     _init_db(verbose)
 
     if export_md and not export_path:
