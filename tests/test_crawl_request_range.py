@@ -4,7 +4,7 @@ from src.api.schemas import CrawlRequest
 
 
 def _base(**kw):
-    return dict(url="https://x.edu/p", univ_slug="xuni", year=2026, **kw)
+    return {"url": "https://x.edu/p", "univ_slug": "xuni", "year": 2026, **kw}
 
 
 def test_crawl_request_accepts_limit():
