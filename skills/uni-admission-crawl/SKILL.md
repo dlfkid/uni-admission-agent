@@ -61,9 +61,14 @@ curl -sS -X POST http://127.0.0.1:8910/agent/run \
     "univ_slug": "<SLUG>",
     "year": <YEAR>,
     "page_type_hint": "index",
+    "autonomous": true,
     "limit": <N>
   }'
 ```
+
+(`"autonomous": true` is required for the deterministic strategy-direct path —
+it persists results immediately. Omit it only when the user wants a review
+step before anything is saved; that goes through the agent loop instead.)
 
 Range semantics — pick exactly one (they are mutually exclusive):
 
