@@ -579,6 +579,7 @@ async def crawl_url(
         html_content=html_content,
         selected_urls=selected_urls,
         selected_link_texts=selected_link_texts,
+        max_detail_pages=(None if crawl_all else limit),
         browser_automation_enabled=browser_automation_enabled,
         detail_pages_batch=detail_pages_batch,
         batch_index=batch_index,
