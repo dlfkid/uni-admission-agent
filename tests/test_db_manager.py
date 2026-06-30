@@ -482,3 +482,38 @@ class TestSyncDeadlineRecords:
 
         session.delete.assert_not_called()
         assert session.add.call_count == 1
+
+
+class TestInferExamFieldsWordBoundary:
+    """Regression: exam inference must word-boundary match, not substring match.
+
+    A bare ``token in text`` test fabricated exams from incidental substrings
+    ("de[gre]e" -> GRE, managerial "cap[a]city"/"c[ap]acity" -> AP), tagging
+    requirements the page never stated.
+    """
+
+    def test_degree_does_not_infer_gre(self) -> None:
+        r = DatabaseManager._infer_exam_fields(
+            {"category": "academic_subject",
+             "requirement_text": "A Bachelor's degree or equivalent in any discipline."}
+        )
+        assert r["exam_display_name"] is None
+
+    def test_managerial_capacity_does_not_infer_ap(self) -> None:
+        r = DatabaseManager._infer_exam_fields(
+            {"category": "experience",
+             "requirement_text": "employed in a managerial capacity for 6 years"}
+        )
+        assert r["exam_display_name"] is None
+
+    def test_real_gre_still_inferred(self) -> None:
+        r = DatabaseManager._infer_exam_fields(
+            {"category": "standardized_test", "requirement_text": "GRE score of 320 required"}
+        )
+        assert r["exam_display_name"] == "GRE"
+
+    def test_real_ielts_still_inferred(self) -> None:
+        r = DatabaseManager._infer_exam_fields(
+            {"category": "language", "requirement_text": "IELTS 6.5 overall"}
+        )
+        assert r["exam_display_name"] == "IELTS"

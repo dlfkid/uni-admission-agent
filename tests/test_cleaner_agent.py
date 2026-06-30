@@ -18,6 +18,7 @@ from src.agents.cleaner_agent import (
     ParsedTuition,
     ParsedDeadline,
     ParsedStudyOption,
+    ParsedRequirement,
     ChunkParseResult,
     _merge_parsed_data,
     _load_prompt,
@@ -420,3 +421,58 @@ def test_merge_prefers_new_tuition() -> None:
     assert merged.tuition is not None
     assert merged.tuition.amount == Decimal("200000")
     assert merged.tuition.currency == CurrencyCode.USD
+
+
+# ── _merge_parsed_data semantic dedup ───────────────────────────────
+
+
+def test_merge_dedups_deadlines_by_date_and_drops_null() -> None:
+    """Same cutoff date with different labels collapses; null-date entries drop.
+
+    Overlapping chunks re-emit deadlines with slightly different descriptions
+    ("Early Round" vs "Early"); exact-object dedup let them both through.
+    """
+    a = ParsedProgramData(
+        deadlines=[ParsedDeadline(description="Early Round", cutoff_date=datetime(2026, 10, 20))]
+    )
+    b = ParsedProgramData(
+        deadlines=[
+            ParsedDeadline(description="Early", cutoff_date=datetime(2026, 10, 20)),
+            ParsedDeadline(description="Main Round", cutoff_date=None),
+        ]
+    )
+    merged = _merge_parsed_data(a, b)
+    assert len(merged.deadlines) == 1
+    assert merged.deadlines[0].cutoff_date == datetime(2026, 10, 20)
+
+
+def test_merge_dedups_requirements_by_normalized_text() -> None:
+    """Identical requirement text differing only in other fields collapses to one."""
+    a = ParsedProgramData(
+        requirements=[ParsedRequirement(
+            category="academic_subject",
+            requirement_text="A Bachelor's degree or equivalent in any discipline.")]
+    )
+    b = ParsedProgramData(
+        requirements=[ParsedRequirement(
+            category="academic_subject",
+            subject_name="Bachelor's degree",
+            requirement_text="A Bachelor's degree or equivalent in any discipline.")]
+    )
+    merged = _merge_parsed_data(a, b)
+    assert len(merged.requirements) == 1
+
+
+def test_merge_keeps_distinct_deadlines_and_requirements() -> None:
+    """Genuinely different dates / texts are preserved (no over-dedup)."""
+    a = ParsedProgramData(
+        deadlines=[ParsedDeadline(description="Early", cutoff_date=datetime(2026, 10, 20))],
+        requirements=[ParsedRequirement(category="academic_subject", requirement_text="Bachelor degree.")],
+    )
+    b = ParsedProgramData(
+        deadlines=[ParsedDeadline(description="Main", cutoff_date=datetime(2027, 2, 25))],
+        requirements=[ParsedRequirement(category="language", requirement_text="IELTS 6.5 overall.")],
+    )
+    merged = _merge_parsed_data(a, b)
+    assert len(merged.deadlines) == 2
+    assert len(merged.requirements) == 2

@@ -147,20 +147,44 @@ def _merge_parsed_data(
     merged_tuition = new.tuition if new.tuition else existing.tuition
     merged_faculty = new.faculty if new.faculty else existing.faculty
 
-    # Accumulate study options and deadlines (dedup by content)
-    merged_options = list(existing.study_options)
-    for opt in new.study_options:
-        if opt not in merged_options:
+    # Accumulate with SEMANTIC dedup. Overlapping chunks re-emit the same items
+    # with slightly different field assignments (e.g. a deadline labelled "Early
+    # Round" in one chunk and "Early" in another, or a requirement with/without a
+    # subject_name), so exact-object equality let near-duplicates through. We key
+    # on the meaningful content instead.
+
+    def _norm(text: Optional[str]) -> str:
+        return " ".join(str(text or "").lower().split())
+
+    # Study options: key on (mode, duration).
+    merged_options: List[ParsedStudyOption] = []
+    seen_options: set = set()
+    for opt in list(existing.study_options) + list(new.study_options):
+        key = (str(getattr(opt, "mode", "")), getattr(opt, "duration_months", None))
+        if key not in seen_options:
+            seen_options.add(key)
             merged_options.append(opt)
 
-    merged_deadlines = list(existing.deadlines)
-    for dl in new.deadlines:
-        if dl not in merged_deadlines:
+    # Deadlines: key on the cutoff date. Drop entries with no date (they carry no
+    # actionable info and are almost always a duplicate artifact of a dated round).
+    merged_deadlines: List[ParsedDeadline] = []
+    seen_deadlines: set = set()
+    for dl in list(existing.deadlines) + list(new.deadlines):
+        cutoff = getattr(dl, "cutoff_date", None)
+        if cutoff is None:
+            continue
+        key = cutoff.date() if hasattr(cutoff, "date") else str(cutoff)
+        if key not in seen_deadlines:
+            seen_deadlines.add(key)
             merged_deadlines.append(dl)
 
-    merged_requirements = list(existing.requirements)
-    for req in new.requirements:
-        if req not in merged_requirements:
+    # Requirements: key on (category, normalized requirement text).
+    merged_requirements: List[ParsedRequirement] = []
+    seen_requirements: set = set()
+    for req in list(existing.requirements) + list(new.requirements):
+        key = (_norm(getattr(req, "category", "")), _norm(getattr(req, "requirement_text", "")))
+        if key not in seen_requirements:
+            seen_requirements.add(key)
             merged_requirements.append(req)
 
     return ParsedProgramData(
