@@ -576,18 +576,17 @@ class LLMCleanerAgent:
             chunk_end = start + split_pos
             chunks.append(text[start:chunk_end])
 
-            # Move start forward by step_size (creating overlap)
-            start += step_size
+            # Advance relative to where THIS chunk actually ended, re-including the
+            # last `overlap_chars` of it. Advancing by a fixed step from the original
+            # `start` instead would skip the gap between an early paragraph-break
+            # cutoff (chunk_end) and start+step_size — silently dropping any value in
+            # that gap (e.g. a tuition figure sitting just past the break).
+            next_start = chunk_end - overlap_chars
 
-            # Adjust start to a newline boundary if possible (for cleaner overlap)
-            if start < len(text):
-                # Look for a newline within a small window
-                window_start = max(start - 50, chunk_end)
-                window_end = min(start + 50, len(text))
-                window_text = text[window_start:window_end]
-                newline_pos = window_text.find("\n")
-                if newline_pos != -1:
-                    start = window_start + newline_pos + 1
+            # Guarantee forward progress even if the chunk was very short.
+            if next_start <= start:
+                next_start = chunk_end
+            start = next_start
 
         return chunks
 

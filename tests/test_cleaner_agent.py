@@ -334,6 +334,34 @@ def test_split_chunks_clamps_overlap() -> None:
     assert len(chunks) >= 2
 
 
+def test_split_chunks_no_content_dropped_at_paragraph_break() -> None:
+    """A value just past an early paragraph break must survive chunking.
+
+    Regression: advancing the next chunk by a fixed step from the original start
+    (instead of from where the chunk actually ended at a paragraph break) left a
+    gap between chunk_end and the next start, silently dropping any text in it —
+    e.g. a tuition figure sitting just after the break. See _split_chunks.
+    """
+    agent = LLMCleanerAgent.__new__(LLMCleanerAgent)
+    # Unique numbered lines so positions are unambiguous; an early "\n\n" break
+    # forces chunk 0 to end before max_chars, putting the sentinel in what used to
+    # be the dropped gap between chunk_end and the next fixed-step start.
+    lines = [f"line{i:04d}" for i in range(200)]
+    sentinel = "TUITION_SENTINEL_424800"
+    lines.insert(60, sentinel)
+    text = "\n\n".join(lines)
+    chunks = agent._split_chunks(text, max_chars=400, overlap_ratio=0.2)
+
+    assert any(sentinel in c for c in chunks), "value in the gap was dropped"
+    # No coverage gap: each chunk must start at/before where the previous ended.
+    end_so_far = 0
+    for c in chunks:
+        idx = text.index(c)
+        assert idx <= end_so_far, f"gap before chunk at {idx} (covered to {end_so_far})"
+        end_so_far = max(end_so_far, idx + len(c))
+    assert end_so_far == len(text), "tail of text not covered by any chunk"
+
+
 # ── _merge_parsed_data ──────────────────────────────────────────────
 
 
