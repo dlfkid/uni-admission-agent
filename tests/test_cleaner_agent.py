@@ -517,3 +517,44 @@ def test_merge_keeps_paraphrased_requirements() -> None:
                           requirement_text="If you are not a native speaker of English you must fulfil the language requirement.")
     merged = _merge_parsed_data(ParsedProgramData(requirements=[a, b]), ParsedProgramData())
     assert len(merged.requirements) == 2
+
+
+# ── _reconcile_per_credit_tuition ───────────────────────────────────
+
+from src.agents.cleaner_agent import _reconcile_per_credit_tuition  # noqa: E402
+from decimal import Decimal as _D  # noqa: E402
+from src.models.admission import CurrencyCode as _C  # noqa: E402
+
+
+def _mk_tuition(amount) -> ParsedProgramData:
+    return ParsedProgramData(tuition=ParsedTuition(amount=_D(str(amount)), currency=_C.HKD))
+
+
+def test_reconcile_per_credit_multiplies_by_credits() -> None:
+    """Per-credit-only page: amount is the per-credit rate -> compute total."""
+    p = _mk_tuition(8200)
+    md = "STUDY MODE Full-time CREDIT REQUIRED 30 Tuition Fee HK$8,200 per credit for local students"
+    _reconcile_per_credit_tuition(p, md, "u")
+    assert p.tuition.amount == _D("246000")
+
+
+def test_reconcile_leaves_per_programme_total_untouched() -> None:
+    """When a per-programme total is present, the extracted amount is trusted."""
+    p = _mk_tuition(424800)
+    md = "Tuition Fee HK$424,800 per programme (HK$11,800 per credit for 36 credits) CREDIT REQUIRED 43"
+    _reconcile_per_credit_tuition(p, md, "u")
+    assert p.tuition.amount == _D("424800")
+
+
+def test_reconcile_no_credit_count_leaves_amount() -> None:
+    """Per-credit rate but no credit count on page -> cannot compute, leave as-is."""
+    p = _mk_tuition(9500)
+    _reconcile_per_credit_tuition(p, "Tuition Fee HK$9,500 per credit for local students", "u")
+    assert p.tuition.amount == _D("9500")
+
+
+def test_reconcile_ignores_non_matching_amount() -> None:
+    """A normal total that doesn't equal any per-credit rate is never rewritten."""
+    p = _mk_tuition(300000)
+    _reconcile_per_credit_tuition(p, "HK$9,500 per credit CREDIT REQUIRED 30", "u")
+    assert p.tuition.amount == _D("300000")

@@ -223,6 +223,58 @@ def _merge_parsed_data(
     )
 
 
+_PER_CREDIT_RE = re.compile(r"HK\$?\s*([\d,]+(?:\.\d+)?)\s*per\s*credit", re.IGNORECASE)
+_PER_PROGRAMME_RE = re.compile(r"HK\$?\s*([\d,]+(?:\.\d+)?)\s*per\s*programme", re.IGNORECASE)
+_CREDIT_COUNT_RE = re.compile(r"CREDIT\s+REQUIRED\s*[:\-]?\s*(\d{1,3})", re.IGNORECASE)
+
+
+def _reconcile_per_credit_tuition(
+    parsed: Optional["ParsedProgramData"], markdown: str, source_url: str = "",
+) -> None:
+    """Fix tuition that is actually a per-credit rate stored as the programme total.
+
+    Some pages list only "HK$X per credit" with no per-programme total; the LLM then
+    puts the per-credit rate into ``tuition.amount``, which reads as an absurdly cheap
+    whole-programme fee (e.g. HK$8,200 for an MSc). When the page gives a per-credit
+    rate, NO per-programme total, and a credit count, compute the total in code
+    (per_credit x credits) — deterministic arithmetic the LLM does unreliably.
+
+    Mutates ``parsed.tuition.amount`` in place. No-op when a per-programme total is
+    present (already correct) or the signals are missing.
+    """
+    if parsed is None or not parsed.tuition or parsed.tuition.amount is None:
+        return
+    if _PER_PROGRAMME_RE.search(markdown):
+        return  # a real programme total exists; trust the extracted amount
+
+    per_credit_matches = [
+        Decimal(m.group(1).replace(",", "")) for m in _PER_CREDIT_RE.finditer(markdown)
+    ]
+    if not per_credit_matches:
+        return
+
+    amount = Decimal(parsed.tuition.amount)
+    # Only act when the stored amount IS one of the per-credit rates on the page.
+    if not any(abs(amount - pc) < 1 for pc in per_credit_matches):
+        return
+
+    credit_match = _CREDIT_COUNT_RE.search(markdown)
+    if not credit_match:
+        logger.warning(
+            "Per-credit tuition %s found for %s but no credit count — leaving as-is",
+            amount, source_url,
+        )
+        return
+
+    credits = int(credit_match.group(1))
+    total = amount * credits
+    logger.info(
+        "Reconciled per-credit tuition for %s: HK$%s/credit x %d credits = %s",
+        source_url, amount, credits, total,
+    )
+    parsed.tuition.amount = total
+
+
 # --- Agent Class ---
 
 
@@ -343,9 +395,12 @@ class LLMCleanerAgent:
             ParsedProgramData or None if parsing fails entirely.
         """
         if len(markdown) <= MAX_DETAIL_CHARS:
-            return self._parse_single_pass(markdown, source_url, name_hints, academic_year)
+            parsed = self._parse_single_pass(markdown, source_url, name_hints, academic_year)
+        else:
+            parsed = self._parse_rolling_chunks(markdown, source_url, name_hints, academic_year)
 
-        return self._parse_rolling_chunks(markdown, source_url, name_hints, academic_year)
+        _reconcile_per_credit_tuition(parsed, markdown, source_url)
+        return parsed
 
     # ------------------------------------------------------------------ #
     #  Self-critique retry                                                #
