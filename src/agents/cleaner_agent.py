@@ -6,6 +6,7 @@ from raw Excel rows or scraped content.
 """
 
 import logging
+import re
 from typing import Dict, List, Optional, Any
 
 from datetime import datetime
@@ -178,14 +179,40 @@ def _merge_parsed_data(
             seen_deadlines.add(key)
             merged_deadlines.append(dl)
 
-    # Requirements: key on (category, normalized requirement text).
-    merged_requirements: List[ParsedRequirement] = []
+    # Requirements: dedup in two passes.
+    #   1) exact key on (category, loose-normalized text) — collapses copies that
+    #      differ only in punctuation/whitespace/case.
+    #   2) substring containment — drop a requirement whose text is fully contained
+    #      in a longer same-category requirement. Overlapping chunks often capture a
+    #      subset of a rule in one chunk ("A Bachelor's degree...") and the full
+    #      statement in another ("A Bachelor's degree... Applicants with ... will
+    #      also be considered."); the subset is redundant.
+    def _loose(text: Optional[str]) -> str:
+        return " ".join(re.sub(r"[^a-z0-9]+", " ", str(text or "").lower()).split())
+
+    keyed: List[ParsedRequirement] = []
     seen_requirements: set = set()
     for req in list(existing.requirements) + list(new.requirements):
-        key = (_norm(getattr(req, "category", "")), _norm(getattr(req, "requirement_text", "")))
+        key = (_norm(getattr(req, "category", "")), _loose(getattr(req, "requirement_text", "")))
         if key not in seen_requirements:
             seen_requirements.add(key)
-            merged_requirements.append(req)
+            keyed.append(req)
+
+    loose_texts = [_loose(getattr(r, "requirement_text", "")) for r in keyed]
+    merged_requirements: List[ParsedRequirement] = []
+    for i, req in enumerate(keyed):
+        txt_i = loose_texts[i]
+        # Drop if fully contained in a longer requirement (regardless of category:
+        # chunk paraphrases often split one rule across academic/experience labels
+        # and recombine it elsewhere). Full containment is a strong redundancy
+        # signal, so cross-category matches are intended.
+        if txt_i and any(
+            txt_i != txt_j and txt_i in txt_j
+            for j, txt_j in enumerate(loose_texts)
+            if j != i
+        ):
+            continue
+        merged_requirements.append(req)
 
     return ParsedProgramData(
         faculty=merged_faculty,

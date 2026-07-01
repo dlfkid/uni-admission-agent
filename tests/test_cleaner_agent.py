@@ -476,3 +476,44 @@ def test_merge_keeps_distinct_deadlines_and_requirements() -> None:
     merged = _merge_parsed_data(a, b)
     assert len(merged.deadlines) == 2
     assert len(merged.requirements) == 2
+
+
+def test_merge_drops_requirement_contained_in_longer_one() -> None:
+    """A requirement whose text is fully contained in a longer one is dropped.
+
+    Overlapping chunks capture a subset of a rule in one chunk and the full
+    statement in another; the subset is redundant (option-A substring dedup).
+    Cross-category containment is intentional — chunk paraphrases split one rule
+    across academic/experience labels.
+    """
+    short_academic = ParsedRequirement(
+        category="academic_subject",
+        requirement_text="A Bachelor's degree or an equivalent professional qualification.")
+    experience = ParsedRequirement(
+        category="experience",
+        requirement_text="employed for no less than 6 years in a managerial capacity.")
+    full = ParsedRequirement(
+        category="academic_subject",
+        requirement_text=("A Bachelor's degree or an equivalent professional qualification. "
+                          "employed for no less than 6 years in a managerial capacity."))
+    merged = _merge_parsed_data(
+        ParsedProgramData(requirements=[short_academic, experience, full]),
+        ParsedProgramData(),
+    )
+    texts = [r.requirement_text for r in merged.requirements]
+    assert len(merged.requirements) == 1
+    assert texts[0] == full.requirement_text
+
+
+def test_merge_keeps_paraphrased_requirements() -> None:
+    """Different wording of the same rule (neither contains the other) is kept.
+
+    Substring dedup deliberately does NOT collapse paraphrases — that would need
+    semantic dedup (option B), which we did not adopt.
+    """
+    a = ParsedRequirement(category="language",
+                          requirement_text="Non-native English speakers must meet the English requirement.")
+    b = ParsedRequirement(category="language",
+                          requirement_text="If you are not a native speaker of English you must fulfil the language requirement.")
+    merged = _merge_parsed_data(ParsedProgramData(requirements=[a, b]), ParsedProgramData())
+    assert len(merged.requirements) == 2
