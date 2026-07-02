@@ -555,3 +555,50 @@ def test_reconcile_ignores_non_matching_amount() -> None:
     p = _mk_tuition(300000)
     _reconcile_per_credit_tuition(p, "HK$9,500 per credit CREDIT REQUIRED 30", "u")
     assert p.tuition.amount == Decimal("300000")
+
+
+def test_single_pass_path_dedups_and_drops_null_deadline() -> None:
+    """Review fix ①: dedup/null-drop must apply on the SINGLE-PASS path too.
+
+    Previously the dedup lived only in _merge_parsed_data (rolling-chunks path), so a
+    small (single-pass) page kept duplicate/null-date items a large page would drop —
+    inconsistent by page size. clean_markdown now normalizes both paths uniformly.
+    """
+    parsed_json = json.dumps({
+        "faculty": "Faculty of Business",
+        "tuition": {"amount": "300000", "currency": "HKD"},
+        "study_options": [
+            {"mode": "FullTime", "duration_months": 12},
+            {"mode": "FullTime", "duration_months": 12},  # exact dup
+        ],
+        "deadlines": [
+            {"description": "Early Round", "cutoff_date": "2026-10-20T00:00:00"},
+            {"description": "Early", "cutoff_date": "2026-10-20T00:00:00"},  # same date dup
+            {"description": "Rolling", "cutoff_date": None},                 # null date -> dropped
+        ],
+        "requirements": [
+            {"category": "academic_subject", "requirement_text": "A Bachelor's degree."},
+            {"category": "academic_subject", "requirement_text": "A Bachelor's degree."},  # dup
+        ],
+    })
+    agent = LLMCleanerAgent(router=_mock_router(parsed_json))
+    result = agent.clean_markdown("# Small page\n\nTuition HK$300,000", source_url="https://x/y")
+
+    assert result is not None
+    assert len(result.study_options) == 1
+    assert len(result.deadlines) == 1          # one date kept, dup collapsed, null dropped
+    assert result.deadlines[0].cutoff_date is not None
+    assert len(result.requirements) == 1
+
+
+def test_normalize_parsed_data_is_idempotent() -> None:
+    """Normalizing already-normalized data changes nothing (safe to run on both paths)."""
+    from src.agents.cleaner_agent import _normalize_parsed_data
+    p = ParsedProgramData(
+        study_options=[ParsedStudyOption(mode=StudyMode.FULL_TIME, duration_months=12)],
+        deadlines=[ParsedDeadline(description="Early", cutoff_date=datetime(2026, 10, 20))],
+        requirements=[ParsedRequirement(category="language", requirement_text="IELTS 6.5.")],
+    )
+    once = _normalize_parsed_data(p)
+    twice = _normalize_parsed_data(once)
+    assert len(twice.study_options) == 1 and len(twice.deadlines) == 1 and len(twice.requirements) == 1

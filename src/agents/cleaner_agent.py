@@ -133,94 +133,103 @@ class ChunkParseResult(BaseModel):
 # --- Merge Helper ---
 
 
-def _merge_parsed_data(
-    existing: ParsedProgramData, new: ParsedProgramData,
-) -> ParsedProgramData:
-    """Merge two ParsedProgramData objects. New non-empty fields win.
+def _normalize_parsed_data(parsed: ParsedProgramData) -> ParsedProgramData:
+    """Deduplicate/normalize a program's list fields (page-size independent).
 
-    Args:
-        existing: Previously accumulated data.
-        new: New data from the latest chunk.
+    Runs on BOTH the single-pass and rolling-chunk paths (via ``clean_markdown``),
+    so dedup and null-date dropping behave identically regardless of page size.
+    Preserves scalar fields (faculty, tuition) untouched.
 
-    Returns:
-        Merged ParsedProgramData.
+    - study_options: dedup by (mode, duration).
+    - deadlines: dedup by cutoff date; drop entries with no date (they carry no
+      actionable info and are almost always a duplicate artifact of a dated round).
+    - requirements: dedup by (category, loose-normalized text), then drop any whose
+      text is fully contained in a longer requirement (chunk paraphrases split one
+      rule across chunks and recombine it elsewhere; the subset is redundant).
     """
-    merged_tuition = new.tuition if new.tuition else existing.tuition
-    merged_faculty = new.faculty if new.faculty else existing.faculty
-
-    # Accumulate with SEMANTIC dedup. Overlapping chunks re-emit the same items
-    # with slightly different field assignments (e.g. a deadline labelled "Early
-    # Round" in one chunk and "Early" in another, or a requirement with/without a
-    # subject_name), so exact-object equality let near-duplicates through. We key
-    # on the meaningful content instead.
-
     def _norm(text: Optional[str]) -> str:
         return " ".join(str(text or "").lower().split())
 
+    def _loose(text: Optional[str]) -> str:
+        return " ".join(re.sub(r"[^a-z0-9]+", " ", str(text or "").lower()).split())
+
     # Study options: key on (mode, duration).
-    merged_options: List[ParsedStudyOption] = []
+    dedup_options: List[ParsedStudyOption] = []
     seen_options: set = set()
-    for opt in list(existing.study_options) + list(new.study_options):
+    for opt in parsed.study_options:
         key = (str(getattr(opt, "mode", "")), getattr(opt, "duration_months", None))
         if key not in seen_options:
             seen_options.add(key)
-            merged_options.append(opt)
+            dedup_options.append(opt)
 
-    # Deadlines: key on the cutoff date. Drop entries with no date (they carry no
-    # actionable info and are almost always a duplicate artifact of a dated round).
-    merged_deadlines: List[ParsedDeadline] = []
+    # Deadlines: key on cutoff date; drop null-date entries.
+    dedup_deadlines: List[ParsedDeadline] = []
     seen_deadlines: set = set()
-    for dl in list(existing.deadlines) + list(new.deadlines):
+    for dl in parsed.deadlines:
         cutoff = getattr(dl, "cutoff_date", None)
         if cutoff is None:
             continue
         key = cutoff.date() if hasattr(cutoff, "date") else str(cutoff)
         if key not in seen_deadlines:
             seen_deadlines.add(key)
-            merged_deadlines.append(dl)
+            dedup_deadlines.append(dl)
 
-    # Requirements: dedup in two passes.
-    #   1) exact key on (category, loose-normalized text) — collapses copies that
-    #      differ only in punctuation/whitespace/case.
-    #   2) substring containment — drop a requirement whose text is fully contained
-    #      in a longer same-category requirement. Overlapping chunks often capture a
-    #      subset of a rule in one chunk ("A Bachelor's degree...") and the full
-    #      statement in another ("A Bachelor's degree... Applicants with ... will
-    #      also be considered."); the subset is redundant.
-    def _loose(text: Optional[str]) -> str:
-        return " ".join(re.sub(r"[^a-z0-9]+", " ", str(text or "").lower()).split())
-
+    # Requirements: exact (category, loose-text) dedup, then substring containment.
     keyed: List[ParsedRequirement] = []
     seen_requirements: set = set()
-    for req in list(existing.requirements) + list(new.requirements):
+    for req in parsed.requirements:
         key = (_norm(getattr(req, "category", "")), _loose(getattr(req, "requirement_text", "")))
         if key not in seen_requirements:
             seen_requirements.add(key)
             keyed.append(req)
 
     loose_texts = [_loose(getattr(r, "requirement_text", "")) for r in keyed]
-    merged_requirements: List[ParsedRequirement] = []
+    dedup_requirements: List[ParsedRequirement] = []
     for i, req in enumerate(keyed):
         txt_i = loose_texts[i]
-        # Drop if fully contained in a longer requirement (regardless of category:
-        # chunk paraphrases often split one rule across academic/experience labels
-        # and recombine it elsewhere). Full containment is a strong redundancy
-        # signal, so cross-category matches are intended.
-        if txt_i and any(
-            txt_i != txt_j and txt_i in txt_j
-            for j, txt_j in enumerate(loose_texts)
-            if j != i
-        ):
+        # Drop if fully contained in a longer requirement (cross-category on purpose).
+        container = next(
+            (loose_texts[j] for j in range(len(loose_texts))
+             if j != i and txt_i and txt_i != loose_texts[j] and txt_i in loose_texts[j]),
+            None,
+        )
+        if container is not None:
+            # Aggressive + irreversible: log the drop so a missing requirement is
+            # auditable (a shorter, more-permissive rule can be a substring of a
+            # more specific one).
+            logger.debug(
+                "Dropping requirement contained in a longer one: %r ⊂ %r",
+                getattr(req, "requirement_text", ""), container,
+            )
             continue
-        merged_requirements.append(req)
+        dedup_requirements.append(req)
 
     return ParsedProgramData(
-        faculty=merged_faculty,
-        tuition=merged_tuition,
-        study_options=merged_options,
-        deadlines=merged_deadlines,
-        requirements=merged_requirements,
+        faculty=parsed.faculty,
+        tuition=parsed.tuition,
+        study_options=dedup_options,
+        deadlines=dedup_deadlines,
+        requirements=dedup_requirements,
     )
+
+
+def _merge_parsed_data(
+    existing: ParsedProgramData, new: ParsedProgramData,
+) -> ParsedProgramData:
+    """Merge two ParsedProgramData objects across chunks. New non-empty scalars win.
+
+    Concatenates list fields then delegates dedup/normalization to
+    ``_normalize_parsed_data`` (the single source of dedup truth, also applied to
+    single-pass results in ``clean_markdown``).
+    """
+    combined = ParsedProgramData(
+        faculty=new.faculty if new.faculty else existing.faculty,
+        tuition=new.tuition if new.tuition else existing.tuition,
+        study_options=list(existing.study_options) + list(new.study_options),
+        deadlines=list(existing.deadlines) + list(new.deadlines),
+        requirements=list(existing.requirements) + list(new.requirements),
+    )
+    return _normalize_parsed_data(combined)
 
 
 _PER_CREDIT_RE = re.compile(r"HK\$?\s*([\d,]+(?:\.\d+)?)\s*per\s*credit", re.IGNORECASE)
@@ -400,6 +409,10 @@ class LLMCleanerAgent:
             parsed = self._parse_rolling_chunks(markdown, source_url, name_hints, academic_year)
 
         _reconcile_per_credit_tuition(parsed, markdown, source_url)
+        # Dedup/null-date normalization runs on BOTH paths here (not just inside the
+        # chunk merge) so behavior is uniform regardless of page size.
+        if parsed is not None:
+            parsed = _normalize_parsed_data(parsed)
         return parsed
 
     # ------------------------------------------------------------------ #
@@ -642,10 +655,14 @@ class LLMCleanerAgent:
             List of overlapping text chunks.
 
         Example:
-            For max_chars=20000 and overlap_ratio=0.2:
-            - Chunk 1: chars 0-20000
-            - Chunk 2: chars 16000-36000 (4000 char overlap)
-            - Chunk 3: chars 32000-52000 (4000 char overlap)
+            For max_chars=20000 and overlap_ratio=0.2 (overlap_chars=4000): each
+            chunk ends at a paragraph break at or before start+max_chars, and the
+            NEXT chunk starts `overlap_chars` before that actual end — so starts
+            depend on where the break landed, not a fixed step. Only in the
+            no-break (hard-split) case does this reduce to the regular pattern
+            0-20000, 16000-36000, 32000-52000. Advancing relative to the real end
+            (rather than a fixed step from the original start) guarantees the
+            chunks overlap and never leave a gap that could drop content.
         """
         if len(text) <= max_chars:
             return [text]

@@ -661,7 +661,9 @@ class IngestionPipeline:
         # Caller-supplied cap on how many index-discovered detail pages to fetch
         # (CLI --limit). None means unbounded (CLI --all or unset).
         _raw_max_details = request_payload.get("max_detail_pages")
-        max_detail_pages = int(_raw_max_details) if _raw_max_details else None
+        # `is not None` (not truthiness): treat --limit 0 as an explicit cap of 0,
+        # not as "unbounded" (0 is falsy). None stays unbounded.
+        max_detail_pages = int(_raw_max_details) if _raw_max_details is not None else None
 
         def _cap_detail_urls(urls: List[str], *, source: str) -> List[str]:
             """Truncate index→detail candidates to max_detail_pages, logging the drop."""
