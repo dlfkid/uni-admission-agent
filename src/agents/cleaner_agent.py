@@ -6,6 +6,7 @@ from raw Excel rows or scraped content.
 """
 
 import logging
+import re
 from typing import Dict, List, Optional, Any
 
 from datetime import datetime
@@ -132,44 +133,155 @@ class ChunkParseResult(BaseModel):
 # --- Merge Helper ---
 
 
+def _normalize_parsed_data(parsed: ParsedProgramData) -> ParsedProgramData:
+    """Deduplicate/normalize a program's list fields (page-size independent).
+
+    Runs on BOTH the single-pass and rolling-chunk paths (via ``clean_markdown``),
+    so dedup and null-date dropping behave identically regardless of page size.
+    Preserves scalar fields (faculty, tuition) untouched.
+
+    - study_options: dedup by (mode, duration).
+    - deadlines: dedup by cutoff date; drop entries with no date (they carry no
+      actionable info and are almost always a duplicate artifact of a dated round).
+    - requirements: dedup by (category, loose-normalized text), then drop any whose
+      text is fully contained in a longer requirement (chunk paraphrases split one
+      rule across chunks and recombine it elsewhere; the subset is redundant).
+    """
+    def _norm(text: Optional[str]) -> str:
+        return " ".join(str(text or "").lower().split())
+
+    def _loose(text: Optional[str]) -> str:
+        return " ".join(re.sub(r"[^a-z0-9]+", " ", str(text or "").lower()).split())
+
+    # Study options: key on (mode, duration).
+    dedup_options: List[ParsedStudyOption] = []
+    seen_options: set = set()
+    for opt in parsed.study_options:
+        key = (str(getattr(opt, "mode", "")), getattr(opt, "duration_months", None))
+        if key not in seen_options:
+            seen_options.add(key)
+            dedup_options.append(opt)
+
+    # Deadlines: key on cutoff date; drop null-date entries.
+    dedup_deadlines: List[ParsedDeadline] = []
+    seen_deadlines: set = set()
+    for dl in parsed.deadlines:
+        cutoff = getattr(dl, "cutoff_date", None)
+        if cutoff is None:
+            continue
+        key = cutoff.date() if hasattr(cutoff, "date") else str(cutoff)
+        if key not in seen_deadlines:
+            seen_deadlines.add(key)
+            dedup_deadlines.append(dl)
+
+    # Requirements: exact (category, loose-text) dedup, then substring containment.
+    keyed: List[ParsedRequirement] = []
+    seen_requirements: set = set()
+    for req in parsed.requirements:
+        key = (_norm(getattr(req, "category", "")), _loose(getattr(req, "requirement_text", "")))
+        if key not in seen_requirements:
+            seen_requirements.add(key)
+            keyed.append(req)
+
+    loose_texts = [_loose(getattr(r, "requirement_text", "")) for r in keyed]
+    dedup_requirements: List[ParsedRequirement] = []
+    for i, req in enumerate(keyed):
+        txt_i = loose_texts[i]
+        # Drop if fully contained in a longer requirement (cross-category on purpose).
+        container = next(
+            (loose_texts[j] for j in range(len(loose_texts))
+             if j != i and txt_i and txt_i != loose_texts[j] and txt_i in loose_texts[j]),
+            None,
+        )
+        if container is not None:
+            # Aggressive + irreversible: log the drop so a missing requirement is
+            # auditable (a shorter, more-permissive rule can be a substring of a
+            # more specific one).
+            logger.debug(
+                "Dropping requirement contained in a longer one: %r ⊂ %r",
+                getattr(req, "requirement_text", ""), container,
+            )
+            continue
+        dedup_requirements.append(req)
+
+    return ParsedProgramData(
+        faculty=parsed.faculty,
+        tuition=parsed.tuition,
+        study_options=dedup_options,
+        deadlines=dedup_deadlines,
+        requirements=dedup_requirements,
+    )
+
+
 def _merge_parsed_data(
     existing: ParsedProgramData, new: ParsedProgramData,
 ) -> ParsedProgramData:
-    """Merge two ParsedProgramData objects. New non-empty fields win.
+    """Merge two ParsedProgramData objects across chunks. New non-empty scalars win.
 
-    Args:
-        existing: Previously accumulated data.
-        new: New data from the latest chunk.
-
-    Returns:
-        Merged ParsedProgramData.
+    Concatenates list fields then delegates dedup/normalization to
+    ``_normalize_parsed_data`` (the single source of dedup truth, also applied to
+    single-pass results in ``clean_markdown``).
     """
-    merged_tuition = new.tuition if new.tuition else existing.tuition
-    merged_faculty = new.faculty if new.faculty else existing.faculty
-
-    # Accumulate study options and deadlines (dedup by content)
-    merged_options = list(existing.study_options)
-    for opt in new.study_options:
-        if opt not in merged_options:
-            merged_options.append(opt)
-
-    merged_deadlines = list(existing.deadlines)
-    for dl in new.deadlines:
-        if dl not in merged_deadlines:
-            merged_deadlines.append(dl)
-
-    merged_requirements = list(existing.requirements)
-    for req in new.requirements:
-        if req not in merged_requirements:
-            merged_requirements.append(req)
-
-    return ParsedProgramData(
-        faculty=merged_faculty,
-        tuition=merged_tuition,
-        study_options=merged_options,
-        deadlines=merged_deadlines,
-        requirements=merged_requirements,
+    combined = ParsedProgramData(
+        faculty=new.faculty if new.faculty else existing.faculty,
+        tuition=new.tuition if new.tuition else existing.tuition,
+        study_options=list(existing.study_options) + list(new.study_options),
+        deadlines=list(existing.deadlines) + list(new.deadlines),
+        requirements=list(existing.requirements) + list(new.requirements),
     )
+    return _normalize_parsed_data(combined)
+
+
+_PER_CREDIT_RE = re.compile(r"HK\$?\s*([\d,]+(?:\.\d+)?)\s*per\s*credit", re.IGNORECASE)
+_PER_PROGRAMME_RE = re.compile(r"HK\$?\s*([\d,]+(?:\.\d+)?)\s*per\s*programme", re.IGNORECASE)
+_CREDIT_COUNT_RE = re.compile(r"CREDIT\s+REQUIRED\s*[:\-]?\s*(\d{1,3})", re.IGNORECASE)
+
+
+def _reconcile_per_credit_tuition(
+    parsed: Optional["ParsedProgramData"], markdown: str, source_url: str = "",
+) -> None:
+    """Fix tuition that is actually a per-credit rate stored as the programme total.
+
+    Some pages list only "HK$X per credit" with no per-programme total; the LLM then
+    puts the per-credit rate into ``tuition.amount``, which reads as an absurdly cheap
+    whole-programme fee (e.g. HK$8,200 for an MSc). When the page gives a per-credit
+    rate, NO per-programme total, and a credit count, compute the total in code
+    (per_credit x credits) — deterministic arithmetic the LLM does unreliably.
+
+    Mutates ``parsed.tuition.amount`` in place. No-op when a per-programme total is
+    present (already correct) or the signals are missing.
+    """
+    if parsed is None or not parsed.tuition or parsed.tuition.amount is None:
+        return
+    if _PER_PROGRAMME_RE.search(markdown):
+        return  # a real programme total exists; trust the extracted amount
+
+    per_credit_matches = [
+        Decimal(m.group(1).replace(",", "")) for m in _PER_CREDIT_RE.finditer(markdown)
+    ]
+    if not per_credit_matches:
+        return
+
+    amount = Decimal(parsed.tuition.amount)
+    # Only act when the stored amount IS one of the per-credit rates on the page.
+    if not any(abs(amount - pc) < 1 for pc in per_credit_matches):
+        return
+
+    credit_match = _CREDIT_COUNT_RE.search(markdown)
+    if not credit_match:
+        logger.warning(
+            "Per-credit tuition %s found for %s but no credit count — leaving as-is",
+            amount, source_url,
+        )
+        return
+
+    credits = int(credit_match.group(1))
+    total = amount * credits
+    logger.info(
+        "Reconciled per-credit tuition for %s: HK$%s/credit x %d credits = %s",
+        source_url, amount, credits, total,
+    )
+    parsed.tuition.amount = total
 
 
 # --- Agent Class ---
@@ -292,9 +404,16 @@ class LLMCleanerAgent:
             ParsedProgramData or None if parsing fails entirely.
         """
         if len(markdown) <= MAX_DETAIL_CHARS:
-            return self._parse_single_pass(markdown, source_url, name_hints, academic_year)
+            parsed = self._parse_single_pass(markdown, source_url, name_hints, academic_year)
+        else:
+            parsed = self._parse_rolling_chunks(markdown, source_url, name_hints, academic_year)
 
-        return self._parse_rolling_chunks(markdown, source_url, name_hints, academic_year)
+        _reconcile_per_credit_tuition(parsed, markdown, source_url)
+        # Dedup/null-date normalization runs on BOTH paths here (not just inside the
+        # chunk merge) so behavior is uniform regardless of page size.
+        if parsed is not None:
+            parsed = _normalize_parsed_data(parsed)
+        return parsed
 
     # ------------------------------------------------------------------ #
     #  Self-critique retry                                                #
@@ -536,10 +655,14 @@ class LLMCleanerAgent:
             List of overlapping text chunks.
 
         Example:
-            For max_chars=20000 and overlap_ratio=0.2:
-            - Chunk 1: chars 0-20000
-            - Chunk 2: chars 16000-36000 (4000 char overlap)
-            - Chunk 3: chars 32000-52000 (4000 char overlap)
+            For max_chars=20000 and overlap_ratio=0.2 (overlap_chars=4000): each
+            chunk ends at a paragraph break at or before start+max_chars, and the
+            NEXT chunk starts `overlap_chars` before that actual end — so starts
+            depend on where the break landed, not a fixed step. Only in the
+            no-break (hard-split) case does this reduce to the regular pattern
+            0-20000, 16000-36000, 32000-52000. Advancing relative to the real end
+            (rather than a fixed step from the original start) guarantees the
+            chunks overlap and never leave a gap that could drop content.
         """
         if len(text) <= max_chars:
             return [text]
@@ -576,18 +699,17 @@ class LLMCleanerAgent:
             chunk_end = start + split_pos
             chunks.append(text[start:chunk_end])
 
-            # Move start forward by step_size (creating overlap)
-            start += step_size
+            # Advance relative to where THIS chunk actually ended, re-including the
+            # last `overlap_chars` of it. Advancing by a fixed step from the original
+            # `start` instead would skip the gap between an early paragraph-break
+            # cutoff (chunk_end) and start+step_size — silently dropping any value in
+            # that gap (e.g. a tuition figure sitting just past the break).
+            next_start = chunk_end - overlap_chars
 
-            # Adjust start to a newline boundary if possible (for cleaner overlap)
-            if start < len(text):
-                # Look for a newline within a small window
-                window_start = max(start - 50, chunk_end)
-                window_end = min(start + 50, len(text))
-                window_text = text[window_start:window_end]
-                newline_pos = window_text.find("\n")
-                if newline_pos != -1:
-                    start = window_start + newline_pos + 1
+            # Guarantee forward progress even if the chunk was very short.
+            if next_start <= start:
+                next_start = chunk_end
+            start = next_start
 
         return chunks
 

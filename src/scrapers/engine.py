@@ -59,25 +59,67 @@ class AdmissionScraper:
             verbose=False,
         )
 
-        # JS snippet to auto-dismiss cookie-consent overlays
-        # before they can redirect the browser away from the target page.
+        # JS snippet to auto-dismiss cookie-consent overlays before they can
+        # redirect the browser away from the target page or block content.
+        #
+        # This intentionally replaces crawl4ai's blunt `remove_overlay_elements`
+        # heuristic (which removes anything that *looks* like an overlay by
+        # position/z-index and was observed nuking legitimate AJAX-rendered
+        # content, e.g. the PolyU programme list). Every removal here is scoped
+        # to consent-related markers, so real page content is never touched.
         _dismiss_cookie_js = """
         (function() {
-            const sels = [
+            // 1) Click an accept/agree control if present (targeted dismissal).
+            const btnSels = [
                 'button[id*="cookie" i]', 'button[class*="cookie" i]',
-                'a[id*="cookie" i]',     'a[class*="cookie" i]',
+                'a[id*="cookie" i]',      'a[class*="cookie" i]',
                 'button[id*="consent" i]','button[class*="consent" i]',
                 'button[id*="accept" i]', 'button[class*="accept" i]',
                 '[data-cookiebanner] button',
                 '.cookie-banner button', '#cookie-banner button',
             ];
-            for (const sel of sels) {
+            for (const sel of btnSels) {
                 for (const el of document.querySelectorAll(sel)) {
                     const txt = (el.textContent || '').toLowerCase();
                     if (/accept|agree|ok|got it|i.m ok/i.test(txt)) {
-                        el.click(); return;
+                        try { el.click(); } catch (e) {}
                     }
                 }
+            }
+            // 2) Remove ONLY consent-scoped overlay/backdrop containers. An
+            //    element is removed solely when its id/class/aria-label matches a
+            //    consent vendor AND it behaves like an overlay (fixed/sticky or
+            //    high z-index). Legitimate content (program lists, cards) never
+            //    matches the keyword gate, so it is preserved.
+            const CONSENT = /(cookie|consent|gdpr|ccpa|privacy|onetrust|cookiebot|trustarc|didomi|usercentrics)/i;
+            const overlaySels = [
+                '[id*="cookie" i]', '[class*="cookie" i]',
+                '[id*="consent" i]', '[class*="consent" i]',
+                '[id*="onetrust" i]', '[class*="onetrust" i]',
+                '[id*="cookiebot" i]', '[class*="cookiebot" i]',
+                '[aria-label*="cookie" i]', '[aria-label*="consent" i]',
+                '[role="dialog"]', '[role="alertdialog"]',
+            ];
+            for (const sel of overlaySels) {
+                for (const el of document.querySelectorAll(sel)) {
+                    const marker = (el.id || '') + ' ' + (el.className || '') + ' ' +
+                                   (el.getAttribute('aria-label') || '');
+                    if (!CONSENT.test(marker)) continue;   // must be consent-related
+                    const cs = window.getComputedStyle(el);
+                    const fixedish = cs.position === 'fixed' || cs.position === 'sticky';
+                    const z = parseInt(cs.zIndex, 10);
+                    if (fixedish || (z && z >= 100)) {
+                        try { el.remove(); } catch (e) {}
+                    }
+                }
+            }
+            // 3) Undo scroll-lock that consent banners commonly apply.
+            for (const node of [document.documentElement, document.body]) {
+                if (!node) continue;
+                node.style.overflow = '';
+                node.style.position = '';
+                node.classList.remove('no-scroll','noscroll','modal-open',
+                                      'overflow-hidden','cookie-open','consent-open');
             }
         })();
         """
@@ -85,7 +127,11 @@ class AdmissionScraper:
         self.crawler_config = CrawlerRunConfig(
             cache_mode=CacheMode.BYPASS,
             simulate_user=False,
-            remove_overlay_elements=True,
+            # Disabled: crawl4ai's heuristic overlay removal over-matched and
+            # stripped legitimate AJAX content (PolyU programme list -> empty
+            # shell). Consent overlays are now handled precisely by the scoped
+            # _dismiss_cookie_js injected below.
+            remove_overlay_elements=False,
             wait_until="domcontentloaded",
             delay_before_return_html=2.0,
             js_code=_dismiss_cookie_js,
@@ -137,13 +183,35 @@ class AdmissionScraper:
             )
 
     def _debug_crawl_result(self, result: CrawlResult, url: str) -> None:
-        """Log debug info and save HTML if markdown conversion seems poor."""
-        if result.html and len(result.html) > 1000:
-            md_len = len(result.markdown.raw_markdown) if result.markdown else 0
-            if md_len < 100:
-                logger.warning("HTML: %d bytes, markdown: %d bytes", len(result.html), md_len)
-                if self._export_md and self._export_path:
-                    save_html_debug(self._export_path, url, result.html)
+        """Log fetch diagnostics and flag pages that were fetched but yielded no content.
+
+        Always emits a one-line diagnostic (status / html / cleaned / markdown /
+        link counts) so the fetch outcome is reconstructable from logs alone.
+        Emits a WARNING for the "fetched-but-empty" signature — a non-trivial HTML
+        payload that collapses to ~0 extractable content — which is the fingerprint
+        of content over-stripping, anti-bot shells, or capturing before AJAX render.
+        """
+        html_len = len(result.html or "")
+        cleaned_len = len(result.cleaned_html or "")
+        md_len = len(result.markdown.raw_markdown) if result.markdown else 0
+        link_count = 0
+        if result.links:
+            link_count = len(result.links.get("internal", [])) + len(result.links.get("external", []))
+        status = getattr(result, "status_code", None)
+
+        logger.info(
+            "Fetch diag %s: status=%s html=%dB cleaned=%dB markdown=%dB links=%d",
+            url, status, html_len, cleaned_len, md_len, link_count,
+        )
+
+        if html_len > 1000 and link_count == 0 and md_len < 100:
+            logger.warning(
+                "Fetched-but-empty: %s html=%dB cleaned=%dB but 0 links and markdown=%dB "
+                "— likely content stripping, anti-bot shell, or pre-AJAX capture",
+                url, html_len, cleaned_len, md_len,
+            )
+            if self._export_md and self._export_path:
+                save_html_debug(self._export_path, url, result.html)
 
     def _extract_page_links(self, result: CrawlResult) -> List[str]:
         """Extract links from crawl result."""

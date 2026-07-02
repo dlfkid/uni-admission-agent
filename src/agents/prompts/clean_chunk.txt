@@ -9,22 +9,33 @@ CURRENT CHUNK (Chunk {chunk_number}/{total_chunks}):
 {chunk_content}
 
 TASK:
-Extract the following admission data from the current chunk. If information spans across chunks (e.g., a label in the previous context and a value in this chunk), use the context to reconstruct the full meaning.
+Extract every admission field that is present in the CURRENT CHUNK. If a value
+is visible in this chunk, you MUST extract it now — never defer or return null
+for data that appears here, even if it might also appear in another chunk.
+Duplicate values are de-duplicated downstream, so re-extracting is safe. Use the
+previous-chunk context only to complete information split across a chunk
+boundary (e.g., a label here whose value was in the previous chunk).
 
 1. **Faculty**: Identify the top-level academic unit (Faculty, School, or College).
    - Look for text containing "Faculty of...", "School of...", "College of...".
    - If a program is in the "Department of Computer Science" under the "Faculty of Engineering", the faculty value should be "Faculty of Engineering".
    - If not explicitly mentioned, infer from context or set to null.
-2. **Tuition**: Extract numeric amount and currency. Handle "per year" or total.
+2. **Tuition**: Extract the numeric amount and currency.
+   - When a total programme fee and a per-credit fee are both shown
+     (e.g., "Tuition Fee HK$424,800 per programme (HK$11,800 per credit for 36 credits)"),
+     extract the TOTAL per-programme amount (424800), NOT the per-credit figure.
+   - If only a per-credit fee and a credit count are given, multiply them for the total.
+   - If only a per-year fee is shown, extract that amount.
+   - Ignore unrelated charges such as credit-transfer fees, application fees, or deposits.
+   - Capture the currency code (e.g., HKD, GBP, USD).
 3. **Study Options**: Extract study modes (FullTime, PartTime, Hybrid) and duration in months.
 4. **Deadlines**: Extract application deadlines with dates and round types (Early, Main, Extended).
-   - "Round 1" → Early, "Round 2"/Normal → Main, "Clearing" → Extended.
+   - "Round 1" -> Early, "Round 2"/Normal -> Main, "Clearing" -> Extended.
 5. **Requirements**: Extract subject-level admission requirements with thresholds.
    - Include subjects/tests (e.g., Mathematics, IELTS), score/grade, and framework when present.
 
 IMPORTANT:
 - Only return necessary structured data. Do NOT include any raw HTML snippets or duplicate original text in the JSON output.
-- If a field was already fully extracted in a previous chunk (mentioned in context), you may return null for that field.
 - If information is split across chunks, combine the context with this chunk to reconstruct the data.
 - Provide a brief "context_summary" (max 200 chars) capturing key unfinished information for the next chunk.
 

@@ -242,7 +242,11 @@ class DatabaseManager:
             ("ap", "AP", "curriculum"),
         )
         for token, display_name, family in patterns:
-            if token in merged:
+            # Word-boundary match, not substring: a bare ``token in merged`` test
+            # fired on incidental substrings — "de[gre]e" -> GRE, "cap[a][p]acity"
+            # -> AP, "s[at]isfactory" -> SAT — fabricating exam requirements that
+            # the page never stated. \b ensures we only match the standalone token.
+            if re.search(rf"\b{re.escape(token)}\b", merged):
                 return {
                     "exam_code": DatabaseManager._normalize_dim_key(display_name, "exam"),
                     "exam_display_name": display_name,

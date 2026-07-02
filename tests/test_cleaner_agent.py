@@ -18,8 +18,10 @@ from src.agents.cleaner_agent import (
     ParsedTuition,
     ParsedDeadline,
     ParsedStudyOption,
+    ParsedRequirement,
     ChunkParseResult,
     _merge_parsed_data,
+    _reconcile_per_credit_tuition,
     _load_prompt,
     MAX_DETAIL_CHARS,
     CHUNK_OVERLAP_RATIO,
@@ -334,6 +336,34 @@ def test_split_chunks_clamps_overlap() -> None:
     assert len(chunks) >= 2
 
 
+def test_split_chunks_no_content_dropped_at_paragraph_break() -> None:
+    """A value just past an early paragraph break must survive chunking.
+
+    Regression: advancing the next chunk by a fixed step from the original start
+    (instead of from where the chunk actually ended at a paragraph break) left a
+    gap between chunk_end and the next start, silently dropping any text in it —
+    e.g. a tuition figure sitting just after the break. See _split_chunks.
+    """
+    agent = LLMCleanerAgent.__new__(LLMCleanerAgent)
+    # Unique numbered lines so positions are unambiguous; an early "\n\n" break
+    # forces chunk 0 to end before max_chars, putting the sentinel in what used to
+    # be the dropped gap between chunk_end and the next fixed-step start.
+    lines = [f"line{i:04d}" for i in range(200)]
+    sentinel = "TUITION_SENTINEL_424800"
+    lines.insert(60, sentinel)
+    text = "\n\n".join(lines)
+    chunks = agent._split_chunks(text, max_chars=400, overlap_ratio=0.2)
+
+    assert any(sentinel in c for c in chunks), "value in the gap was dropped"
+    # No coverage gap: each chunk must start at/before where the previous ended.
+    end_so_far = 0
+    for c in chunks:
+        idx = text.index(c)
+        assert idx <= end_so_far, f"gap before chunk at {idx} (covered to {end_so_far})"
+        end_so_far = max(end_so_far, idx + len(c))
+    assert end_so_far == len(text), "tail of text not covered by any chunk"
+
+
 # ── _merge_parsed_data ──────────────────────────────────────────────
 
 
@@ -392,3 +422,183 @@ def test_merge_prefers_new_tuition() -> None:
     assert merged.tuition is not None
     assert merged.tuition.amount == Decimal("200000")
     assert merged.tuition.currency == CurrencyCode.USD
+
+
+# ── _merge_parsed_data semantic dedup ───────────────────────────────
+
+
+def test_merge_dedups_deadlines_by_date_and_drops_null() -> None:
+    """Same cutoff date with different labels collapses; null-date entries drop.
+
+    Overlapping chunks re-emit deadlines with slightly different descriptions
+    ("Early Round" vs "Early"); exact-object dedup let them both through.
+    """
+    a = ParsedProgramData(
+        deadlines=[ParsedDeadline(description="Early Round", cutoff_date=datetime(2026, 10, 20))]
+    )
+    b = ParsedProgramData(
+        deadlines=[
+            ParsedDeadline(description="Early", cutoff_date=datetime(2026, 10, 20)),
+            ParsedDeadline(description="Main Round", cutoff_date=None),
+        ]
+    )
+    merged = _merge_parsed_data(a, b)
+    assert len(merged.deadlines) == 1
+    assert merged.deadlines[0].cutoff_date == datetime(2026, 10, 20)
+
+
+def test_merge_dedups_requirements_by_normalized_text() -> None:
+    """Identical requirement text differing only in other fields collapses to one."""
+    a = ParsedProgramData(
+        requirements=[ParsedRequirement(
+            category="academic_subject",
+            requirement_text="A Bachelor's degree or equivalent in any discipline.")]
+    )
+    b = ParsedProgramData(
+        requirements=[ParsedRequirement(
+            category="academic_subject",
+            subject_name="Bachelor's degree",
+            requirement_text="A Bachelor's degree or equivalent in any discipline.")]
+    )
+    merged = _merge_parsed_data(a, b)
+    assert len(merged.requirements) == 1
+
+
+def test_merge_keeps_distinct_deadlines_and_requirements() -> None:
+    """Genuinely different dates / texts are preserved (no over-dedup)."""
+    a = ParsedProgramData(
+        deadlines=[ParsedDeadline(description="Early", cutoff_date=datetime(2026, 10, 20))],
+        requirements=[ParsedRequirement(category="academic_subject", requirement_text="Bachelor degree.")],
+    )
+    b = ParsedProgramData(
+        deadlines=[ParsedDeadline(description="Main", cutoff_date=datetime(2027, 2, 25))],
+        requirements=[ParsedRequirement(category="language", requirement_text="IELTS 6.5 overall.")],
+    )
+    merged = _merge_parsed_data(a, b)
+    assert len(merged.deadlines) == 2
+    assert len(merged.requirements) == 2
+
+
+def test_merge_drops_requirement_contained_in_longer_one() -> None:
+    """A requirement whose text is fully contained in a longer one is dropped.
+
+    Overlapping chunks capture a subset of a rule in one chunk and the full
+    statement in another; the subset is redundant (option-A substring dedup).
+    Cross-category containment is intentional — chunk paraphrases split one rule
+    across academic/experience labels.
+    """
+    short_academic = ParsedRequirement(
+        category="academic_subject",
+        requirement_text="A Bachelor's degree or an equivalent professional qualification.")
+    experience = ParsedRequirement(
+        category="experience",
+        requirement_text="employed for no less than 6 years in a managerial capacity.")
+    full = ParsedRequirement(
+        category="academic_subject",
+        requirement_text=("A Bachelor's degree or an equivalent professional qualification. "
+                          "employed for no less than 6 years in a managerial capacity."))
+    merged = _merge_parsed_data(
+        ParsedProgramData(requirements=[short_academic, experience, full]),
+        ParsedProgramData(),
+    )
+    texts = [r.requirement_text for r in merged.requirements]
+    assert len(merged.requirements) == 1
+    assert texts[0] == full.requirement_text
+
+
+def test_merge_keeps_paraphrased_requirements() -> None:
+    """Different wording of the same rule (neither contains the other) is kept.
+
+    Substring dedup deliberately does NOT collapse paraphrases — that would need
+    semantic dedup (option B), which we did not adopt.
+    """
+    a = ParsedRequirement(category="language",
+                          requirement_text="Non-native English speakers must meet the English requirement.")
+    b = ParsedRequirement(category="language",
+                          requirement_text="If you are not a native speaker of English you must fulfil the language requirement.")
+    merged = _merge_parsed_data(ParsedProgramData(requirements=[a, b]), ParsedProgramData())
+    assert len(merged.requirements) == 2
+
+
+# ── _reconcile_per_credit_tuition ───────────────────────────────────
+
+
+def _mk_tuition(amount) -> ParsedProgramData:
+    return ParsedProgramData(tuition=ParsedTuition(amount=Decimal(str(amount)), currency=CurrencyCode.HKD))
+
+
+def test_reconcile_per_credit_multiplies_by_credits() -> None:
+    """Per-credit-only page: amount is the per-credit rate -> compute total."""
+    p = _mk_tuition(8200)
+    md = "STUDY MODE Full-time CREDIT REQUIRED 30 Tuition Fee HK$8,200 per credit for local students"
+    _reconcile_per_credit_tuition(p, md, "u")
+    assert p.tuition.amount == Decimal("246000")
+
+
+def test_reconcile_leaves_per_programme_total_untouched() -> None:
+    """When a per-programme total is present, the extracted amount is trusted."""
+    p = _mk_tuition(424800)
+    md = "Tuition Fee HK$424,800 per programme (HK$11,800 per credit for 36 credits) CREDIT REQUIRED 43"
+    _reconcile_per_credit_tuition(p, md, "u")
+    assert p.tuition.amount == Decimal("424800")
+
+
+def test_reconcile_no_credit_count_leaves_amount() -> None:
+    """Per-credit rate but no credit count on page -> cannot compute, leave as-is."""
+    p = _mk_tuition(9500)
+    _reconcile_per_credit_tuition(p, "Tuition Fee HK$9,500 per credit for local students", "u")
+    assert p.tuition.amount == Decimal("9500")
+
+
+def test_reconcile_ignores_non_matching_amount() -> None:
+    """A normal total that doesn't equal any per-credit rate is never rewritten."""
+    p = _mk_tuition(300000)
+    _reconcile_per_credit_tuition(p, "HK$9,500 per credit CREDIT REQUIRED 30", "u")
+    assert p.tuition.amount == Decimal("300000")
+
+
+def test_single_pass_path_dedups_and_drops_null_deadline() -> None:
+    """Review fix ①: dedup/null-drop must apply on the SINGLE-PASS path too.
+
+    Previously the dedup lived only in _merge_parsed_data (rolling-chunks path), so a
+    small (single-pass) page kept duplicate/null-date items a large page would drop —
+    inconsistent by page size. clean_markdown now normalizes both paths uniformly.
+    """
+    parsed_json = json.dumps({
+        "faculty": "Faculty of Business",
+        "tuition": {"amount": "300000", "currency": "HKD"},
+        "study_options": [
+            {"mode": "FullTime", "duration_months": 12},
+            {"mode": "FullTime", "duration_months": 12},  # exact dup
+        ],
+        "deadlines": [
+            {"description": "Early Round", "cutoff_date": "2026-10-20T00:00:00"},
+            {"description": "Early", "cutoff_date": "2026-10-20T00:00:00"},  # same date dup
+            {"description": "Rolling", "cutoff_date": None},                 # null date -> dropped
+        ],
+        "requirements": [
+            {"category": "academic_subject", "requirement_text": "A Bachelor's degree."},
+            {"category": "academic_subject", "requirement_text": "A Bachelor's degree."},  # dup
+        ],
+    })
+    agent = LLMCleanerAgent(router=_mock_router(parsed_json))
+    result = agent.clean_markdown("# Small page\n\nTuition HK$300,000", source_url="https://x/y")
+
+    assert result is not None
+    assert len(result.study_options) == 1
+    assert len(result.deadlines) == 1          # one date kept, dup collapsed, null dropped
+    assert result.deadlines[0].cutoff_date is not None
+    assert len(result.requirements) == 1
+
+
+def test_normalize_parsed_data_is_idempotent() -> None:
+    """Normalizing already-normalized data changes nothing (safe to run on both paths)."""
+    from src.agents.cleaner_agent import _normalize_parsed_data
+    p = ParsedProgramData(
+        study_options=[ParsedStudyOption(mode=StudyMode.FULL_TIME, duration_months=12)],
+        deadlines=[ParsedDeadline(description="Early", cutoff_date=datetime(2026, 10, 20))],
+        requirements=[ParsedRequirement(category="language", requirement_text="IELTS 6.5.")],
+    )
+    once = _normalize_parsed_data(p)
+    twice = _normalize_parsed_data(once)
+    assert len(twice.study_options) == 1 and len(twice.deadlines) == 1 and len(twice.requirements) == 1

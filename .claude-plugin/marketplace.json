@@ -1,5 +1,9 @@
 {
   "name": "uni-admission-agent",
+  "owner": {
+    "name": "dlfkid",
+    "url": "https://github.com/dlfkid/uni-admission-agent"
+  },
   "metadata": {
     "description": "Plugin marketplace for the uni-admission-agent crawler tool",
     "version": "0.1.0"

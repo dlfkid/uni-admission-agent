@@ -252,6 +252,7 @@ class IngestionPipeline:
         html_content: Optional[str] = None,
         selected_urls: Optional[List[str]] = None,
         selected_link_texts: Optional[Dict[str, str]] = None,
+        max_detail_pages: Optional[int] = None,
         browser_automation_enabled: bool = False,
         detail_pages_batch: Optional[List[Dict[str, Any]]] = None,
         batch_index: Optional[int] = None,
@@ -280,6 +281,7 @@ class IngestionPipeline:
             "html_content": html_content,
             "selected_urls": selected_urls or [],
             "selected_link_texts": dict(selected_link_texts or {}),
+            "max_detail_pages": max_detail_pages,
             "browser_automation_enabled": bool(browser_automation_enabled),
             "detail_pages_batch": list(detail_pages_batch or []),
             "batch_index": batch_index,
@@ -656,6 +658,22 @@ class IngestionPipeline:
 
         continue_depth = max(0, int(request_payload.get("continue_depth") or 0))
         selected_urls = [u for u in (request_payload.get("selected_urls") or []) if u]
+        # Caller-supplied cap on how many index-discovered detail pages to fetch
+        # (CLI --limit). None means unbounded (CLI --all or unset).
+        _raw_max_details = request_payload.get("max_detail_pages")
+        # `is not None` (not truthiness): treat --limit 0 as an explicit cap of 0,
+        # not as "unbounded" (0 is falsy). None stays unbounded.
+        max_detail_pages = int(_raw_max_details) if _raw_max_details is not None else None
+
+        def _cap_detail_urls(urls: List[str], *, source: str) -> List[str]:
+            """Truncate index→detail candidates to max_detail_pages, logging the drop."""
+            if max_detail_pages is not None and len(urls) > max_detail_pages:
+                logger.info(
+                    "Applying --limit: %s discovered %d detail pages, capping to %d",
+                    source, len(urls), max_detail_pages,
+                )
+                return urls[:max_detail_pages]
+            return urls
         # Funnel accumulator — populated only when an index→detail flow runs.
         # Detail-only crawls leave this empty, and the audit row is skipped.
         audit_funnel: Dict[str, Any] = {}
@@ -938,7 +956,8 @@ class IngestionPipeline:
                     funnel_out=audit_funnel,
                 )
                 selected_link_texts.update(detail_link_texts)
-                crawl_urls = self._dedupe_urls(detail_urls, visited_urls)
+                crawl_urls = _cap_detail_urls(
+                    self._dedupe_urls(detail_urls, visited_urls), source="index_probe")
                 _emit_fetch_event(
                     "fetch_candidates_identified",
                     {
@@ -998,7 +1017,8 @@ class IngestionPipeline:
                     funnel_out=audit_funnel,
                 )
                 selected_link_texts.update(detail_link_texts)
-                crawl_urls = self._dedupe_urls(detail_urls, visited_urls)
+                crawl_urls = _cap_detail_urls(
+                    self._dedupe_urls(detail_urls, visited_urls), source="entry_index")
                 _emit_fetch_event(
                     "fetch_candidates_identified",
                     {
