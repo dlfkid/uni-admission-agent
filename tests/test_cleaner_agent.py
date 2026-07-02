@@ -21,6 +21,7 @@ from src.agents.cleaner_agent import (
     ParsedRequirement,
     ChunkParseResult,
     _merge_parsed_data,
+    _reconcile_per_credit_tuition,
     _load_prompt,
     MAX_DETAIL_CHARS,
     CHUNK_OVERLAP_RATIO,
@@ -521,13 +522,9 @@ def test_merge_keeps_paraphrased_requirements() -> None:
 
 # ── _reconcile_per_credit_tuition ───────────────────────────────────
 
-from src.agents.cleaner_agent import _reconcile_per_credit_tuition  # noqa: E402
-from decimal import Decimal as _D  # noqa: E402
-from src.models.admission import CurrencyCode as _C  # noqa: E402
-
 
 def _mk_tuition(amount) -> ParsedProgramData:
-    return ParsedProgramData(tuition=ParsedTuition(amount=_D(str(amount)), currency=_C.HKD))
+    return ParsedProgramData(tuition=ParsedTuition(amount=Decimal(str(amount)), currency=CurrencyCode.HKD))
 
 
 def test_reconcile_per_credit_multiplies_by_credits() -> None:
@@ -535,7 +532,7 @@ def test_reconcile_per_credit_multiplies_by_credits() -> None:
     p = _mk_tuition(8200)
     md = "STUDY MODE Full-time CREDIT REQUIRED 30 Tuition Fee HK$8,200 per credit for local students"
     _reconcile_per_credit_tuition(p, md, "u")
-    assert p.tuition.amount == _D("246000")
+    assert p.tuition.amount == Decimal("246000")
 
 
 def test_reconcile_leaves_per_programme_total_untouched() -> None:
@@ -543,18 +540,18 @@ def test_reconcile_leaves_per_programme_total_untouched() -> None:
     p = _mk_tuition(424800)
     md = "Tuition Fee HK$424,800 per programme (HK$11,800 per credit for 36 credits) CREDIT REQUIRED 43"
     _reconcile_per_credit_tuition(p, md, "u")
-    assert p.tuition.amount == _D("424800")
+    assert p.tuition.amount == Decimal("424800")
 
 
 def test_reconcile_no_credit_count_leaves_amount() -> None:
     """Per-credit rate but no credit count on page -> cannot compute, leave as-is."""
     p = _mk_tuition(9500)
     _reconcile_per_credit_tuition(p, "Tuition Fee HK$9,500 per credit for local students", "u")
-    assert p.tuition.amount == _D("9500")
+    assert p.tuition.amount == Decimal("9500")
 
 
 def test_reconcile_ignores_non_matching_amount() -> None:
     """A normal total that doesn't equal any per-credit rate is never rewritten."""
     p = _mk_tuition(300000)
     _reconcile_per_credit_tuition(p, "HK$9,500 per credit CREDIT REQUIRED 30", "u")
-    assert p.tuition.amount == _D("300000")
+    assert p.tuition.amount == Decimal("300000")
