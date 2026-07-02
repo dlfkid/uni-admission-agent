@@ -1,6 +1,6 @@
 [project]
 name = "uni-admission-agent"
-version = "0.1.0"
+version = "0.7.5"
 description = "Automated university admission requirements scraper using LLM and stealth browsing"
 authors = [
     { name = "Rayne Deng", email = "rayne.deng@example.com" }
@@ -90,11 +90,68 @@ exclude_lines = [
 
 [dependency-groups]
 dev = [
+    "bump-my-version>=1.4.0",
     "pyinstaller>=6.19.0",
     "pylint>=4.0.5",
     "pyright>=1.1.408",
     "ruff>=0.15.0",
 ]
+
+# Single-source version bumping: one command updates every version location,
+# commits, and tags — no hand-editing. See RELEASING.md.
+#   uv run bump-my-version bump patch|minor|major
+[tool.bumpversion]
+current_version = "0.7.5"
+allow_dirty = false
+commit = true
+message = "chore: release v{new_version} (was v{current_version})"
+tag = true
+tag_name = "v{new_version}"
+tag_message = "Release v{new_version}"
+
+# Source-of-truth files — precise search so unrelated numbers are never touched.
+[[tool.bumpversion.files]]
+filename = "pyproject.toml"
+search = "version = \"{current_version}\""
+replace = "version = \"{new_version}\""
+
+[[tool.bumpversion.files]]
+filename = "src/__init__.py"
+search = "__version__ = \"{current_version}\""
+replace = "__version__ = \"{new_version}\""
+
+[[tool.bumpversion.files]]
+filename = "src/api/server.py"
+search = "version=\"{current_version}\""
+replace = "version=\"{new_version}\""
+
+# JSON manifests — match the "version" field only.
+[[tool.bumpversion.files]]
+filename = ".claude-plugin/plugin.json"
+search = "\"version\": \"{current_version}\""
+replace = "\"version\": \"{new_version}\""
+
+[[tool.bumpversion.files]]
+filename = ".claude-plugin/marketplace.json"
+search = "\"version\": \"{current_version}\""
+replace = "\"version\": \"{new_version}\""
+
+[[tool.bumpversion.files]]
+filename = "frontend/package.json"
+search = "\"version\": \"{current_version}\""
+replace = "\"version\": \"{new_version}\""
+
+[[tool.bumpversion.files]]
+filename = "frontend/public/manifest.json"
+search = "\"version\": \"{current_version}\""
+replace = "\"version\": \"{new_version}\""
+
+# Lockfile root version. Only the two root entries equal the project version
+# (deps carry their own, different versions), so a "version" field match is safe.
+[[tool.bumpversion.files]]
+filename = "frontend/package-lock.json"
+search = "\"version\": \"{current_version}\""
+replace = "\"version\": \"{new_version}\""
 
 [tool.pylint.messages_control]
 disable = [
