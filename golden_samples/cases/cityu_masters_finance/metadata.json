@@ -9,8 +9,8 @@
       "status": "ok",
       "status_code": 200,
       "url": "https://www.cityu.edu.hk/pg/taught-postgraduate-programmes/list",
-      "html_chars": 993,
-      "markdown_chars": 84,
+      "html_chars": 260749,
+      "markdown_chars": 42563,
       "html_path": "golden_samples/cases/cityu_masters_finance/index.html",
       "markdown_path": "golden_samples/cases/cityu_masters_finance/index.md"
     },
