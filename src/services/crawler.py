@@ -584,6 +584,9 @@ async def crawl_url(
         detail_pages_batch=detail_pages_batch,
         batch_index=batch_index,
         batch_total=batch_total,
+        supplement_url_re=(
+            discovery.supplement_url_re if discovery is not None else None
+        ),
         candidate_taxonomy_filter_enabled=candidate_taxonomy_filter_enabled,
         candidate_taxonomy_filter_threshold=candidate_taxonomy_filter_threshold,
         candidate_taxonomy_filter_top_k=candidate_taxonomy_filter_top_k,

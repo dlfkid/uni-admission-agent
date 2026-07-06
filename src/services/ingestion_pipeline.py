@@ -46,13 +46,6 @@ _HTML_TITLE_RE = re.compile(r"<title[^>]*>(.*?)</title>", re.IGNORECASE | re.DOT
 _RECOVERY_MIN_RAW_LINKS = 20
 _RECOVERY_RETENTION_THRESHOLD = 0.30
 
-# CityU tuition sub-page enrichment: detail pages link to a separate fee page
-# at /sgs/files/fees/tpg/{CODE}/index.htm; we detect and fetch it automatically.
-_CITYU_DETAIL_PATH_RE = re.compile(r"/en/pg/programme/program-list/", re.IGNORECASE)
-_CITYU_TUITION_LINK_RE = re.compile(
-    r"\[Tuition Fee\s*\]\(\s*(https?://[^)]+/sgs/files/fees/tpg/[^)]+?)\s*\)",
-    re.IGNORECASE,
-)
 
 STAGE_ORDER = [
     IngestionStage.FETCH_RAW,
@@ -265,6 +258,7 @@ class IngestionPipeline:
         detail_pages_batch: Optional[List[Dict[str, Any]]] = None,
         batch_index: Optional[int] = None,
         batch_total: Optional[int] = None,
+        supplement_url_re: Optional[str] = None,
         candidate_taxonomy_filter_enabled: bool = False,
         candidate_taxonomy_filter_threshold: float = 0.75,
         candidate_taxonomy_filter_top_k: int = 30,
@@ -294,6 +288,7 @@ class IngestionPipeline:
             "detail_pages_batch": list(detail_pages_batch or []),
             "batch_index": batch_index,
             "batch_total": batch_total,
+            "supplement_url_re": supplement_url_re,
             "candidate_taxonomy_filter_enabled": bool(candidate_taxonomy_filter_enabled),
             "candidate_taxonomy_filter_threshold": candidate_taxonomy_filter_threshold,
             "candidate_taxonomy_filter_top_k": candidate_taxonomy_filter_top_k,
@@ -697,6 +692,7 @@ class IngestionPipeline:
         }
         html_content = request_payload.get("html_content")
         page_type_hint = str(request_payload.get("page_type_hint") or "auto")
+        supplement_url_re: Optional[str] = request_payload.get("supplement_url_re") or None
         raw_batch_index = request_payload.get("batch_index")
         raw_batch_total = request_payload.get("batch_total")
 
@@ -925,6 +921,7 @@ class IngestionPipeline:
                 source="selected_urls",
                 batch_index=batch_index,
                 batch_total=batch_total,
+                supplement_url_re=supplement_url_re,
             )
             _append_pages(pages, depth=0, from_browser=False)
             failed_urls.extend(batch_failed)
@@ -987,6 +984,7 @@ class IngestionPipeline:
                         source="index_probe",
                         batch_index=batch_index,
                         batch_total=batch_total,
+                        supplement_url_re=supplement_url_re,
                     )
                     _append_pages(pages, depth=1, from_browser=False)
                     failed_urls.extend(batch_failed)
@@ -1044,6 +1042,7 @@ class IngestionPipeline:
                         source="entry_index",
                         batch_index=batch_index,
                         batch_total=batch_total,
+                        supplement_url_re=supplement_url_re,
                     )
                     _append_pages(pages, depth=1, from_browser=False)
                     failed_urls.extend(batch_failed)
@@ -1092,6 +1091,7 @@ class IngestionPipeline:
                 source=f"continue_depth_{next_depth}",
                 batch_index=batch_index,
                 batch_total=batch_total,
+                supplement_url_re=supplement_url_re,
             )
             _append_pages(pages, depth=next_depth, from_browser=False)
             failed_urls.extend(batch_failed)
@@ -1896,40 +1896,38 @@ class IngestionPipeline:
             funnel_out["candidate_count"] = len(deduped)
         return deduped, text_map
 
-    async def _enrich_cityu_tuition(
+    async def _enrich_with_supplement(
         self,
         scraper: AdmissionScraper,
         pages: List[CrawlPageResult],
+        supplement_url_re: Optional[str],
     ) -> List[CrawlPageResult]:
-        """Append CityU tuition fee page content to matching detail pages.
+        """Fetch a supplemental sub-page and append its markdown to matching pages.
 
-        CityU detail pages contain a "Tuition Fee" link that points to a
-        separate sub-page at /sgs/files/fees/tpg/{CODE}/index.htm.  The
-        cleaner agent never follows that link on its own, so this method
-        detects it, fetches the fee page, and appends its markdown to the
-        detail page before the LLM extraction pass runs.
+        Some universities split data across two pages (e.g. CityU puts tuition
+        on a separate fee sub-page linked from the detail page).  ``supplement_url_re``
+        is a regex string with one capturing group that extracts the supplement URL
+        from the page markdown.  When it matches, the sub-page is fetched and its
+        markdown is appended before LLM extraction runs.
         """
+        if not supplement_url_re:
+            return pages
+        compiled = re.compile(supplement_url_re, re.IGNORECASE)
         enriched: List[CrawlPageResult] = []
         for page in pages:
             try:
-                if "cityu.edu.hk" not in page.url.lower():
-                    enriched.append(page)
-                    continue
-                if not _CITYU_DETAIL_PATH_RE.search(page.url):
-                    enriched.append(page)
-                    continue
-                match = _CITYU_TUITION_LINK_RE.search(page.markdown or "")
+                match = compiled.search(page.markdown or "")
                 if not match:
                     enriched.append(page)
                     continue
-                tuition_url = match.group(1)
-                logger.info("CityU: fetching tuition sub-page %s", tuition_url)
-                fee_pages = await scraper._crawl_urls([tuition_url])
-                if fee_pages and fee_pages[0].markdown:
+                supplement_url = match.group(1)
+                logger.info("supplement: fetching sub-page %s for %s", supplement_url, page.url)
+                sub_pages = await scraper._crawl_urls([supplement_url])
+                if sub_pages and sub_pages[0].markdown:
                     new_markdown = (
                         page.markdown
-                        + "\n\n## Tuition Fee Detail\n"
-                        + fee_pages[0].markdown
+                        + "\n\n## Supplemental Detail\n"
+                        + sub_pages[0].markdown
                     )
                     page = page.model_copy(update={
                         "markdown": new_markdown,
@@ -1937,7 +1935,7 @@ class IngestionPipeline:
                     })
             except Exception:
                 logger.warning(
-                    "CityU tuition enrichment failed for %s", page.url, exc_info=True
+                    "supplement enrichment failed for %s", page.url, exc_info=True
                 )
             enriched.append(page)
         return enriched
@@ -1952,6 +1950,7 @@ class IngestionPipeline:
         source: Optional[str] = None,
         batch_index: Optional[int] = None,
         batch_total: Optional[int] = None,
+        supplement_url_re: Optional[str] = None,
     ) -> tuple[List[CrawlPageResult], List[str]]:
         """Crawl URLs and infer failures from missing success rows."""
         if not urls:
@@ -1987,7 +1986,10 @@ class IngestionPipeline:
 
             crawled = await scraper._crawl_urls([url])
             if crawled:
-                crawled = await self._enrich_cityu_tuition(scraper, crawled)
+                if supplement_url_re:
+                    crawled = await self._enrich_with_supplement(
+                        scraper, crawled, supplement_url_re
+                    )
                 pages.extend(crawled)
                 _emit_progress("succeeded", idx, url)
             else:

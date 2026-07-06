@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from typing import Dict, Optional
 
 from src.services.crawl_strategy.orchestrator import crawl_index
+from src.services.crawl_strategy.registry import lookup
 from src.services.crawl_strategy.types import CrawlRange
 
 logger = logging.getLogger(__name__)
@@ -41,6 +42,9 @@ class DiscoveryResult:
     stopped_reason: str = ""
     pages_fetched: int = 0
     report_zip: Optional[str] = None
+    # Regex string from the matched Strategy — pipeline uses it to fetch supplemental
+    # sub-pages (e.g. CityU tuition pages) before LLM extraction.
+    supplement_url_re: Optional[str] = None
 
 
 def discover_candidates(
@@ -75,6 +79,8 @@ def discover_candidates(
 
     link_texts = {i.detail_url: i.name_en for i in outcome.items if i.detail_url}
     nameless = sum(1 for i in outcome.items if not i.detail_url)
+    strategy = lookup(index_url)
+    supplement_url_re = strategy.supplement_url_re if strategy else None
     return DiscoveryResult(
         matched=bool(link_texts),
         link_texts=link_texts,
@@ -83,6 +89,7 @@ def discover_candidates(
         strategy_used=outcome.strategy_used,
         stopped_reason=outcome.stopped_reason,
         pages_fetched=outcome.pages_fetched,
+        supplement_url_re=supplement_url_re,
     )
 
 
