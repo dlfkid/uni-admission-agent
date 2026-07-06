@@ -72,6 +72,42 @@ def test_nus_golden_fixture_text_heading():
         )
 
 
+def test_inline_degree_extracts_cuhk_prefix_style():
+    """extract_inline_degree must match degree-prefix link text (MA in X, MPhil in Y)."""
+    md = (
+        "[MA in Anthropology](https://www.gs.cuhk.edu.hk/programmes/arts/ma-anthropology)\n"
+        "[MPhil in Chinese Studies](https://www.gs.cuhk.edu.hk/programmes/arts/mphil-chinese-studies)\n"
+        "[PhD in Chinese Studies](https://www.gs.cuhk.edu.hk/programmes/arts/phd-chinese-studies)\n"
+        "[MPhil-PhD in Cultural Studies](https://www.gs.cuhk.edu.hk/programmes/arts/mphil-phd-cultural-studies)\n"
+        "[Executive MBA](https://www.gs.cuhk.edu.hk/programmes/business-administration/executive-mba)\n"
+        "[Juris Doctor/MBA](https://www.gs.cuhk.edu.hk/programmes/business-administration/juris-doctormba)\n"
+        "[Postgraduate Diploma in Law](https://www.gs.cuhk.edu.hk/programmes/law/postgraduate-diploma-law)\n"
+        "[About Us](https://www.gs.cuhk.edu.hk/about-us)\n"  # noise — must be excluded
+    )
+    items = get_extractor(ExtractKind.INLINE_DEGREE)(md, "https://www.gs.cuhk.edu.hk/")
+    names = [i.name_en for i in items]
+    assert "MA in Anthropology" in names
+    assert "MPhil in Chinese Studies" in names
+    assert "PhD in Chinese Studies" in names
+    assert "MPhil-PhD in Cultural Studies" in names
+    assert "Executive MBA" in names
+    assert "Juris Doctor/MBA" in names
+    assert "Postgraduate Diploma in Law" in names
+    assert "About Us" not in names
+
+
+def test_inline_degree_cuhk_golden_fixture_counts():
+    """extract_inline_degree on the CUHK golden sample must find ≥200 programmes."""
+    from pathlib import Path
+    md_path = (
+        Path(__file__).parent.parent.parent
+        / "golden_samples" / "cases" / "cuhk_masters_arts" / "index.md"
+    )
+    md = md_path.read_text(encoding="utf-8")
+    items = get_extractor(ExtractKind.INLINE_DEGREE)(md, "https://www.gs.cuhk.edu.hk/")
+    assert len(items) >= 200, f"Expected ≥200 CUHK programmes, got {len(items)}"
+
+
 def test_every_markdown_extractkind_is_registered():
     # LLM (future) and JSON_API (config-driven via make_json_api_extractor, not
     # a markdown extractor) are intentionally absent from the EXTRACTORS dict.

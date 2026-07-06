@@ -14,6 +14,15 @@ _ANY_LINK_RE = re.compile(r"\[([^\]]+)\]\(\s*([^)\s]+)")
 _DEGREE_SUFFIX_RE = re.compile(
     r"\b(?:BA|BSc|BASc|BEng|LLB|MArch|MBA|MChem|MComp|MEng|MMath|MPhil|MRes|"
     r"MSci|MSc|MA|LLM|PhD|DPhil|PGDip|PGCert|FdA|FdSc)\b\s*(?:\([^)]*\))?\s*$")
+# Matches degree abbreviation / title at the START of a link label.
+# Covers "MA in X", "MPhil-PhD in Y", "Juris Doctor/MBA", "Executive MBA", etc.
+_DEGREE_PREFIX_RE = re.compile(
+    r"^(?:MA\b|MSc\b|MBA\b|MPhil\b|MRes\b|MEng\b|LLM\b|PhD\b|DPhil\b|DBA\b|EdD\b|"
+    r"MSSc\b|MSocSc\b|MArch\b|MClinPsych\b|MScM\b|MFin\b|"
+    r"Executive\s+(?:MBA|Master)|Juris Doctor|"
+    r"Doctor of |Master of |Postgraduate (?:Certificate|Diploma))",
+    re.IGNORECASE,
+)
 _DURATION_SUFFIX_RE = re.compile(
     r"\s*\(\s*\d+(?:\s*(?:or|to|and|-|–|/)\s*\d+)?\s*years?\s*\)\s*$", re.IGNORECASE)
 _BLOB_NAME_RE = re.compile(
@@ -71,7 +80,8 @@ def extract_heading_link(markdown: str, base_url: str) -> List[ExtractItem]:
 
 
 def _looks_like_program(text: str) -> bool:
-    return bool(_DEGREE_SUFFIX_RE.search(str(text or "").strip()))
+    t = str(text or "").strip()
+    return bool(_DEGREE_SUFFIX_RE.search(t) or _DEGREE_PREFIX_RE.match(t))
 
 
 def extract_inline_degree(markdown: str, base_url: str) -> List[ExtractItem]:

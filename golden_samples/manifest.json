@@ -30,6 +30,12 @@
       "name": "CityU",
       "index_url": "https://www.cityu.edu.hk/pg/taught-postgraduate-programmes/list",
       "detail_url": "https://www.cityu.edu.hk/en/pg/programme/program-list/2026/college-of-business/department-of-economics-and-finance/p04"
+    },
+    {
+      "case_id": "cuhk_masters_arts",
+      "name": "CUHK",
+      "index_url": "https://www.gs.cuhk.edu.hk/programme-filter?programme_type=All&study_mode=All&keys=",
+      "detail_url": "https://www.gs.cuhk.edu.hk/programmes/arts/ma-anthropology"
     }
   ]
 }

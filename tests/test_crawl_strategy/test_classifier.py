@@ -30,6 +30,30 @@ def test_nav_only_page_is_not_confident():
     assert result.kind is None
 
 
+def test_classify_cuhk_prefix_page():
+    """Degree-prefix links (MA in X, MPhil in Y) must score as INLINE_DEGREE."""
+    md = "".join(
+        f"[MA in Subject {i}](https://www.gs.cuhk.edu.hk/programmes/arts/ma-subject-{i})\n"
+        for i in range(8))
+    result = classify(md, "https://www.gs.cuhk.edu.hk/")
+    assert result.kind is ExtractKind.INLINE_DEGREE
+    assert result.confident is True
+
+
+def test_classify_cuhk_golden_fixture():
+    """Classifier must auto-select inline_degree on the CUHK golden sample."""
+    from pathlib import Path
+    md_path = (
+        Path(__file__).parent.parent.parent
+        / "golden_samples" / "cases" / "cuhk_masters_arts" / "index.md"
+    )
+    md = md_path.read_text(encoding="utf-8")
+    result = classify(md, "https://www.gs.cuhk.edu.hk/programme-filter?programme_type=All&study_mode=All&keys=")
+    assert result.kind is ExtractKind.INLINE_DEGREE
+    assert result.confident is True
+    assert result.count >= 200
+
+
 def test_feature_signals_counts():
     md = "##  [A MSc](https://x/a-msc)\n[B BSc](https://x/b-bsc)\n"
     sig = feature_signals(md, "https://x/")
