@@ -25,6 +25,7 @@ class ExtractKind(str, Enum):
     TEXT_HEADING = "text_heading"
     JSON_API = "json_api"
     LLM = "llm"
+    CITYU_TABLE = "cityu_table"
 
 
 class PaginateMode(str, Enum):
@@ -43,6 +44,10 @@ class Strategy:
     extract: ExtractKind
     params: Dict[str, Any] = field(default_factory=dict)
     paginate: PaginateMode = PaginateMode.NONE
+    # Regex string (applied to detail-page markdown) that captures a supplemental
+    # URL in group 1.  When set, the pipeline fetches that URL and appends its
+    # markdown to the detail page before LLM extraction.  None = no supplement.
+    supplement_url_re: Optional[str] = None
 
     def label(self) -> str:
         """Return a short human-readable identifier for this strategy."""

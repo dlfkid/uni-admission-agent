@@ -739,7 +739,9 @@ def _probe_strategy_discovery(body: AgentRunRequest):
 
 
 async def _execute_agent_job(body: AgentRunRequest, event_sink) -> dict:
-    """Run one agent job: strategy-direct when discovery matches, else LLM loop."""
+    """Run one agent job: strategy-direct → learned-cache → LLM loop."""
+    from src.services.crawl_strategy import learned_cache  # pylint: disable=import-outside-toplevel
+
     discovery = await asyncio.to_thread(_probe_strategy_discovery, body)
     if discovery.matched:
         event_sink({"type": "strategy_direct_started",
@@ -762,7 +764,38 @@ async def _execute_agent_job(body: AgentRunRequest, event_sink) -> dict:
             "nameless_count": discovery.nameless_count,
             "imported_count": getattr(crawl_result, "imported_count", 0),
         }
-    return await run_agent_crawl(
+
+    # Learned-cache path: a previous LLM run succeeded for this domain.
+    # Skip the expensive agent loop and go straight to the deterministic
+    # crawl_url pipeline with the cached browser provider.
+    cached = await asyncio.to_thread(learned_cache.lookup, body.url)
+    if cached and body.page_type_hint == "index" and not body.dry_run:
+        fetch_mode = cached.get("fetch_mode", "server")
+        event_sink({"type": "learned_cache_hit",
+                    "fetch_mode": fetch_mode,
+                    "success_count": cached.get("success_count", 0)})
+        logger.info("learned-cache hit for %s (fetch_mode=%s, hits=%d)",
+                    body.url, fetch_mode, cached.get("success_count", 0))
+        crawl_result = await crawl_url(
+            url=body.url, univ_slug=body.univ_slug, year=body.year,
+            page_type_hint=body.page_type_hint,
+            browser_provider=fetch_mode,
+            limit=body.limit, crawl_all=body.crawl_all,
+            progress_callback=lambda ev, payload: event_sink(
+                {**payload, "type": ev}),
+        )
+        imported = getattr(crawl_result, "imported_count", 0)
+        if imported > 0:
+            await asyncio.to_thread(learned_cache.record_success, body.url, fetch_mode)
+        return {
+            "mode": "learned_cache",
+            "status": "ok",
+            "fetch_mode": fetch_mode,
+            "imported_count": imported,
+        }
+
+    # Full LLM agent-loop fallback
+    agent_result = await run_agent_crawl(
         url=body.url, univ_slug=body.univ_slug, year=body.year,
         page_type_hint=body.page_type_hint, runtime_mode=body.runtime,
         autonomous=body.autonomous, dry_run=body.dry_run,
@@ -771,6 +804,13 @@ async def _execute_agent_job(body: AgentRunRequest, event_sink) -> dict:
                         if body.policy_profile else None),
         auto_paginate=body.auto_paginate, max_pages=body.max_pages,
     )
+    # If the agent loop extracted programs, record the domain for future runs.
+    if not body.dry_run and isinstance(agent_result, dict):
+        imported = int(agent_result.get("imported_count", 0) or 0)
+        if imported > 0:
+            await asyncio.to_thread(learned_cache.record_success, body.url, "server")
+            logger.info("learned-cache: saved %s after %d programs imported", body.url, imported)
+    return agent_result
 
 
 @app.post("/agent/run", response_model=AgentRunResponse)

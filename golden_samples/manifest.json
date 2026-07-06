@@ -24,6 +24,12 @@
       "name": "PolyU",
       "index_url": "https://www.polyu.edu.hk/study/pg/taught-postgraduate",
       "detail_url": "https://www.polyu.edu.hk/study/pg/tpg/2026/02029-dfm-dpm-ffm-fpm"
+    },
+    {
+      "case_id": "cityu_masters_finance",
+      "name": "CityU",
+      "index_url": "https://www.cityu.edu.hk/pg/taught-postgraduate-programmes/list",
+      "detail_url": "https://www.cityu.edu.hk/en/pg/programme/program-list/2026/college-of-business/department-of-economics-and-finance/p04"
     }
   ]
 }

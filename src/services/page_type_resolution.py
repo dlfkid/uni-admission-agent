@@ -15,7 +15,7 @@ from src.scrapers.helpers import load_prompt
 _INDEX_HINT_RE = re.compile(
     r"\b(find your (course|programme|programmes?)|course search|search degree programmes?|"
     r"showing\s+\d+\s+courses?|filters?|browse( by)? subject|list of courses?|"
-    r"all programmes|all programs)\b",
+    r"all programmes|all programs|programme[s]? list|program[s]? list)\b",
     re.IGNORECASE,
 )
 _DETAIL_HINT_RE = re.compile(

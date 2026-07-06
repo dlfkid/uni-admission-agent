@@ -1,14 +1,14 @@
 {
-  "generated_at": "2026-03-02T18:49:18.338637+00:00",
+  "generated_at": "2026-07-06T06:23:41.141687+00:00",
   "manifest": "golden_samples/manifest.json",
   "global_threshold": 0.6,
   "aggregate": {
-    "case_count": 3,
-    "scored_case_count": 3,
-    "passed_case_count": 3,
+    "case_count": 5,
+    "scored_case_count": 5,
+    "passed_case_count": 5,
     "failed_case_count": 0,
     "pass_rate": 1.0,
-    "mean_score": 0.9733
+    "mean_score": 0.945
   },
   "cases": [
     {
@@ -161,7 +161,7 @@
         "deadlines": [
           {
             "round": 1,
-            "cutoff_date": "0500-02-03T00:00:00",
+            "cutoff_date": "0500-02-06T00:00:00",
             "description": "If you are successful in receiving an offer, you w",
             "evidence_url": "https://www.manchester.ac.uk/study/masters/courses/list/09994/msc-business-psychology/"
           }
@@ -246,14 +246,14 @@
       "name": "Leeds",
       "status": "passed",
       "threshold": 0.55,
-      "overall_score": 0.98,
+      "overall_score": 0.805,
       "metrics": {
         "completeness": 1.0,
-        "correctness": 1.0,
+        "correctness": 0.5,
         "normalization_consistency": 0.9,
         "evidence_coverage": 1.0,
-        "name_similarity": 1.0,
-        "keyword_coverage": 1.0
+        "name_similarity": 0.0,
+        "keyword_coverage": 0.0
       },
       "required_fields": [
         "name_en",
@@ -261,7 +261,7 @@
         "requirements"
       ],
       "observed": {
-        "name_en": "AI for Business MSc",
+        "name_en": "masters@lubs.leeds.ac.uk",
         "tuition": {
           "amount": 33000.0,
           "currency": "GBP",
@@ -298,7 +298,7 @@
           },
           {
             "category": "language",
-            "requirement_text": "IELTS 6.5 overall, with no less than 6.0 in any component. UK fees",
+            "requirement_text": "IELTS 6.5 overall, with no less than 6.0 in any component UK fees",
             "evidence_url": "https://courses.leeds.ac.uk/k198/ai-for-business-msc?searchOrigin=query%3D%26type%3DPGT%26term%3D202627"
           },
           {
@@ -333,7 +333,7 @@
           },
           {
             "category": "language",
-            "requirement_text": "IELTS 6.5 overall, with no less than 6.0 in any component.. For other English qualifications, read [English language equivalent qualifications](https://www.leeds.ac.uk/international-admissions/doc/entry-requirements \"English language equiva",
+            "requirement_text": "IELTS 6.5 overall, with no less than 6.0 in any component. For other English qualifications, read [English language equivalent qualifications](https://www.leeds.ac.uk/international-admissions/doc/entry-requirements \"English language equival",
             "evidence_url": "https://courses.leeds.ac.uk/k198/ai-for-business-msc?searchOrigin=query%3D%26type%3DPGT%26term%3D202627"
           },
           {
@@ -353,6 +353,208 @@
         ],
         "expected_tuition_currency": "GBP",
         "min_requirement_count": 2
+      }
+    },
+    {
+      "case_id": "polyu_masters_asset_wealth",
+      "name": "PolyU",
+      "status": "passed",
+      "threshold": 0.6,
+      "overall_score": 1.0,
+      "metrics": {
+        "completeness": 1.0,
+        "correctness": 1.0,
+        "normalization_consistency": 1.0,
+        "evidence_coverage": 1.0,
+        "name_similarity": 1.0,
+        "keyword_coverage": 1.0
+      },
+      "required_fields": [
+        "name_en"
+      ],
+      "observed": {
+        "name_en": "Master of Science in Asset and Wealth Management",
+        "tuition": {
+          "amount": 495000.0,
+          "currency": "HKD",
+          "evidence_url": "https://www.polyu.edu.hk/study/pg/tpg/2026/02029-dfm-dpm-ffm-fpm"
+        },
+        "study_options": [
+          {
+            "mode": "FullTime",
+            "duration_months": 12,
+            "evidence_url": "https://www.polyu.edu.hk/study/pg/tpg/2026/02029-dfm-dpm-ffm-fpm"
+          },
+          {
+            "mode": "PartTime",
+            "duration_months": 24,
+            "evidence_url": "https://www.polyu.edu.hk/study/pg/tpg/2026/02029-dfm-dpm-ffm-fpm"
+          },
+          {
+            "mode": "FullTime",
+            "duration_months": 24,
+            "evidence_url": "https://www.polyu.edu.hk/study/pg/tpg/2026/02029-dfm-dpm-ffm-fpm"
+          },
+          {
+            "mode": "FullTime",
+            "duration_months": 18,
+            "evidence_url": "https://www.polyu.edu.hk/study/pg/tpg/2026/02029-dfm-dpm-ffm-fpm"
+          }
+        ],
+        "deadlines": [],
+        "requirements": [
+          {
+            "category": "other",
+            "requirement_text": "* ESG Investment and Green Finance",
+            "evidence_url": "https://www.polyu.edu.hk/study/pg/tpg/2026/02029-dfm-dpm-ffm-fpm"
+          },
+          {
+            "category": "other",
+            "requirement_text": "2. International Experience offers students the opportunity to broaden their international perspective and professional network by attending an international executive programme with our partner institutions, which are AACSB or EQUIS-accred",
+            "evidence_url": "https://www.polyu.edu.hk/study/pg/tpg/2026/02029-dfm-dpm-ffm-fpm"
+          },
+          {
+            "category": "other",
+            "requirement_text": "* A Bachelor’s degree or equivalent in any discipline.",
+            "evidence_url": "https://www.polyu.edu.hk/study/pg/tpg/2026/02029-dfm-dpm-ffm-fpm"
+          },
+          {
+            "category": "language",
+            "requirement_text": "If you are not a native speaker of English, and your Bachelor’s degree or equivalent qualification is awarded by institutions where the medium of instruction is not English, you are expected to fulfil the University’s minimum English langua",
+            "evidence_url": "https://www.polyu.edu.hk/study/pg/tpg/2026/02029-dfm-dpm-ffm-fpm"
+          }
+        ],
+        "source_url": "https://www.polyu.edu.hk/study/pg/tpg/2026/02029-dfm-dpm-ffm-fpm"
+      },
+      "expected": {
+        "expected_name": "Master of Science in Asset and Wealth Management",
+        "expected_keywords": [
+          "Master",
+          "Science",
+          "Asset",
+          "Wealth Management"
+        ],
+        "expected_tuition_currency": "",
+        "min_requirement_count": 0
+      }
+    },
+    {
+      "case_id": "cityu_masters_finance",
+      "name": "CityU",
+      "status": "passed",
+      "threshold": 0.55,
+      "overall_score": 0.98,
+      "metrics": {
+        "completeness": 1.0,
+        "correctness": 1.0,
+        "normalization_consistency": 0.9,
+        "evidence_coverage": 1.0,
+        "name_similarity": 1.0,
+        "keyword_coverage": 1.0
+      },
+      "required_fields": [
+        "name_en"
+      ],
+      "observed": {
+        "name_en": "MSc Finance",
+        "tuition": null,
+        "study_options": [
+          {
+            "mode": "FullTime",
+            "duration_months": 12,
+            "evidence_url": "https://www.cityu.edu.hk/en/pg/programme/program-list/2026/college-of-business/department-of-economics-and-finance/p04"
+          },
+          {
+            "mode": "PartTime",
+            "duration_months": 24,
+            "evidence_url": "https://www.cityu.edu.hk/en/pg/programme/program-list/2026/college-of-business/department-of-economics-and-finance/p04"
+          },
+          {
+            "mode": "FullTime",
+            "duration_months": 30,
+            "evidence_url": "https://www.cityu.edu.hk/en/pg/programme/program-list/2026/college-of-business/department-of-economics-and-finance/p04"
+          },
+          {
+            "mode": "PartTime",
+            "duration_months": 60,
+            "evidence_url": "https://www.cityu.edu.hk/en/pg/programme/program-list/2026/college-of-business/department-of-economics-and-finance/p04"
+          },
+          {
+            "mode": "Unknown",
+            "duration_months": 12,
+            "evidence_url": "https://www.cityu.edu.hk/en/pg/programme/program-list/2026/college-of-business/department-of-economics-and-finance/p04"
+          }
+        ],
+        "deadlines": [],
+        "requirements": [
+          {
+            "category": "other",
+            "requirement_text": "* [Research Degree Programmes ](https://www.cityu.edu.hk/en/pg/research-degree-programmes/introduction \"Research Degree Programmes\")",
+            "evidence_url": "https://www.cityu.edu.hk/en/pg/programme/program-list/2026/college-of-business/department-of-economics-and-finance/p04"
+          },
+          {
+            "category": "other",
+            "requirement_text": "* [Overview](https://www.cityu.edu.hk/en/pg/research-degree-programmes/introduction \"Overview\")",
+            "evidence_url": "https://www.cityu.edu.hk/en/pg/programme/program-list/2026/college-of-business/department-of-economics-and-finance/p04"
+          },
+          {
+            "category": "other",
+            "requirement_text": "* [Introduction ](https://www.cityu.edu.hk/en/pg/research-degree-programmes/introduction \"Introduction\")",
+            "evidence_url": "https://www.cityu.edu.hk/en/pg/programme/program-list/2026/college-of-business/department-of-economics-and-finance/p04"
+          },
+          {
+            "category": "other",
+            "requirement_text": "* [Research Areas ](https://www.cityu.edu.hk/en/pg/research-degree-programmes/research-areas \"Research Areas\")",
+            "evidence_url": "https://www.cityu.edu.hk/en/pg/programme/program-list/2026/college-of-business/department-of-economics-and-finance/p04"
+          },
+          {
+            "category": "other",
+            "requirement_text": "* [Entrance Requirements ](https://www.cityu.edu.hk/en/pg/research-degree-programmes/entrance-requirements \"Entrance Requirements\")",
+            "evidence_url": "https://www.cityu.edu.hk/en/pg/programme/program-list/2026/college-of-business/department-of-economics-and-finance/p04"
+          },
+          {
+            "category": "other",
+            "requirement_text": "* [Steps & Procedures ](https://www.cityu.edu.hk/en/pg/research-degree-programmes/steps-and-procedures \"Steps & Procedures\")",
+            "evidence_url": "https://www.cityu.edu.hk/en/pg/programme/program-list/2026/college-of-business/department-of-economics-and-finance/p04"
+          },
+          {
+            "category": "other",
+            "requirement_text": "* [Scholarships, Financial Aid & Fees ](https://www.cityu.edu.hk/en/pg/research-degree-programmes/scholarships-financial-aid-and-fees \"Scholarships, Financial Aid & Fees\")",
+            "evidence_url": "https://www.cityu.edu.hk/en/pg/programme/program-list/2026/college-of-business/department-of-economics-and-finance/p04"
+          },
+          {
+            "category": "other",
+            "requirement_text": "* [Apply Now ](https://www.cityu.edu.hk/en/pg/research-degree-programmes/apply-now \"Apply Now\")",
+            "evidence_url": "https://www.cityu.edu.hk/en/pg/programme/program-list/2026/college-of-business/department-of-economics-and-finance/p04"
+          },
+          {
+            "category": "other",
+            "requirement_text": "* [Overview](https://www.cityu.edu.hk/en/pg/research-degree-programmes/apply-now \"Overview\")",
+            "evidence_url": "https://www.cityu.edu.hk/en/pg/programme/program-list/2026/college-of-business/department-of-economics-and-finance/p04"
+          },
+          {
+            "category": "other",
+            "requirement_text": "* [Research Degree Programmes ](https://www.cityu.edu.hk/en/pg/research-degree-programmes/apply-now \"Research Degree Programmes\")",
+            "evidence_url": "https://www.cityu.edu.hk/en/pg/programme/program-list/2026/college-of-business/department-of-economics-and-finance/p04"
+          },
+          {
+            "category": "other",
+            "requirement_text": "* hold a bachelor’s degree from a recognized university; and",
+            "evidence_url": "https://www.cityu.edu.hk/en/pg/programme/program-list/2026/college-of-business/department-of-economics-and-finance/p04"
+          },
+          {
+            "category": "language",
+            "requirement_text": "* a score of 79 (Internet-based test) in the Test of English as a Foreign Language (TOEFL)@#; or",
+            "evidence_url": "https://www.cityu.edu.hk/en/pg/programme/program-list/2026/college-of-business/department-of-economics-and-finance/p04"
+          }
+        ],
+        "source_url": "https://www.cityu.edu.hk/en/pg/programme/program-list/2026/college-of-business/department-of-economics-and-finance/p04"
+      },
+      "expected": {
+        "expected_name": "",
+        "expected_keywords": [],
+        "expected_tuition_currency": "",
+        "min_requirement_count": 0
       }
     }
   ],

@@ -160,23 +160,49 @@ def _html_to_markdown(html: str, url: str) -> str:
     return text.strip()
 
 
+def _server_fetch_page(url: str) -> dict:
+    """Fetch one page server-side (Playwright) and return a result dict.
+
+    Used when no client browser is connected.  Called from a thread pool
+    (asyncio.to_thread) so there is no running event loop — asyncio.run() works.
+    """
+    import asyncio
+    from src.scrapers.engine import AdmissionScraper
+
+    scraper = AdmissionScraper()
+    pages = asyncio.run(scraper._crawl_urls([url]))
+    if not pages:
+        return {"html_content": ""}
+    page = pages[0]
+    return {"html_content": page.html or page.markdown or ""}
+
+
 def browser_automation_skill_handler(
     payload: BrowserAutomationSkillInput,
     bridge: ClientAutomationBridge,
 ) -> dict:
-    """Fetch browser payload from connected client runtime.
+    """Fetch browser payload from a connected client, or server-side as fallback.
 
-    HTML is converted to markdown before returning to keep the agent
-    conversation context small enough for LLM API limits.
+    Tries the connected client browser first.  When no client is available
+    (RuntimeError from the bridge), falls back to server-side Playwright via
+    AdmissionScraper.  HTML is converted to markdown before returning to keep
+    the agent conversation context small enough for LLM API limits.
     """
-    output = bridge.fetch_browser_payload(
-        BrowserFetchInput(
-            url=payload.url,
-            page_type_hint=payload.page_type_hint,
-            client_id=payload.client_id,
+    try:
+        output = bridge.fetch_browser_payload(
+            BrowserFetchInput(
+                url=payload.url,
+                page_type_hint=payload.page_type_hint,
+                client_id=payload.client_id,
+            )
         )
-    )
-    result = output.model_dump(mode="json")
+        result = output.model_dump(mode="json")
+    except RuntimeError as exc:
+        logger.info(
+            "[BrowserSkill] Client unavailable (%s), falling back to server scrape for %s",
+            exc, payload.url,
+        )
+        result = _server_fetch_page(payload.url)
 
     # For index pages, replace the client-side heuristic selected_urls with
     # LLM-ranked candidates.  The client heuristic matches on URL keywords
@@ -461,37 +487,49 @@ def _auto_fetch_and_extract(
         FallbackHandler, derive_page_pattern,
     )
 
-    # Step 1: Parallel fetch all detail pages (unchanged)
-    def _fetch_one(url: str, retries: int = 2) -> CrawlPageResult | None:
-        for attempt in range(1, retries + 2):
-            try:
-                output = bridge.fetch_browser_payload(
-                    BrowserFetchInput(url=url, page_type_hint="detail")
-                )
-                raw_html = output.html_content or ""
-                md = _html_to_markdown(raw_html, url) if raw_html else ""
-                return CrawlPageResult(
-                    url=url, html=raw_html, markdown=md,
-                    char_count=len(md), links=[],
-                )
-            except Exception as exc:
-                if attempt <= retries:
-                    wait = attempt * 2
-                    logger.info("[AutoExtract] Retry %d/%d for %s in %ds: %s", attempt, retries, url, wait, exc)
-                    time.sleep(wait)
-                else:
-                    logger.warning("[AutoExtract] Failed to fetch %s after %d attempts: %s", url, retries + 1, exc)
-                    return None
-        return None  # unreachable, but satisfies pylint R1710
-
-    # Use max 2 concurrent fetches to avoid overwhelming target servers
+    # Step 1: Fetch all detail pages — client path or server-side fallback
     pages: list[CrawlPageResult] = []
-    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as pool:
-        futures = {pool.submit(_fetch_one, url): url for url in urls}
-        for future in concurrent.futures.as_completed(futures):
-            page = future.result()
-            if page and (page.html or page.markdown):
-                pages.append(page)
+
+    if bridge is not None:
+        # Parallel client-browser fetch
+        def _fetch_one(url: str, retries: int = 2) -> CrawlPageResult | None:
+            for attempt in range(1, retries + 2):
+                try:
+                    output = bridge.fetch_browser_payload(
+                        BrowserFetchInput(url=url, page_type_hint="detail")
+                    )
+                    raw_html = output.html_content or ""
+                    md = _html_to_markdown(raw_html, url) if raw_html else ""
+                    return CrawlPageResult(
+                        url=url, html=raw_html, markdown=md,
+                        char_count=len(md), links=[],
+                    )
+                except Exception as exc:
+                    if attempt <= retries:
+                        wait = attempt * 2
+                        logger.info("[AutoExtract] Retry %d/%d for %s in %ds: %s", attempt, retries, url, wait, exc)
+                        time.sleep(wait)
+                    else:
+                        logger.warning("[AutoExtract] Failed to fetch %s after %d attempts: %s", url, retries + 1, exc)
+                        return None
+            return None  # unreachable, but satisfies pylint R1710
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as pool:
+            futures = {pool.submit(_fetch_one, url): url for url in urls}
+            for future in concurrent.futures.as_completed(futures):
+                page = future.result()
+                if page and (page.html or page.markdown):
+                    pages.append(page)
+    else:
+        # Server-side fallback: single asyncio.run call; we are already in a
+        # thread (asyncio.to_thread from the agent loop) so there is no
+        # running event loop in this context.
+        import asyncio as _asyncio
+        from src.scrapers.engine import AdmissionScraper as _AdmissionScraper
+
+        scraper = _AdmissionScraper()
+        fetched = _asyncio.run(scraper._crawl_urls(urls))
+        pages = [p for p in (fetched or []) if p.markdown or p.html]
 
     logger.info("[AutoExtract] Fetched %d/%d detail pages", len(pages), len(urls))
     if not pages:

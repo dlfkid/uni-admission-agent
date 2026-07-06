@@ -234,7 +234,10 @@ def _merge_parsed_data(
 
 _PER_CREDIT_RE = re.compile(r"HK\$?\s*([\d,]+(?:\.\d+)?)\s*per\s*credit", re.IGNORECASE)
 _PER_PROGRAMME_RE = re.compile(r"HK\$?\s*([\d,]+(?:\.\d+)?)\s*per\s*programme", re.IGNORECASE)
-_CREDIT_COUNT_RE = re.compile(r"CREDIT\s+REQUIRED\s*[:\-]?\s*(\d{1,3})", re.IGNORECASE)
+_CREDIT_COUNT_RE = re.compile(
+    r"(?:Minimum\s+No\.?\s+of\s+)?[Cc]redits?\s+[Rr]equired\s*[:\-]?\s*\n?\s*(\d{1,3})",
+    re.IGNORECASE,
+)
 
 
 def _reconcile_per_credit_tuition(

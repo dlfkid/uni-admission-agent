@@ -1,0 +1,27 @@
+{
+  "case_id": "cityu_masters_finance",
+  "name": "CityU",
+  "index_url": "https://www.cityu.edu.hk/pg/taught-postgraduate-programmes/list",
+  "detail_url": "https://www.cityu.edu.hk/en/pg/programme/program-list/2026/college-of-business/department-of-economics-and-finance/p04",
+  "fetched_at": "2026-07-06T06:19:19.876835+00:00",
+  "pages": {
+    "index": {
+      "status": "ok",
+      "status_code": 200,
+      "url": "https://www.cityu.edu.hk/pg/taught-postgraduate-programmes/list",
+      "html_chars": 260749,
+      "markdown_chars": 42563,
+      "html_path": "golden_samples/cases/cityu_masters_finance/index.html",
+      "markdown_path": "golden_samples/cases/cityu_masters_finance/index.md"
+    },
+    "detail": {
+      "status": "ok",
+      "status_code": 200,
+      "url": "https://www.cityu.edu.hk/en/pg/programme/program-list/2026/college-of-business/department-of-economics-and-finance/p04",
+      "html_chars": 68980,
+      "markdown_chars": 16744,
+      "html_path": "golden_samples/cases/cityu_masters_finance/detail.html",
+      "markdown_path": "golden_samples/cases/cityu_masters_finance/detail.md"
+    }
+  }
+}

@@ -158,12 +158,46 @@ def extract_text_heading(markdown: str, base_url: str) -> List[ExtractItem]:
     return _dedup(out)
 
 
+_CITYU_URL_RE = re.compile(r"/programme/program-list/")
+_CITYU_CODE_PREFIX_RE = re.compile(r"^[Pp]\d+[a-z]?\s+")
+_CITYU_DEGREE_START_RE = re.compile(
+    r"^(?:MSc|MA\b|MBA|MEng|MPhil|MRes|LLM|MSocSc|MClinPsych|MSSc|MArch|"
+    r"Master (?:of|in)|Executive Master|Postgraduate (?:Certificate|Diploma)|"
+    r"Doctor of|Professional (?:Certificate|Diploma))",
+    re.IGNORECASE,
+)
+
+
+def extract_cityu_table(markdown: str, base_url: str) -> List[ExtractItem]:
+    """Extract CityU programme names and detail URLs from the TPG list page.
+
+    The index page renders a table where each row links to a detail page at
+    /en/pg/programme/program-list/2026/{college}/{dept}/{code}.  The link text
+    contains the English name followed by a newline and the Chinese translation.
+    """
+    out: List[ExtractItem] = []
+    for match in _ANY_LINK_RE.finditer(markdown or ""):
+        url = match.group(2)
+        if not _CITYU_URL_RE.search(url):
+            continue
+        raw_text = match.group(1)
+        # English portion ends at the first newline or CJK character
+        english = re.split(r"\n|[一-鿿　-〿＀-￯]", raw_text)[0]
+        english = re.sub(r"\s+", " ", english).strip()
+        # Strip programme code prefix (e.g. "P79 " or "p01a ")
+        english = _CITYU_CODE_PREFIX_RE.sub("", english).strip()
+        if english and _CITYU_DEGREE_START_RE.match(english):
+            out.append(ExtractItem(english, urljoin(base_url, url)))
+    return _dedup(out)
+
+
 EXTRACTORS: Dict[ExtractKind, Extractor] = {
     ExtractKind.HEADING_LINK: extract_heading_link,
     ExtractKind.INLINE_DEGREE: extract_inline_degree,
     ExtractKind.MERGED_COLUMNS: extract_merged_columns,
     ExtractKind.BLOB: extract_blob,
     ExtractKind.TEXT_HEADING: extract_text_heading,
+    ExtractKind.CITYU_TABLE: extract_cityu_table,
 }
 
 
