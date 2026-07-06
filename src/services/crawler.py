@@ -1069,7 +1069,8 @@ def query_programs(
                     for opt in option_rows
                 ]
             else:
-                study_options = program.study_options or []
+                raw_so = program.study_options or []
+                study_options = raw_so if isinstance(raw_so, list) else []
 
             if deadline_rows:
                 deadlines = [
@@ -1081,7 +1082,8 @@ def query_programs(
                     for d in deadline_rows
                 ]
             else:
-                deadlines = program.deadlines or []
+                raw_dl = program.deadlines or []
+                deadlines = raw_dl if isinstance(raw_dl, list) else []
 
             requirements = []
             for req, subject_dim, exam_dim, framework_dim, evidence in requirement_rows:
