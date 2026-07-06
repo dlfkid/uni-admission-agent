@@ -46,6 +46,14 @@ _HTML_TITLE_RE = re.compile(r"<title[^>]*>(.*?)</title>", re.IGNORECASE | re.DOT
 _RECOVERY_MIN_RAW_LINKS = 20
 _RECOVERY_RETENTION_THRESHOLD = 0.30
 
+# CityU tuition sub-page enrichment: detail pages link to a separate fee page
+# at /sgs/files/fees/tpg/{CODE}/index.htm; we detect and fetch it automatically.
+_CITYU_DETAIL_PATH_RE = re.compile(r"/en/pg/programme/program-list/", re.IGNORECASE)
+_CITYU_TUITION_LINK_RE = re.compile(
+    r"\[Tuition Fee\s*\]\(\s*(https?://[^)]+/sgs/files/fees/tpg/[^)]+?)\s*\)",
+    re.IGNORECASE,
+)
+
 STAGE_ORDER = [
     IngestionStage.FETCH_RAW,
     IngestionStage.EXTRACT_STRUCTURED,
@@ -1888,6 +1896,52 @@ class IngestionPipeline:
             funnel_out["candidate_count"] = len(deduped)
         return deduped, text_map
 
+    async def _enrich_cityu_tuition(
+        self,
+        scraper: AdmissionScraper,
+        pages: List[CrawlPageResult],
+    ) -> List[CrawlPageResult]:
+        """Append CityU tuition fee page content to matching detail pages.
+
+        CityU detail pages contain a "Tuition Fee" link that points to a
+        separate sub-page at /sgs/files/fees/tpg/{CODE}/index.htm.  The
+        cleaner agent never follows that link on its own, so this method
+        detects it, fetches the fee page, and appends its markdown to the
+        detail page before the LLM extraction pass runs.
+        """
+        enriched: List[CrawlPageResult] = []
+        for page in pages:
+            try:
+                if "cityu.edu.hk" not in page.url.lower():
+                    enriched.append(page)
+                    continue
+                if not _CITYU_DETAIL_PATH_RE.search(page.url):
+                    enriched.append(page)
+                    continue
+                match = _CITYU_TUITION_LINK_RE.search(page.markdown or "")
+                if not match:
+                    enriched.append(page)
+                    continue
+                tuition_url = match.group(1)
+                logger.info("CityU: fetching tuition sub-page %s", tuition_url)
+                fee_pages = await scraper._crawl_urls([tuition_url])
+                if fee_pages and fee_pages[0].markdown:
+                    new_markdown = (
+                        page.markdown
+                        + "\n\n## Tuition Fee Detail\n"
+                        + fee_pages[0].markdown
+                    )
+                    page = page.model_copy(update={
+                        "markdown": new_markdown,
+                        "char_count": len(new_markdown),
+                    })
+            except Exception:
+                logger.warning(
+                    "CityU tuition enrichment failed for %s", page.url, exc_info=True
+                )
+            enriched.append(page)
+        return enriched
+
     async def _crawl_urls_with_failures(
         self,
         scraper: AdmissionScraper,
@@ -1933,6 +1987,7 @@ class IngestionPipeline:
 
             crawled = await scraper._crawl_urls([url])
             if crawled:
+                crawled = await self._enrich_cityu_tuition(scraper, crawled)
                 pages.extend(crawled)
                 _emit_progress("succeeded", idx, url)
             else:

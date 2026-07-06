@@ -25,6 +25,11 @@ REGISTRY: Dict[str, Strategy] = {
     "www.polyu.edu.hk": Strategy(
         FetchMode.CLIENT, ExtractKind.BLOB,
         paginate=PaginateMode.NONE),
+    # CityU TPG list: one page, table rows with /programme/program-list/ URLs.
+    # Tuition lives on a per-programme sub-page; detail crawl handles it.
+    "www.cityu.edu.hk": Strategy(
+        FetchMode.CLIENT, ExtractKind.CITYU_TABLE,
+        paginate=PaginateMode.NONE),
     # NUS serves its full catalogue from a guest Salesforce Apex endpoint in one
     # POST (searchProgrammes, empty filters) — fetchable server-side, no browser.
     # The classname carries an internal Salesforce ID that may change on a NUS

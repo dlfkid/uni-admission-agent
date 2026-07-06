@@ -25,6 +25,7 @@ class ExtractKind(str, Enum):
     TEXT_HEADING = "text_heading"
     JSON_API = "json_api"
     LLM = "llm"
+    CITYU_TABLE = "cityu_table"
 
 
 class PaginateMode(str, Enum):
