@@ -69,6 +69,7 @@ async def test_unmatched_discovery_falls_back_unchanged(run_new_job_spy, monkeyp
         "detail_pages_batch": None,
         "batch_index": None,
         "batch_total": None,
+        "supplement_url_re": None,
         "candidate_taxonomy_filter_enabled": False,
         "candidate_taxonomy_filter_threshold": 0.75,
         "candidate_taxonomy_filter_top_k": 30,
