@@ -153,3 +153,59 @@ class TestEvaluateExtraction:
         # Touching it shouldn't blow up.
         assert isinstance(verdict.signals, dict)
         assert verdict.passed is True
+
+
+class TestDegreeTypeMismatch:
+    """A resolved name whose degree type contradicts the URL slug's own
+    unambiguous degree marker indicates a mis-resolved name (e.g. name
+    resolution picked the wrong candidate). Caught here as a last-resort
+    safety net regardless of root cause upstream."""
+
+    def test_mismatched_degree_type_fails(self) -> None:
+        """MA URL but MPhil name — a real CUHK name-resolution failure."""
+        prog = _good_program()
+        prog["name_en"] = "MPhil in Chinese Language and Literature"
+        prog["source_url"] = (
+            "https://www.gs.cuhk.edu.hk/programmes/arts/ma-chinese-language-and-literature"
+        )
+        verdict = evaluate_extraction(prog)
+        assert verdict.passed is False
+        assert verdict.reason == QuarantineReason.DEGREE_TYPE_MISMATCH
+
+    def test_matching_degree_type_passes(self) -> None:
+        prog = _good_program()
+        prog["name_en"] = "MA in Chinese Language and Literature"
+        prog["source_url"] = (
+            "https://www.gs.cuhk.edu.hk/programmes/arts/ma-chinese-language-and-literature"
+        )
+        verdict = evaluate_extraction(prog)
+        assert verdict.passed is True
+
+    def test_combo_degree_slug_does_not_false_positive(self) -> None:
+        """mphil-phd- slugs must not conflict with either half of the name."""
+        prog = _good_program()
+        prog["name_en"] = "MPhil-PhD in Cultural Studies"
+        prog["source_url"] = (
+            "https://www.gs.cuhk.edu.hk/programmes/arts/mphil-phd-cultural-studies"
+        )
+        verdict = evaluate_extraction(prog)
+        assert verdict.passed is True
+
+    def test_missing_source_url_skips_check(self) -> None:
+        prog = _good_program()
+        prog["name_en"] = "MPhil in Chinese Language and Literature"
+        prog["source_url"] = None
+        verdict = evaluate_extraction(prog)
+        assert verdict.passed is True
+
+    def test_unrecognized_url_degree_token_skips_check(self) -> None:
+        """URL slugs without a recognized bare degree token (e.g. spelled-out
+        or compound like 'executive-mba') are left alone — fail-open by
+        design to avoid quarantining legitimate records."""
+        prog = _good_program()
+        prog["name_en"] = "Executive MBA"
+        prog["source_url"] = (
+            "https://www.gs.cuhk.edu.hk/programmes/business-administration/executive-mba"
+        )
+        verdict = evaluate_extraction(prog)
+        assert verdict.passed is True

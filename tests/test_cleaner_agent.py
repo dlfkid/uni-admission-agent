@@ -520,6 +520,32 @@ def test_merge_keeps_paraphrased_requirements() -> None:
     assert len(merged.requirements) == 2
 
 
+def test_merge_collapses_near_verbatim_paraphrase() -> None:
+    """A near-verbatim restatement (single word inserted/dropped) collapses to
+    one, keeping the more complete phrasing.
+
+    Regression test for CUHK MPhil-in-History extraction: the same clause was
+    extracted twice as "...crucial to research" and "...crucial to their
+    research" — differing by one word, which defeats exact-substring
+    containment. This is narrower than semantic dedup (option B, rejected in
+    test_merge_keeps_paraphrased_requirements above): it only fires on
+    near-identical sentences (>=0.82 similarity), not differently-worded
+    restatements of the same idea.
+    """
+    a = ParsedRequirement(
+        category="language",
+        requirement_text="Demonstrate proficient command of language(s) crucial to research.")
+    b = ParsedRequirement(
+        category="language",
+        requirement_text=(
+            "demonstrate proficient command of language(s) which is/are "
+            "crucial to their research"
+        ))
+    merged = _merge_parsed_data(ParsedProgramData(requirements=[a, b]), ParsedProgramData())
+    assert len(merged.requirements) == 1
+    assert merged.requirements[0].requirement_text == b.requirement_text
+
+
 # ── _reconcile_per_credit_tuition ───────────────────────────────────
 
 

@@ -7,6 +7,7 @@ from raw Excel rows or scraped content.
 
 import logging
 import re
+from difflib import SequenceMatcher
 from typing import Dict, List, Optional, Any
 
 from datetime import datetime
@@ -185,6 +186,7 @@ def _normalize_parsed_data(parsed: ParsedProgramData) -> ParsedProgramData:
 
     loose_texts = [_loose(getattr(r, "requirement_text", "")) for r in keyed]
     dedup_requirements: List[ParsedRequirement] = []
+    surviving_loose_texts: List[str] = []
     for i, req in enumerate(keyed):
         txt_i = loose_texts[i]
         # Drop if fully contained in a longer requirement (cross-category on purpose).
@@ -202,6 +204,37 @@ def _normalize_parsed_data(parsed: ParsedProgramData) -> ParsedProgramData:
                 getattr(req, "requirement_text", ""), container,
             )
             continue
+        # Near-duplicate paraphrase check (e.g. the same clause extracted twice
+        # with slightly different wording — "crucial to research" vs "crucial
+        # to their research"). Exact-substring containment above misses these
+        # because a single inserted/dropped word breaks it. Only merges clean
+        # 1:1 paraphrase pairs — deliberately NOT extended to detect a summary
+        # sentence that re-states several already-atomic items combined, since
+        # which side to drop there is ambiguous and a wrong guess would
+        # silently delete real content.
+        near_dup_idx = next(
+            (
+                j for j, kept_txt in enumerate(surviving_loose_texts)
+                if txt_i and kept_txt
+                and SequenceMatcher(None, txt_i, kept_txt).ratio() >= 0.82
+            ),
+            None,
+        )
+        if near_dup_idx is not None:
+            if len(txt_i) > len(surviving_loose_texts[near_dup_idx]):
+                logger.debug(
+                    "Replacing near-duplicate requirement with longer phrasing: %r -> %r",
+                    dedup_requirements[near_dup_idx].requirement_text, req.requirement_text,
+                )
+                dedup_requirements[near_dup_idx] = req
+                surviving_loose_texts[near_dup_idx] = txt_i
+            else:
+                logger.debug(
+                    "Dropping near-duplicate requirement (paraphrase of kept item): %r ~= %r",
+                    req.requirement_text, dedup_requirements[near_dup_idx].requirement_text,
+                )
+            continue
+        surviving_loose_texts.append(txt_i)
         dedup_requirements.append(req)
 
     return ParsedProgramData(
