@@ -1,0 +1,6 @@
+{
+  "university": "CUHK",
+  "expected_strategy": "server×inline_degree",
+  "expected_min_names": 200,
+  "notes": "Single-page programme filter; degree-prefix link text (MA in X, MPhil in Y). Auto-detected by classifier — no registry entry needed."
+}

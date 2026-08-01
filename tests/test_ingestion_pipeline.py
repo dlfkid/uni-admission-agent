@@ -753,6 +753,68 @@ def test_extract_structured_skips_unresolved_program_name(monkeypatch) -> None:
     assert result["unresolved_urls"][0]["reason"] == "llm_low_confidence"
 
 
+def test_extract_structured_regenerates_group_code_after_name_resolution(monkeypatch) -> None:
+    """program_group_code must match the FINAL resolved name, not the raw
+    pre-resolution name the page-level extractor guessed. Regression test
+    for a bug where a stale group_code (computed from a since-corrected raw
+    name) silently persisted, breaking cross-run catalog dedup."""
+    monkeypatch.setattr(
+        "src.services.ingestion_pipeline.LLMCleanerAgent",
+        MagicMock,
+    )
+    pipeline = IngestionPipeline(db_manager=MagicMock())
+    monkeypatch.setattr(
+        "src.services.ingestion_pipeline.resolve_program_name",
+        lambda **_kwargs: type(
+            "Resolution",
+            (),
+            {
+                "status": "resolved",
+                "name": "MA in Chinese Language and Literature",
+                "confidence": 0.98,
+                "source": "anchor",
+                "reason": "rule_high_confidence",
+                "top_candidates": [],
+            },
+        )(),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "src.services.ingestion_pipeline.extract_program_data_from_page",
+        lambda **_kwargs: (
+            {
+                "name_en": "Division of Chinese Language and Literature (MPhil)",
+                "program_group_code": "cuhk#divisionchineselanguageliteraturemphil",
+            },
+            None,
+        ),
+    )
+
+    result = pipeline._stage_extract_structured(
+        {"univ_slug": "cuhk", "year": 2026, "page_type_hint": "index", "selected_urls": ["https://x"]},
+        {
+            "raw_pages": [
+                {
+                    "url": "https://www.gs.cuhk.edu.hk/programmes/arts/ma-chinese-language-and-literature",
+                    "markdown": "# MA in Chinese Language and Literature",
+                    "char_count": 40,
+                    "links": [],
+                    "status_code": 200,
+                    "html": "<html></html>",
+                    "crawl_depth": 0,
+                    "from_browser": True,
+                    "selected_anchor_text": "MA in Chinese Language and Literature",
+                }
+            ]
+        },
+    )
+
+    assert result["extracted_count"] == 1
+    candidate = result["program_candidates"][0]
+    assert candidate["name_en"] == "MA in Chinese Language and Literature"
+    assert candidate["program_group_code"] == "cuhk#machineselanguageliterature"
+
+
 def test_persist_versioned_not_called_for_unresolved(monkeypatch) -> None:
     mock_db = MagicMock()
     pipeline = IngestionPipeline(db_manager=mock_db)

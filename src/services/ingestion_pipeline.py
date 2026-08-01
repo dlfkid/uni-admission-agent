@@ -1265,6 +1265,11 @@ class IngestionPipeline:
                         )
                         continue
                     program_data["name_en"] = resolution.name
+                    if univ_slug:
+                        program_data["program_group_code"] = generate_program_group_code(
+                            univ_slug,
+                            resolution.name,
+                        )
                 self._attach_taxonomy_trace(
                     program_data=program_data,
                     univ_slug=univ_slug,

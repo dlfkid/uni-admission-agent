@@ -12,14 +12,31 @@ main ``program`` table that downstream consumers query.
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Dict, Optional
+from urllib.parse import urlsplit
 
 from src.scrapers.helpers import is_noise_program_name
 
 
 MIN_NAME_LENGTH = 3
+
+# Degree-type sanity check: catches cases where name resolution picked the
+# wrong candidate (e.g. LLM hallucination) and produced a name whose degree
+# type contradicts the URL slug's own unambiguous degree marker. Only fires
+# on a clean single-token disagreement — combo slugs/names (e.g.
+# "mphil-phd-") are skipped to avoid false positives on legitimately dual
+# programmes.
+_URL_DEGREE_RE = re.compile(
+    r"(?:^|/)(ma|msc|mphil|phd|mba|llm|meng|march|mfin|mres|dphil|dba|edd|mssc|msocsc)-",
+    re.IGNORECASE,
+)
+_NAME_DEGREE_RE = re.compile(
+    r"^(MA|MSc|MPhil|PhD|MBA|LLM|MEng|MArch|MFin|MRes|DPhil|DBA|EdD|MSSc|MSocSc)\b",
+    re.IGNORECASE,
+)
 
 
 class QuarantineReason(str, Enum):
@@ -28,11 +45,23 @@ class QuarantineReason(str, Enum):
     NAME_TOO_SHORT = "name_too_short"
     NOISE_NAME = "noise_name"
     EMPTY_SHELL = "empty_shell"
+    DEGREE_TYPE_MISMATCH = "degree_type_mismatch"
     # Extraction failed before producing any data — used when the page
     # had no usable markdown or the cleaner returned None outright. These
     # paths used to fail silently with no DB trace.
     NO_MARKDOWN = "no_markdown"
     EXTRACTION_FAILED = "extraction_failed"
+
+
+def _degree_type_conflict(name: str, source_url: str) -> bool:
+    if not source_url:
+        return False
+    path = urlsplit(source_url).path
+    url_match = _URL_DEGREE_RE.search(path)
+    name_match = _NAME_DEGREE_RE.match(name)
+    if not url_match or not name_match:
+        return False
+    return url_match.group(1).lower() != name_match.group(1).lower()
 
 
 @dataclass(frozen=True)
@@ -71,6 +100,8 @@ def evaluate_extraction(program_data: Dict[str, Any]) -> QualityVerdict:
         return QualityVerdict(False, QuarantineReason.NAME_TOO_SHORT, signals)
     if is_noise_program_name(name):
         return QualityVerdict(False, QuarantineReason.NOISE_NAME, signals)
+    if _degree_type_conflict(name, str(program_data.get("source_url") or "")):
+        return QualityVerdict(False, QuarantineReason.DEGREE_TYPE_MISMATCH, signals)
 
     has_content = (
         signals["has_tuition"]
