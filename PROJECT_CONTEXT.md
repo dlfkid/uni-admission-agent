@@ -1,5 +1,11 @@
 # PROJECT CONTEXT: UniAdmission Agent
 
+> **Purpose of this document**: help a contributor quickly understand the
+> system's architecture and tech stack well enough to make a code change.
+> It intentionally does **not** cover installation, CLI usage, or
+> configuration — that's README.md's job (the user-facing manual). If you're
+> looking for "how do I run/use this", go there instead.
+
 ## 1. Project Goal
 Build a trusted, self-updating database of university admission requirements.
 
@@ -9,6 +15,7 @@ Build a trusted, self-updating database of university admission requirements.
 - Intelligent crawl depth with Heuristic/Regex scouting (optimized for speed/cost)
 - Rolling window sequential chunking for context preservation on large pages
 - Multi-provider LLM routing (Google Gemini, DeepSeek, OpenAI, VolcEngine)
+- **Deterministic crawl-strategy tier** (`src/services/crawl_strategy/`) — classifies an index page's layout, selects the matching extractor, and dispatches fetch via a ladder (server → client browser → API), skipping the LLM entirely for known/classifiable layouts
 - **Phase 2 staged ingestion pipeline** with persisted job/task state and resume-from-stage
 - **Phase 3 golden-sample quality system** with offline scoring + CI regression gate
 - **Taxonomy-guided program-name resolution** (signal matching + conditional hint injection + high-confidence override)
@@ -37,7 +44,7 @@ Build a trusted, self-updating database of university admission requirements.
 | **Crawling** | `crawl4ai` (v0.4+) + `playwright` + `playwright-stealth` |
 | **LLM** | Multi-provider routing: Gemini, DeepSeek, OpenAI, VolcEngine (豆包) |
 | **Data Validation** | `pydantic` (v2) with strict schema enforcement |
-| **Database** | `sqlmodel` (PostgreSQL default, SQLite fallback) |
+| **Database** | `sqlmodel` (**SQLite default**, PostgreSQL opt-in via `DATABASE_URL`) |
 | **API / Control** | `fastapi`, `uvicorn`, `mcp` (Model Context Protocol) |
 | **Agent Runtime** | LLM-driven loop (s01–s12) + `pydantic` typed contracts + runtime factory (`legacy` / `pydanticai`) |
 | **Client Bridge** | FastAPI WebSocket + `websockets` runtime client |
@@ -53,13 +60,33 @@ Build a trusted, self-updating database of university admission requirements.
 
 ### 3.1 Intelligent Crawling Engine (Hybrid)
 
-**Strategy**: Performance-optimized hybrid approach.
-1.  **Regex / Heuristic**: Used for high-volume tasks (link extraction, page type detection) to save tokens and latency.
-2.  **LLM**: Reserved for complex tasks (content cleaning, structured data extraction).
+**Strategy**: Three dispatch tiers, tried in priority order (`_execute_agent_job`):
+
+0.  **Deterministic crawl-strategy tier** (`src/services/crawl_strategy/`) — for
+    known/classifiable index-page layouts. `classifier.py` scores an index
+    page's markdown against several extractors (`extractors.py`:
+    heading-link, inline-degree, merged-columns, blob, text-heading,
+    cityu-table) and — above a confidence threshold — picks one
+    deterministically, skipping the LLM entirely for index-page link
+    discovery. `registry.py` pins proven fetch-mode + extractor combos per
+    domain (`strategy_direct` mode); unknown domains fall through to
+    automatic classification, and successful LLM-driven crawls get persisted
+    into `learned_cache.py`'s `strategy_cache.json` for reuse
+    (`learned_cache` mode, skips the agent loop on a cache hit).
+    `fetch_ladder.py` / `fetch_adapters.py` dispatch the actual fetch via a
+    ladder: server fetch → client browser → API. `discovery.py` +
+    `orchestrator.py` wire all of this into `/agent/run`.
+1.  **Regex / Heuristic** (fallback: `agent_loop` mode, unknown domains):
+    used for high-volume tasks (link extraction, page type detection) to
+    save tokens and latency.
+2.  **LLM**: reserved for complex tasks (content cleaning, structured data
+    extraction) and as the last-resort orchestrator for domains the
+    deterministic tier can't classify.
 
 ```
 L1: Index Page (course list)
-  ↓ Regex Link Extraction → concurrent chunks
+  ↓ crawl_strategy classifier (known layout) → deterministic extractor
+  ↓ else: Regex Link Extraction → concurrent chunks
 L2: Detail Pages (individual programs)
   ↓ LLM Clean & Parse (Rolling Window)
   ↓ parse failure + --continue > 0 → Scout
@@ -102,7 +129,7 @@ flowchart LR
     C -->|Detail| E[LLM Router]
     E -->|Clean & Parse| F[Pydantic Model]
     F -->|Validation| G[SQLModel ORM]
-    G -->|Upsert| H[PostgreSQL]
+    G -->|Upsert| H[SQLite / PostgreSQL]
 ```
 
 ### 3.4 Phase 2 Execution Pipeline (Decoupled + Resumable)
@@ -127,7 +154,11 @@ The project includes a seed quality framework for offline regression checks:
 - scoring runner: `scripts/score_golden_samples.py`
 - CI gate: `.github/workflows/ci.yml` fails when quality threshold is not met
 
-Current seed set includes 4 benchmark universities (UCL, Manchester, Leeds, PolyU).
+Current seed set includes 6 benchmark universities (`golden_samples/manifest.json`):
+UCL, Manchester, Leeds, PolyU, CityU, CUHK — each added via a "battle-test"
+round (real crawl → find bugs → fix → lock in a golden-sample regression
+fixture). See README.md's crawl-strategy registry table for per-domain fetch
+mode / extractor kind.
 
 ### 3.6 Taxonomy Runtime Matching
 
@@ -301,6 +332,9 @@ uni-admission-agent/
 │   ├── models/             # DB & Pydantic schemas
 │   ├── scrapers/           # Crawling logic (Engine, Browser)
 │   ├── services/           # Business logic (Crawler Service)
+│   │   └── crawl_strategy/ # Deterministic tier: classifier, registry, extractors,
+│   │                       #   discovery, orchestrator, fetch_ladder/fetch_adapters,
+│   │                       #   learned_cache
 │   ├── storage/            # DB Manager, Import/Export
 │   └── utils/              # Text/PDF processors
 ├── frontend/               # Vite/TS source for Chrome extension + Web UI
@@ -316,211 +350,20 @@ uni-admission-agent/
 
 ---
 
-## 6. CLI Usage
+## 6. Where to Go Next
 
-All commands are available via `uv run src/cmd/cli.py` or the `adm-agent` executable.
-
-```bash
-# Start Server (API + MCP)
-uv run src/cmd/cli.py serve --port 8910
-
-# Crawl
-uv run src/cmd/cli.py crawl --name hku --year 2026 --url <URL>
-
-# Import/Export
-uv run src/cmd/cli.py import --file data.xlsx ...
-uv run src/cmd/cli.py export --output data.xlsx ...
-
-# Check Status/Env
-uv run src/cmd/cli.py status
-uv run src/cmd/cli.py check
-uv run src/cmd/cli.py db-version
-uv run src/cmd/cli.py db-migrate --yes
-uv run src/cmd/cli.py db-reinit --yes  # destructive reset
-
-# Phase 2 operations
-uv run src/cmd/cli.py ingestion-jobs --limit 20
-uv run src/cmd/cli.py ingestion-resume --job <job_uid> --stage validate_rules
-
-# Phase 3 operations
-uv run src/cmd/cli.py golden-collect --overwrite
-uv run src/cmd/cli.py quality-score --threshold 0.60
-uv run src/cmd/cli.py taxonomy-export --output golden_samples/program_names/cleaned_programs_names.json --include-learned --min-confidence 0.90
-
-# Interactive agent chat via server-side LLM
-uv run src/cmd/client_cli.py chat
-```
-
-Default backend upgrade delivery remains `upgrade` followed by `db-migrate`.
-`db-reinit` is a manual maintenance operation and is not part of the automatic
-upgrade path.
-
----
-
-## 7. Configuration
-
-Managed via `.env` (loaded at runtime). Use the interactive wizard for easy setup:
-
-```bash
-# Interactive LLM configuration wizard
-uv run src/cmd/cli.py llm-config
-```
-
-Manual `.env` configuration:
-
-```bash
-# LLM Credentials
-GEMINI_API_KEY=...
-GEMINI_MODEL=gemini-2.0-flash-exp
-
-DEEPSEEK_API_KEY=...
-DEEPSEEK_BASE_URL=https://api.deepseek.com
-DEEPSEEK_MODEL_NAME=deepseek-chat
-
-VOLC_API_KEY=...
-VOLC_MODEL_ID=...
-VOLC_BASE_URL=https://ark.cn-beijing.volces.com/api/v3
-
-CUSTOM_LLM_BASE_URL=https://api.openai.com/v1
-CUSTOM_LLM_API_KEY=...
-CUSTOM_LLM_MODEL_NAME=gpt-4o-mini
-
-# Provider Priority (comma-separated, highest first)
-# Supported: deepseek, gemini, volcengine, custom
-LLM_PRIORITY_LIST=deepseek,gemini,volcengine,custom
-
-# Database
-DATABASE_URL=postgresql+psycopg2://user:pass@localhost:5432/uni_admission
-```
-
-**Chrome Extension Configuration:**
-- Open extension popup → Click ⚙️ Config button
-- Database URL: Set PostgreSQL connection string
-- LLM Priority: Drag providers to reorder (including custom)
-- Custom provider fields automatically expand in the list
-
----
-
-## 8. Recent Updates & Bug Fixes
-
-### 8.0 Optimization Roadmap Status (2026-03-19)
-
-- **Phase 1**: complete (data layer versioning + evidence chain)
-- **Phase 2**: complete (staged execution pipeline + resume + continue-depth unified path)
-- **Phase 3**: complete for seed quality gates + taxonomy-guided name accuracy + PolyU benchmark coverage
-- **Agent Runtime (s01–s12)**: full capability stack — LLM-driven loop, task DAG, subagents, teams, protocols, background tasks, context compression, worktree isolation
-
-### 8.1 Custom LLM Provider Integration (2026-02-28)
-
-**Feature**: Support for any OpenAI-compatible API endpoint as a custom LLM provider.
-- Added `CustomLLMProvider` class implementing the `LLMProvider` interface
-- Registered `custom` in `PROVIDER_REGISTRY` alongside deepseek/gemini/volcengine
-- Custom can be positioned anywhere in priority list via drag-and-drop in Chrome extension
-- Configuration fields: `CUSTOM_LLM_BASE_URL`, `CUSTOM_LLM_API_KEY`, `CUSTOM_LLM_MODEL_NAME`
-
-**CLI Wizard** (`uv run src/cmd/cli.py llm-config`):
-- Interactive prompt to select provider (DeepSeek/Gemini/Volcengine/Custom)
-- Collects provider-specific parameters
-- Saves to `.env` and automatically sets new provider as highest priority
-- Supports Ollama, OpenRouter, or any OpenAI-compatible local/remote endpoint
-
-**Architecture Changes**:
-- `custom` is now a first-class provider in `RouterAgent` priority routing
-- Frontend unified: custom provider appears in llm-list alongside built-in providers
-- Backend `.env` parsing handles `CUSTOM_LLM_*` keys via `PROVIDER_PREFIXES`
-
-### 8.2 Anti-Crawling Resilience (2026-02-27)
-
-**Problem**: Cookie consent banners caused navigation interference during crawling.
-- `simulate_user=True` in crawl4ai triggered clicks on cookie "Options" buttons
-- Browser navigated away from target pages to privacy policies
-- Result: 0 programs extracted from valid detail pages
-
-**Solution** (`src/scrapers/engine.py`):
-- Disabled `simulate_user` to prevent unintended interactions
-- Enabled `remove_overlay_elements=True` to auto-remove cookie banners
-- Injected custom JS to dismiss consent dialogs by clicking "Accept/OK" buttons
-- Added `delay_before_return_html=2.0` to wait for page stabilization
-
-### 8.2 LLM Response Validation (2026-02-27)
-
-**Problem**: LLM occasionally returned `null` for list fields, causing Pydantic validation errors.
-- `ParsedProgramData.study_options` and `deadlines` expected `List[...]`
-- LLM returned `null` instead of `[]` when no data found
-- Validation failed: `Input should be a valid array [type=list_type]`
-
-**Solution** (`src/agents/cleaner_agent.py`):
-- Added `@field_validator` for `study_options` and `deadlines`
-- Automatically coerces `None` → `[]` during validation
-- Prevents downstream crashes while maintaining type safety
-
-### 8.3 Database Preview UI (2026-02-27)
-
-**New Feature**: Chrome Extension now includes a database preview modal.
-
-**API Enhancements**:
-- `ProgramResponse` enriched with `study_options`, `deadlines`, `source_url`
-- `GET /programs` returns complete program details for preview
-- Supports filtering by `univ_slug` and `year` parameters
-
-**Extension Features**:
-- Preview button (👁) in header beside Export
-- Filter panel: University slug (autocomplete) + Year + Search button
-- Program count badge displays total results
-- Card-based list with:
-  - Program name + group code
-  - Faculty, tuition, study mode/duration tags
-  - Collapsible deadline list (round, date, description)
-  - Clickable source URL link
-
-# Database
-DATABASE_URL=postgresql+psycopg2://user:pass@localhost:5432/uni_admission
-```
-
----
-
-## 8. Recent Updates & Bug Fixes
-
-### 8.1 Anti-Crawling Resilience (2026-02-27)
-
-**Problem**: Cookie consent banners caused navigation interference during crawling.
-- `simulate_user=True` in crawl4ai triggered clicks on cookie "Options" buttons
-- Browser navigated away from target pages to privacy policies
-- Result: 0 programs extracted from valid detail pages
-
-**Solution** (`src/scrapers/engine.py`):
-- Disabled `simulate_user` to prevent unintended interactions
-- Enabled `remove_overlay_elements=True` to auto-remove cookie banners
-- Injected custom JS to dismiss consent dialogs by clicking "Accept/OK" buttons
-- Added `delay_before_return_html=2.0` to wait for page stabilization
-
-### 8.2 LLM Response Validation (2026-02-27)
-
-**Problem**: LLM occasionally returned `null` for list fields, causing Pydantic validation errors.
-- `ParsedProgramData.study_options` and `deadlines` expected `List[...]`
-- LLM returned `null` instead of `[]` when no data found
-- Validation failed: `Input should be a valid array [type=list_type]`
-
-**Solution** (`src/agents/cleaner_agent.py`):
-- Added `@field_validator` for `study_options` and `deadlines`
-- Automatically coerces `None` → `[]` during validation
-- Prevents downstream crashes while maintaining type safety
-
-### 8.3 Database Preview UI (2026-02-27)
-
-**New Feature**: Chrome Extension now includes a database preview modal.
-
-**API Enhancements**:
-- `ProgramResponse` enriched with `study_options`, `deadlines`, `source_url`
-- `GET /programs` returns complete program details for preview
-- Supports filtering by `univ_slug` and `year` parameters
-
-**Extension Features**:
-- Preview button (👁) in header beside Export
-- Filter panel: University slug (autocomplete) + Year + Search button
-- Program count badge displays total results
-- Card-based list with:
-  - Program name + group code
-  - Faculty, tuition, study mode/duration tags
-  - Collapsible deadline list (round, date, description)
-  - Clickable source URL link
+- **Running / installing / configuring the project** (CLI commands, `.env`
+  setup, Chrome extension config, database backends): README.md is the
+  single source of truth — don't duplicate it here.
+- **Developer setup, tests, git hooks, CI**: README.md § "Developer Setup" /
+  "Testing & Coverage" / "CI/CD".
+- **Making a real crawl work for a new university** ("battle-test" rounds —
+  the workflow used for the UCL/Manchester/Leeds/PolyU/CityU/CUHK golden
+  samples in §3.5): not yet formally written up anywhere; reconstruct from
+  `git log` on `golden_samples/manifest.json` and past `feat/battle-test-*`
+  branches until this gets its own doc.
+- **Historical changelog**: not tracked as a maintained document — use
+  `git log` / merged PR history instead. (A prior `change_log.md` and this
+  file's own "Recent Updates" section both drifted stale and were removed on
+  2026-08-07 for exactly that reason — don't reintroduce a hand-maintained
+  changelog without a plan to keep it in sync.)
