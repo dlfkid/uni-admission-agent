@@ -90,6 +90,39 @@ class TestQuarantineRepo:
         assert rows[0].extracted_name == "Second Attempt Name"
         assert rows[0].quarantine_reason == QuarantineReason.NOISE_NAME.value
 
+    def test_record_falls_back_to_extra_metadata_source_url(self, session: Session) -> None:
+        """page_processor's generic extraction path only ever sets source_url
+        under extra_metadata, never as a top-level key. Without the fallback,
+        every such rejection resolves to source_url="" and distinct pages
+        collapse into a single overwritten row — this locks in the fix."""
+        repo = QuarantineRepo(session)
+        repo.record(
+            university_slug="eduhk",
+            program_data={
+                **_sample_program(name="MACSLE"),
+                "source_url": "",
+                "extra_metadata": {"source_url": "https://eduhk.hk/fhm/macsle"},
+            },
+            reason=QuarantineReason.EMPTY_SHELL,
+            signals={},
+        )
+        repo.record(
+            university_slug="eduhk",
+            program_data={
+                **_sample_program(name="MADHCP"),
+                "source_url": "",
+                "extra_metadata": {"source_url": "https://eduhk.hk/fhm/madhcp"},
+            },
+            reason=QuarantineReason.EMPTY_SHELL,
+            signals={},
+        )
+        rows = repo.list_for(university_slug="eduhk")
+        assert {r.extracted_name for r in rows} == {"MACSLE", "MADHCP"}
+        assert {r.source_url for r in rows} == {
+            "https://eduhk.hk/fhm/macsle",
+            "https://eduhk.hk/fhm/madhcp",
+        }
+
     def test_list_by_university_year(self, session: Session) -> None:
         repo = QuarantineRepo(session)
         repo.record(

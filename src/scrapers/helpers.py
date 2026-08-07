@@ -56,6 +56,49 @@ def save_html_debug(export_path: str, url: str, html: str) -> None:
     logger.info("Saved HTML for debugging: %s", filepath)
 
 
+def strip_html_boilerplate(html: str) -> str:
+    """Remove nav/header/footer HTML elements to reduce page size for LLM.
+
+    Targets <nav>, <header>, <footer> tags and common id/class patterns.
+    This matters when raw HTML is used as an LLM-extraction fallback for
+    pages where Markdown conversion looks "poor" relative to the raw HTML
+    size: a large raw-HTML byte count is often dominated by scripts, nav
+    menus, and other non-content boilerplate rather than a genuine
+    conversion failure, so feeding the LLM the un-stripped raw HTML causes
+    it to be split into far more chunks than the actual content needs, with
+    most chunks containing no extractable data.
+    """
+    if not html:
+        return html
+
+    # Remove <script> and <style> blocks entirely — these carry no
+    # extractable admission content but can dwarf the actual content size
+    # on script-heavy pages (e.g. WordPress sites with plugin bundles,
+    # analytics, emoji polyfills), which is what was actually inflating the
+    # "poor markdown ratio" fallback's raw-HTML input on such pages.
+    html = re.sub(
+        r"<(?:script|style)\b.*?</(?:script|style)>",
+        "", html, flags=re.DOTALL | re.IGNORECASE,
+    )
+    # Remove HTML comments
+    html = re.sub(r"<!--.*?-->", "", html, flags=re.DOTALL)
+    # Remove <nav>, <header>, <footer> blocks entirely
+    html = re.sub(
+        r"<(?:nav|header|footer)[\s>].*?</(?:nav|header|footer)>",
+        "", html, flags=re.DOTALL | re.IGNORECASE,
+    )
+    # Remove elements with navigation-related class/id
+    html = re.sub(
+        r'<(?:div|section|aside|ul)[^>]*(?:class|id)\s*=\s*"[^"]*'
+        r'(?:nav|breadcrumb|sidebar|footer|cookie|skip-link)[^"]*"[^>]*>.*?'
+        r'</(?:div|section|aside|ul)>',
+        "", html, flags=re.DOTALL | re.IGNORECASE,
+    )
+    # Collapse whitespace
+    html = re.sub(r"\n{3,}", "\n\n", html)
+    return html
+
+
 def split_markdown_chunks(
     markdown: str, max_chars: int, overlap_ratio: float = 0.20,
 ) -> List[str]:

@@ -29,7 +29,18 @@ class QuarantineRepo:
         signals: Dict[str, Any],
     ) -> ProgramQuarantine:
         """Upsert a quarantine row keyed by (university_slug, source_url)."""
+        # Mirrors db_manager.upsert_program's fallback: page_processor's
+        # generic extraction path only ever sets source_url under
+        # extra_metadata, never as a top-level key. Without this fallback,
+        # every such rejection resolves to source_url="" and the upsert-by
+        # -source_url identity above collapses ALL of them into one row —
+        # each new empty-shell/etc. rejection silently overwrites the last,
+        # hiding every prior one with no error or log signal.
         source_url = str(program_data.get("source_url") or "").strip()
+        if not source_url:
+            extra_metadata = program_data.get("extra_metadata")
+            if isinstance(extra_metadata, dict):
+                source_url = str(extra_metadata.get("source_url") or "").strip()
         existing = self._session.exec(
             select(ProgramQuarantine)
             .where(ProgramQuarantine.university_slug == university_slug)

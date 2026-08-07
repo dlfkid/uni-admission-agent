@@ -35,6 +35,17 @@ _DETAIL_DEGREE_HEADING_RE = re.compile(
     re.IGNORECASE,
 )
 _DETAIL_COURSE_LIST_ID_RE = re.compile(r"/courses?/list/\d+/", re.IGNORECASE)
+# Older PHP-style CMSes identify a single programme/course by a numeric query
+# param rather than a slug path (e.g. ".../programmes.php?id=9859"). Matched
+# against the query string, not the path — urlparse splits them apart.
+_DETAIL_QUERY_ID_RE = re.compile(
+    r"[?&](?:id|course_?id|programme?_?id)=\d+\b", re.IGNORECASE)
+# A path segment literally named "index" (index.html/.php/.aspx, or a bare
+# trailing "/index") is a near-universal listing-page URL convention across
+# CMSes, independent of the page's actual wording — catches sites (e.g.
+# EdUHK) whose index page doesn't use any UK-course-portal-style phrasing
+# that _INDEX_HINT_RE looks for, so the URL is the only structural signal.
+_INDEX_PATH_SEGMENT_RE = re.compile(r"/index(?:\.(?:html?|php|aspx?))?/?$", re.IGNORECASE)
 
 
 @dataclass
@@ -139,16 +150,26 @@ def _score_rule_signals(url: str, markdown: str, html: str, link_count: int) -> 
         reasons.append("rule:low_link_density")
 
     path = ""
+    query = ""
     try:
-        path = urlparse(str(url or "")).path.lower()
+        parsed_url = urlparse(str(url or ""))
+        path = parsed_url.path.lower()
+        query = parsed_url.query.lower()
     except Exception:
         path = ""
+        query = ""
     if _DETAIL_COURSE_LIST_ID_RE.search(path):
         detail_score += 0.50
         reasons.append("rule:detail_course_id_url_signal")
+    if _DETAIL_QUERY_ID_RE.search("?" + query):
+        detail_score += 0.35
+        reasons.append("rule:detail_query_id_signal")
     if "course-search" in path or "find-your-programmes" in path or path.rstrip("/").endswith("/courses/list"):
         index_score += 0.3
         reasons.append("rule:index_url_signal")
+    if _INDEX_PATH_SEGMENT_RE.search(path):
+        index_score += 0.3
+        reasons.append("rule:index_path_segment_signal")
     if _DETAIL_URL_RE.search(path):
         detail_score += 0.35
         reasons.append("rule:detail_url_signal")

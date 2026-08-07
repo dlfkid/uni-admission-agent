@@ -14,7 +14,11 @@ from typing import Dict, List, Optional, Tuple, Any
 from src.agents.cleaner_agent import LLMCleanerAgent, ParsedProgramData
 from src.agents.factory import RouterAgent
 from src.models.scraper_models import CrawlPageResult
-from src.scrapers.helpers import extract_program_name, is_noise_program_name
+from src.scrapers.helpers import (
+    extract_program_name,
+    is_noise_program_name,
+    strip_html_boilerplate,
+)
 from src.scrapers.name_critique import (
     _name_looks_suspect,
     refine_name_with_critique,
@@ -222,11 +226,19 @@ def extract_program_data_from_page(
         markdown_length = len(page.markdown)
         html_length = len(page.html)
         if markdown_length < html_length * 0.05:
+            # A large raw-HTML byte count is often dominated by scripts, nav
+            # menus, and other boilerplate rather than a genuine Markdown
+            # conversion failure. Strip that boilerplate before handing the
+            # fallback content to the LLM, otherwise pages with heavy raw-HTML
+            # bloat get split into far more chunks than the real content
+            # needs, and most chunks contain nothing extractable.
+            stripped_html = strip_html_boilerplate(page.html)
             logger.warning(
-                "Markdown conversion poor (MD: %d, HTML: %d). Using HTML for LLM extraction.",
-                markdown_length, html_length
+                "Markdown conversion poor (MD: %d, HTML: %d, stripped HTML: %d). "
+                "Using stripped HTML for LLM extraction.",
+                markdown_length, html_length, len(stripped_html)
             )
-            content_for_llm = page.html
+            content_for_llm = stripped_html
             content_type = "html"
 
     try:

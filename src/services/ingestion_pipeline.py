@@ -1530,6 +1530,18 @@ class IngestionPipeline:
                     }
                 )
             except Exception as exc:
+                # Without this, a persist failure for one item leaves zero
+                # trace in the log — only visible later by diffing the
+                # candidate list against what actually landed in the DB.
+                # Full traceback, not just str(exc): this except spans
+                # upsert_program, auto-graduate quarantine clearing, and
+                # taxonomy-trace extraction, so the failure could originate
+                # in any of them.
+                logger.exception(
+                    "persist_versioned failed for %s (%s)",
+                    item.get("name_en") or "<no name>",
+                    item.get("source_url") or "<no source_url>",
+                )
                 failed_records.append(
                     {
                         "name_en": str(item.get("name_en") or ""),
