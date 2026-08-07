@@ -51,10 +51,23 @@ _NOISE_LABELS = {"Programme Type", "Area of Interest", "Mode of Study", "Intake 
 
 
 def test_nus_golden_fixture_text_heading():
-    """extract_text_heading on the NUS render fixture yields exactly 10 programs."""
+    """extract_text_heading on the NUS render fixture yields exactly 10 programs.
+
+    Each "Learn More" link's label wraps two decorative arrow icons in nested
+    ``![Arrow](...)`` image links (Salesforce Lightning markup), e.g.:
+    ``[Learn More![Arrow](icon1)![Arrow](icon2)](https://cde.nus.edu.sg/...)``.
+    A link-label regex that cannot handle one level of nested "[...]" breaks
+    on the first icon's "]" and never reaches the real outer target, so it
+    used to see nothing here at all. With that fixed, the real "Learn More"
+    destination is captured and passed through the existing path filter,
+    which only keeps URLs containing "programme"/"course" in their path
+    (several genuine department pages here happen not to, e.g.
+    ".../research-degrees/", so those legitimately stay None).
+    """
     md = _NUS_FIXTURE.read_text(encoding="utf-8")
     items = get_extractor(ExtractKind.TEXT_HEADING)(md, "https://study.nus.edu.sg/programme")
     names = [i.name_en for i in items]
+    by_name = {i.name_en: i.detail_url for i in items}
 
     assert len(items) == 10, f"Expected 10 items, got {len(items)}: {names}"
 
@@ -65,11 +78,25 @@ def test_nus_golden_fixture_text_heading():
     for label in _NOISE_LABELS:
         assert label not in names, f"Noise label {label!r} leaked into results"
 
-    for item in items:
-        assert item.detail_url is None, (
-            f"Expected detail_url=None for NUS (asset Learn More), "
-            f"got {item.detail_url!r} for {item.name_en!r}"
-        )
+    assert by_name["Doctor of Engineering (Biomedical Engineering)"] == (
+        "https://cde.nus.edu.sg/bme/graduate-research-programmes/"
+    )
+    assert by_name["Doctor of Medicine (MD)"] == (
+        "https://www.duke-nus.edu.sg/education/our-programmes/md-programme"
+    )
+    assert by_name["Doctor of Nursing Practice"] == (
+        "https://medicine.nus.edu.sg/nursing/education-programmes/postgraduate/"
+        "doctorate/doctor-of-nursing-practice-dnp/"
+    )
+    # Genuine "Learn More" destinations whose path lacks "programme"/"course"
+    # are correctly filtered out by the existing path check, not silently
+    # replaced by the decorative arrow-icon asset URLs.
+    assert by_name["Doctor of Engineering (Built Environment)"] is None
+    for name, url in by_name.items():
+        if url is not None:
+            assert "org-asset" not in url and "/resource/" not in url, (
+                f"Decorative asset URL leaked as detail_url for {name!r}: {url!r}"
+            )
 
 
 def test_inline_degree_extracts_cuhk_prefix_style():

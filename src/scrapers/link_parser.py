@@ -75,6 +75,13 @@ _DETAIL_URL_SIGNAL_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
+# Link label body: allows exactly one level of nested "[...]" inside the
+# label (e.g. a decorative "![Arrow](icon.png)" image nested inside
+# "[Learn More![Arrow](icon.png)](real-detail-url)", or a bracketed degree
+# abbreviation like "Master of Management [MM]"). A plain "[^\]]+" stops at
+# the first "]" it sees and silently drops the whole link.
+_LINK_LABEL = r"(?:[^\[\]]|\[[^\[\]]*\])*"
+
 
 def _course_link_score(url: str, text: str, base_url: str) -> int:
     """Score how likely a link points to a course detail page."""
@@ -168,7 +175,7 @@ def extract_links(markdown: str, base_url: str) -> List[str]:
     logger.info("Extracting links via Regex (heuristic)...")
     
     # Regex to find markdown links: [text](href)
-    md_link_pattern = re.compile(r"\[.*?\]\((.*?)\)")
+    md_link_pattern = re.compile(rf"\[{_LINK_LABEL}\]\((.*?)\)")
     # Regex to find raw http(s) links
     raw_url_pattern = re.compile(r"(https?://[^\s\)]+)")
 
@@ -225,7 +232,7 @@ def extract_links_with_text(
     Returns a deduplicated list of ``(absolute_url, anchor_text)`` tuples,
     applying the same basic filters as :func:`extract_links`.
     """
-    md_link_pattern = re.compile(r"\[([^\]]*?)\]\(([^)]+?)\)")
+    md_link_pattern = re.compile(rf"\[({_LINK_LABEL})\]\(([^)]+?)\)")
 
     seen: set[str] = set()
     pairs: List[Tuple[str, str]] = []

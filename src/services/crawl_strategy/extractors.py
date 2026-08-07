@@ -9,8 +9,12 @@ from src.services.crawl_strategy.types import ExtractItem, ExtractKind
 
 Extractor = Callable[[str, str], List[ExtractItem]]
 
-_HEADING_LINK_RE = re.compile(r"^\s{0,3}#{1,4}\s+\[([^\]]+)\]\(\s*([^)\s]+)", re.MULTILINE)
-_ANY_LINK_RE = re.compile(r"\[([^\]]+)\]\(\s*([^)\s]+)")
+# Link label body: allows exactly one level of nested "[...]" inside the
+# label (e.g. "Master of Management [MM]"), which a plain "[^\]]+" cannot
+# match because it stops at the first "]" it sees.
+_LINK_LABEL = r"(?:[^\[\]]|\[[^\[\]]*\])*"
+_HEADING_LINK_RE = re.compile(rf"^\s{{0,3}}#{{1,4}}\s+\[({_LINK_LABEL})\]\(\s*([^)\s]+)", re.MULTILINE)
+_ANY_LINK_RE = re.compile(rf"\[({_LINK_LABEL})\]\(\s*([^)\s]+)")
 _DEGREE_SUFFIX_RE = re.compile(
     r"\b(?:BA|BSc|BASc|BEng|LLB|MArch|MBA|MChem|MComp|MEng|MMath|MPhil|MRes|"
     r"MSci|MSc|MA|LLM|PhD|DPhil|PGDip|PGCert|FdA|FdSc)\b\s*(?:\([^)]*\))?\s*$")
@@ -41,7 +45,12 @@ _DETAIL_URL_EXCLUDE_RE = re.compile(r"(?:resource|org-asset)", re.IGNORECASE)
 
 
 def _clean(text: str) -> str:
-    name = re.sub(r"\s+", " ", str(text or "")).strip()
+    # Strip markdown emphasis markers (e.g. "**Master of Management [MM]**")
+    # and trailing anchor-link "#" glyphs that some sites render inline with
+    # the label, before collapsing whitespace.
+    name = re.sub(r"\*+", "", str(text or ""))
+    name = re.sub(r"\s+", " ", name).strip()
+    name = re.sub(r"\s*#\s*$", "", name).strip()
     return _DURATION_SUFFIX_RE.sub("", name).strip()
 
 
