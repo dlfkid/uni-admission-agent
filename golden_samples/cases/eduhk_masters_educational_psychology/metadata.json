@@ -1,0 +1,31 @@
+{
+  "case_id": "eduhk_masters_educational_psychology",
+  "name": "EdUHK",
+  "university": "EdUHK",
+  "index_url": "https://www.eduhk.hk/acadprog/postgrad/index.html",
+  "detail_url": "https://www.eduhk.hk/fehd/en/programmes.php?id=9859",
+  "fetched_at": "2026-08-07T03:29:23.6Z",
+  "expected_strategy": "server×inline_degree",
+  "expected_min_names": 48,
+  "notes": "Single-page postgraduate index; degree-prefix link text (Master of X [ABBR], Doctor of Y), same shape as CUHK's inline_degree case. Auto-detected by classifier (confident=True) — no registry entry needed. Real-world crawl (battle-test round 3, 2026-08-07) uncovered and fixed two independent nested-bracket link-label regex bugs (extractors.py + link_parser.py) that were dropping labels like \"Master of Management [MM]\" mid-parse, plus an HTML-fallback chunking bug (script/style boilerplate inflating raw-HTML fallback content) and a quarantine dedup bug (empty_shell rejections silently overwriting each other when source_url only lived under extra_metadata). Full postgraduate catalogue crawl: 56 candidates -> 45 imported, 4 correctly quarantined as extraction_failed/empty_shell (three are genuinely dead/redirected links on EdUHK's own index page, unrelated to this pipeline). This detail page (Master of Social Sciences in Educational Psychology) was chosen as the representative case for its full field coverage: tuition, one deadline, one study option, and 15 requirements including language-test thresholds.",
+  "pages": {
+    "index": {
+      "status": "ok",
+      "status_code": 200,
+      "url": "https://www.eduhk.hk/acadprog/postgrad/index.html",
+      "html_chars": 138768,
+      "markdown_chars": 20429,
+      "html_path": "golden_samples/cases/eduhk_masters_educational_psychology/index.html",
+      "markdown_path": "golden_samples/cases/eduhk_masters_educational_psychology/index.md"
+    },
+    "detail": {
+      "status": "ok",
+      "status_code": 200,
+      "url": "https://www.eduhk.hk/fehd/en/programmes.php?id=9859",
+      "html_chars": 88032,
+      "markdown_chars": 25024,
+      "html_path": "golden_samples/cases/eduhk_masters_educational_psychology/detail.html",
+      "markdown_path": "golden_samples/cases/eduhk_masters_educational_psychology/detail.md"
+    }
+  }
+}

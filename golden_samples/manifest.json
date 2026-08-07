@@ -36,6 +36,12 @@
       "name": "CUHK",
       "index_url": "https://www.gs.cuhk.edu.hk/programme-filter?programme_type=All&study_mode=All&keys=",
       "detail_url": "https://www.gs.cuhk.edu.hk/programmes/arts/ma-anthropology"
+    },
+    {
+      "case_id": "eduhk_masters_educational_psychology",
+      "name": "EdUHK",
+      "index_url": "https://www.eduhk.hk/acadprog/postgrad/index.html",
+      "detail_url": "https://www.eduhk.hk/fehd/en/programmes.php?id=9859"
     }
   ]
 }
