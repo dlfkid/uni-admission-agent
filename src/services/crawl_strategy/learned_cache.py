@@ -75,6 +75,32 @@ def record_success(url: str, fetch_mode: str = "server") -> None:
     logger.info("strategy_cache: recorded success for domain=%s fetch_mode=%s", domain, fetch_mode)
 
 
+def record_detail_pattern(url: str, pattern: str) -> None:
+    """Record a learned page-layout pattern for *url*'s domain.
+
+    E.g. ``pattern="thin_page_supplement"`` after the runtime detector
+    found stub/hub detail pages on this domain and supplement expansion
+    recovered real fields. Future crawls of the same domain can read this
+    via :func:`lookup` and treat the layout as known rather than
+    re-discovering it. Merges into any existing entry for the domain.
+    """
+    domain = _domain_of(url)
+    if not domain or not pattern:
+        return
+    with _lock:
+        cache = load_cache()
+        existing = cache.get(domain, {})
+        cache[domain] = {
+            **existing,
+            "detail_pattern": pattern,
+            "detail_pattern_recorded_at": datetime.now(timezone.utc).isoformat(),
+        }
+        _write_cache(cache)
+    logger.info(
+        "strategy_cache: recorded detail_pattern=%s for domain=%s", pattern, domain
+    )
+
+
 def _write_cache(data: dict) -> None:
     path = _cache_path()
     tmp = path.with_suffix(".tmp")

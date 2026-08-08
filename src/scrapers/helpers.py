@@ -198,7 +198,7 @@ _NOISE_HEADING_RE = re.compile(
 )
 
 _NOISE_PROGRAM_NAME_RE = re.compile(
-    r"^(?:what'?s new|news|overview|home|admissions?|programme(?:s)? list"
+    r"^(?:what'?s new|news|(?:\S.*\s+)?overview|introduction|background|home|admissions?|programme(?:s)? list"
     r"|(?:postgraduate|undergraduate|graduate)\s+(?:taught\s+)?(?:programmes?|courses?|degrees?)"
     r"|degree\s+finder|search\s+(?:programmes?|courses?|degrees?)"
     r"|a\s+to\s+z\s+of\s+(?:degree\s+)?programmes?"
@@ -214,10 +214,27 @@ _NOISE_PROGRAM_NAME_RE = re.compile(
     r"|about(?:\s+(?:us|the\s+\S+|our\s+\S+))?"
     r"|apply(?:\s+(?:now|online|here|today))?"
     r"|contact(?:\s+(?:us|me))?"
-    r"|visit(?:\s+(?:us|me))?"
+    r"|visit(?:\s+(?:us|me|(?:the\s+)?(?:web\s?site|site|page)))?"
     r"|enroll(?:ment)?|enrol(?:ment)?|register"
     r"|get\s+(?:in\s+touch|started)"
-    r"|learn\s+more|find\s+out\s+more|read\s+more"
+    r"|learn\s+more(?:\s+about\s+\S.*)?|find\s+out\s+more|read\s+more"
+    # Page-furniture headings that department sites put ABOVE the real
+    # content and that the heading-ladder fallback in extract_program_name
+    # otherwise picks up as "the name" (every shape below was observed
+    # imported as a programme name on a real Lingnan crawl, or is the
+    # next heading in the ladder on one of those exact pages):
+    #   hero banners ("Welcome to the SEIM Programme"), fee/scholarship
+    #   section titles ("Tuition Fees, Scholarships & Financial
+    #   Assistance", "Tuition Fee Waiver Scholarships"), <title>-derived
+    #   site names ("Lingnan ... Site"), application-round banners,
+    #   interactive prompts ("Choose Your Focus"), social-media footers.
+    r"|welcome(?:\s+to\s+\S.*)?"
+    r"|tuition\s+fees?\b.*"
+    r"|\S.*\s+(?:web\s?site|site)"
+    r"|\(?\s*deadlines?\s+(?:for|of)\b.*"
+    r"|applications?\s+for\s+\S.*"
+    r"|choose\s+your\s+\S.*"
+    r"|follow\s+us\b.*"
     r")$",
     re.IGNORECASE,
 )

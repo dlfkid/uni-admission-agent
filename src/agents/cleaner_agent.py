@@ -133,6 +133,44 @@ class ChunkParseResult(BaseModel):
 
 # --- Merge Helper ---
 
+# Well-known standardized-test names. Different chunks/supplement pages often
+# restate the identical threshold in wildly different lengths of prose — a
+# terse table cell ("TOEFL 79") next to a full sentence ("Minimum score of
+# 79 in TOEFL Internet-Based Test (single test sitting, within two-year
+# validity period).") — which defeats both substring containment (not
+# contiguous) and the 0.82 SequenceMatcher ratio (length mismatch alone
+# drives the ratio near-zero regardless of content). Keying on the test name
+# + numeric threshold instead of prose similarity catches this reliably
+# without the "which side to drop" ambiguity that ruled out semantic dedup
+# for prose (see test_merge_keeps_paraphrased_requirements): a threshold
+# match is a fact, not a semantic judgment call.
+_TEST_FAMILY_RE = re.compile(
+    r"\b(toefl|ielts|cet-?6|cet-?4|gre|gmat|sat|act|hkdse|gaokao|duolingo|"
+    r"pte|celpip|toeic)\b",
+    re.IGNORECASE,
+)
+
+
+def _test_family_key(req: "ParsedRequirement") -> Optional[str]:
+    """Return a (test_family, normalized_value) key, or None if this
+    requirement doesn't name a known standardized test with a numeric
+    threshold — e.g. a plain "Bachelor's degree" statement, where different
+    wordings may genuinely carry different content and must NOT collapse.
+    """
+    minimum_value = str(getattr(req, "minimum_value", "") or "").strip()
+    if not minimum_value:
+        return None
+    haystack = f"{getattr(req, 'subject_name', '') or ''} {getattr(req, 'requirement_text', '') or ''}"
+    match = _TEST_FAMILY_RE.search(haystack)
+    if not match:
+        return None
+    family = re.sub(r"-", "", match.group(1).lower())
+    try:
+        normalized_value = str(float(minimum_value))
+    except ValueError:
+        normalized_value = minimum_value.lower()
+    return f"{family}:{normalized_value}"
+
 
 def _normalize_parsed_data(parsed: ParsedProgramData) -> ParsedProgramData:
     """Deduplicate/normalize a program's list fields (page-size independent).
@@ -187,8 +225,34 @@ def _normalize_parsed_data(parsed: ParsedProgramData) -> ParsedProgramData:
     loose_texts = [_loose(getattr(r, "requirement_text", "")) for r in keyed]
     dedup_requirements: List[ParsedRequirement] = []
     surviving_loose_texts: List[str] = []
+    surviving_test_keys: List[Optional[str]] = []
+    surviving_min_values: List[str] = []
     for i, req in enumerate(keyed):
         txt_i = loose_texts[i]
+
+        test_key_i = _test_family_key(req)
+        if test_key_i is not None:
+            test_dup_idx = next(
+                (j for j, k in enumerate(surviving_test_keys) if k == test_key_i),
+                None,
+            )
+            if test_dup_idx is not None:
+                if len(txt_i) > len(surviving_loose_texts[test_dup_idx]):
+                    logger.debug(
+                        "Replacing same-threshold requirement with longer phrasing: %r -> %r",
+                        dedup_requirements[test_dup_idx].requirement_text, req.requirement_text,
+                    )
+                    dedup_requirements[test_dup_idx] = req
+                    surviving_loose_texts[test_dup_idx] = txt_i
+                    surviving_test_keys[test_dup_idx] = test_key_i
+                    surviving_min_values[test_dup_idx] = str(getattr(req, "minimum_value", "") or "").strip()
+                else:
+                    logger.debug(
+                        "Dropping same-threshold requirement (matches %r): %r ~= %r",
+                        test_key_i, req.requirement_text,
+                        dedup_requirements[test_dup_idx].requirement_text,
+                    )
+                continue
         # Drop if fully contained in a longer requirement (cross-category on purpose).
         container = next(
             (loose_texts[j] for j in range(len(loose_texts))
@@ -212,11 +276,24 @@ def _normalize_parsed_data(parsed: ParsedProgramData) -> ParsedProgramData:
         # sentence that re-states several already-atomic items combined, since
         # which side to drop there is ambiguous and a wrong guess would
         # silently delete real content.
+        #
+        # Guard: two DIFFERENT numeric thresholds can be textually near-
+        # identical purely by digit proximity ("IELTS 6.5" vs "IELTS 6.0" is
+        # a single differing character, ratio ~0.89) while meaning distinct,
+        # both-real facts. Skip the ratio match when both sides name a
+        # minimum_value and those values differ — a threshold mismatch is
+        # itself sufficient signal that these are not the same fact.
+        req_min_value = str(getattr(req, "minimum_value", "") or "").strip()
         near_dup_idx = next(
             (
                 j for j, kept_txt in enumerate(surviving_loose_texts)
                 if txt_i and kept_txt
                 and SequenceMatcher(None, txt_i, kept_txt).ratio() >= 0.82
+                and not (
+                    req_min_value
+                    and surviving_min_values[j]
+                    and req_min_value != surviving_min_values[j]
+                )
             ),
             None,
         )
@@ -228,6 +305,7 @@ def _normalize_parsed_data(parsed: ParsedProgramData) -> ParsedProgramData:
                 )
                 dedup_requirements[near_dup_idx] = req
                 surviving_loose_texts[near_dup_idx] = txt_i
+                surviving_min_values[near_dup_idx] = req_min_value
             else:
                 logger.debug(
                     "Dropping near-duplicate requirement (paraphrase of kept item): %r ~= %r",
@@ -235,6 +313,8 @@ def _normalize_parsed_data(parsed: ParsedProgramData) -> ParsedProgramData:
                 )
             continue
         surviving_loose_texts.append(txt_i)
+        surviving_test_keys.append(test_key_i)
+        surviving_min_values.append(req_min_value)
         dedup_requirements.append(req)
 
     return ParsedProgramData(
