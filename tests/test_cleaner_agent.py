@@ -520,6 +520,65 @@ def test_merge_keeps_paraphrased_requirements() -> None:
     assert len(merged.requirements) == 2
 
 
+def test_merge_collapses_same_test_threshold_across_wildly_different_lengths() -> None:
+    """Regression for Lingnan battle-test round: a thin/hub-page supplement
+    merges several pages that each restate the same admission threshold at
+    a very different length — a terse table cell next to a full sentence.
+    Neither substring containment (not contiguous) nor the 0.82
+    SequenceMatcher ratio (length mismatch alone tanks it) catches this;
+    the structured (test name, numeric threshold) key does.
+    """
+    terse = ParsedRequirement(
+        category="standardized_test", subject_name="TOEFL",
+        minimum_value="79", requirement_text="TOEFL 79")
+    verbose = ParsedRequirement(
+        category="language", subject_name="TOEFL iBT",
+        minimum_value="79", unit="score",
+        requirement_text=(
+            "Minimum score of 79 in TOEFL Internet-Based Test "
+            "(single test sitting, within two-year validity period)."
+        ))
+    merged = _merge_parsed_data(
+        ParsedProgramData(requirements=[terse, verbose]), ParsedProgramData()
+    )
+    assert len(merged.requirements) == 1
+    assert merged.requirements[0].requirement_text == verbose.requirement_text
+
+
+def test_merge_keeps_different_test_thresholds_distinct() -> None:
+    """Same test family, different threshold — must NOT collapse."""
+    ielts_65 = ParsedRequirement(
+        category="language", subject_name="IELTS",
+        minimum_value="6.5", requirement_text="IELTS 6.5")
+    ielts_60 = ParsedRequirement(
+        category="language", subject_name="IELTS",
+        minimum_value="6.0", requirement_text="IELTS 6.0")
+    merged = _merge_parsed_data(
+        ParsedProgramData(requirements=[ielts_65, ielts_60]), ParsedProgramData()
+    )
+    assert len(merged.requirements) == 2
+
+
+def test_merge_does_not_collapse_degree_statements_without_threshold() -> None:
+    """A requirement with no minimum_value (e.g. a bare "Bachelor's degree"
+    statement) must fall through to the existing text-based rules rather
+    than being swept into the structured-threshold dedup — different
+    degree-requirement wordings can carry genuinely different content
+    (e.g. a Mainland-China-specific certificate clause), so collapsing them
+    on no signal at all would risk silently deleting real content."""
+    a = ParsedRequirement(
+        category="academic_subject",
+        requirement_text="A recognized bachelor's degree is required.")
+    b = ParsedRequirement(
+        category="academic_subject",
+        requirement_text=(
+            "Bachelor's degree or equivalent; applicants from Mainland "
+            "China must provide degree certificate, graduation certificate."
+        ))
+    merged = _merge_parsed_data(ParsedProgramData(requirements=[a, b]), ParsedProgramData())
+    assert len(merged.requirements) == 2
+
+
 def test_merge_collapses_near_verbatim_paraphrase() -> None:
     """A near-verbatim restatement (single word inserted/dropped) collapses to
     one, keeping the more complete phrasing.
