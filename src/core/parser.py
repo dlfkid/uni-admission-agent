@@ -114,6 +114,18 @@ class DataCleaner:
             
         return options
 
+    # Admission deadlines are always real, near-future calendar dates.
+    # dateutil's fuzzy=True mode scans an entire line for ANY date-shaped
+    # fragment, which misfires badly on prose that merely mentions the
+    # word "deadline" without containing one — e.g. "...pay a tuition fee
+    # deposit of £2,500 by the deadline stated in your offer letter..."
+    # got "2,500" misread as a bare 3-digit year, producing a cutoff_date
+    # of 0500-02-08. Rejecting anything outside a generous real-world
+    # admissions-calendar window turns that class of misfire into "no
+    # deadline found" instead of silently fabricating one.
+    _MIN_PLAUSIBLE_YEAR = 2000
+    _MAX_PLAUSIBLE_YEAR = 2100
+
     @staticmethod
     def parse_deadlines(text: Optional[str]) -> List[Dict[str, Any]]:
         """
@@ -123,19 +135,29 @@ class DataCleaner:
         """
         if not text:
             return []
-            
+
         text = str(text).strip()
         found_deadlines = []
-        
+
         lines = re.split(r'[\n;]', text)
         for line in lines:
             line = line.strip()
             if not line:
                 continue
-                
+
             try:
                 dt = date_parser.parse(line, fuzzy=True)
                 if isinstance(dt, datetime):
+                    if not (
+                        DataCleaner._MIN_PLAUSIBLE_YEAR
+                        <= dt.year
+                        <= DataCleaner._MAX_PLAUSIBLE_YEAR
+                    ):
+                        logger.debug(
+                            "Discarding implausible fuzzy-parsed date %r from line: %r",
+                            dt, line,
+                        )
+                        continue
                     # Keep original text as description or infer simple one
                     found_deadlines.append({
                         "cutoff_date": dt,
