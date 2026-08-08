@@ -200,6 +200,69 @@ def test_extract_program_name_h2_fallback() -> None:
     assert result == "Bachelor of Arts"
 
 
+def test_noise_vocabulary_covers_department_page_furniture() -> None:
+    """Regression for the Lingnan full-catalogue crawl: every one of these
+    shapes was imported as a real programme name (or is the literal next
+    heading in extract_program_name's fallback ladder on one of those
+    exact pages). The same vocabulary backs three independent layers —
+    the heading ladder, NameCritique's suspect check, and the persist
+    quality gate — so one miss here leaks junk through all three."""
+    from src.scrapers.helpers import is_noise_program_name
+
+    observed_junk = [
+        "Learn more about MAP programme",
+        "Tuition Fee Waiver Scholarships",
+        "Tuition Fees, Scholarships & Financial Assistance",
+        "Welcome to Master of Arts in Arts and Cultural Heritage Management",
+        "Welcome to the SEIM Programme",
+        "Lingnan MSc in Cross-disciplinary Technologies Site",
+        "Lingnan Master of Arts in International Higher Education and Management (IHEM) Site",
+        "Lingnan Master of Science in Smart Ageing and Gerontology Site",
+        # next dominoes in the heading ladder on the psy/mssap/home page:
+        "Application for 2026/27 September intake is openning",
+        "(Deadline for Application:31 May 2026)",
+        "MAP Programme Overview",
+        "Follow us on Instagram",
+        # observed in an earlier run of the same crawl:
+        "Choose Your Focus",
+        "Visit Website",
+    ]
+    for junk in observed_junk:
+        assert is_noise_program_name(junk), f"not flagged as noise: {junk!r}"
+
+    real_names = [
+        "Master of Science in Data Science",
+        "Master of Arts in Chinese",
+        "Master of Social Sciences in Comparative Public Administration (CPA)",
+        "Doctor of Policy Studies",
+        "MSc in Environmental Social and Governance Management",
+        # near-misses of the new patterns that must stay valid:
+        "Master of Arts in Tuition-Free Economics",  # 'tuition' not at start
+        "MSc Web Science",  # 'site'-adjacent but not a trailing ' site'
+    ]
+    for name in real_names:
+        assert not is_noise_program_name(name), f"real name wrongly flagged: {name!r}"
+
+
+def test_extract_program_name_skips_generic_section_headings() -> None:
+    """Regression: a live Lingnan page (psy/mssap/home) has H1 "Home"
+    (already-noise) followed by H2 "Introduction" as its first non-noise-
+    looking heading, with the real programme name never spelled out in a
+    heading at all (only as the abbreviation "MAP"). "Introduction" was
+    missing from the noise list, so it won as the extracted "programme
+    name" and got imported as a fake programme. A bare, generic section
+    heading must never be picked as a programme name even with nothing
+    better available."""
+    markdown = (
+        "# Home\n\n"
+        "## Introduction\n\n"
+        "## Learn more about MAP programme\n\n"
+        "## MAP Programme Overview\n"
+    )
+    result = extract_program_name(markdown)
+    assert result != "Introduction"
+
+
 def test_extract_program_name_with_asterisk_h1() -> None:
     """Test extraction handles asterisk-style H1 (Setext)."""
     markdown = "Master of Finance\n==================\n\nContent here."
