@@ -787,3 +787,152 @@ def test_record_detail_pattern_merges_into_domain_entry(monkeypatch, tmp_path) -
     assert entry["detail_pattern"] == "thin_page_supplement"
     assert "detail_pattern_recorded_at" in entry
     assert set(load_cache().keys()) == {"www.ln.edu.hk"}
+
+
+# ── learned cache pattern consumption (fetch_raw → extract_structured) ──
+#
+# record_detail_pattern was write-only: nothing ever read it back. These
+# lock in the read side — surfacing a domain's known layout pattern into
+# the shared stage context — as strictly additive observability: it must
+# never change what gets fetched, what gets extracted, or which pages
+# trigger supplement expansion. Each run's own thin-page detection stays
+# authoritative; the cache only informs logging/monitoring.
+
+class _FakeDetailScraper:
+    """Minimal AdmissionScraper stand-in for a single detail-mode fetch."""
+
+    def __init__(self) -> None:
+        self.router = MagicMock()
+        self._export_md = False
+        self._export_path = None
+
+    def _reset_session_state(self) -> None:
+        return
+
+    async def crawl_page(self, url: str):
+        from src.models.scraper_models import CrawlPageResult
+
+        return CrawlPageResult(
+            url=url, markdown="# Some Page", char_count=11, links=[],
+            status_code=200, html="<html>Some Page</html>",
+        )
+
+
+def test_fetch_raw_known_detail_pattern_absent_by_default(monkeypatch) -> None:
+    """No cache entry for the domain → known_detail_pattern is None, and
+    fetch behavior is completely unaffected (2 lines of proof: the field
+    exists and is falsy; raw_page_count is untouched)."""
+    from src.services.ingestion_pipeline import IngestionPipeline
+
+    monkeypatch.setattr(
+        "src.services.ingestion_pipeline.AdmissionScraper", _FakeDetailScraper
+    )
+    monkeypatch.setattr(
+        "src.services.crawl_strategy.learned_cache.lookup", lambda url: None
+    )
+
+    pipeline = IngestionPipeline(db_manager=MagicMock())
+    result = asyncio.run(
+        pipeline._stage_fetch_raw(
+            {"url": "https://fresh.example/detail", "page_type_hint": "detail"}
+        )
+    )
+
+    assert result["known_detail_pattern"] is None
+    assert result["raw_page_count"] == 1
+
+
+def test_fetch_raw_surfaces_known_detail_pattern_from_cache(monkeypatch) -> None:
+    """A domain previously recorded as thin_page_supplement surfaces that
+    pattern into the fetch-stage result, unchanged in every other respect."""
+    from src.services.ingestion_pipeline import IngestionPipeline
+
+    monkeypatch.setattr(
+        "src.services.ingestion_pipeline.AdmissionScraper", _FakeDetailScraper
+    )
+    monkeypatch.setattr(
+        "src.services.crawl_strategy.learned_cache.lookup",
+        lambda url: {
+            "detail_pattern": "thin_page_supplement",
+            "detail_pattern_recorded_at": "2026-08-01T00:00:00+00:00",
+        },
+    )
+
+    pipeline = IngestionPipeline(db_manager=MagicMock())
+    result = asyncio.run(
+        pipeline._stage_fetch_raw(
+            {"url": "https://www.ln.edu.hk/detail", "page_type_hint": "detail"}
+        )
+    )
+
+    assert result["known_detail_pattern"] == "thin_page_supplement"
+    assert result["raw_page_count"] == 1  # fetch behavior itself untouched
+
+
+def test_fetch_raw_tolerates_cache_lookup_failure(monkeypatch) -> None:
+    """A broken/corrupt strategy_cache.json must not take down the fetch
+    stage — known_detail_pattern degrades to None, same as no entry."""
+    from src.services.ingestion_pipeline import IngestionPipeline
+
+    def _boom(_url):
+        raise OSError("disk on fire")
+
+    monkeypatch.setattr(
+        "src.services.ingestion_pipeline.AdmissionScraper", _FakeDetailScraper
+    )
+    monkeypatch.setattr(
+        "src.services.crawl_strategy.learned_cache.lookup", _boom
+    )
+
+    pipeline = IngestionPipeline(db_manager=MagicMock())
+    result = asyncio.run(
+        pipeline._stage_fetch_raw(
+            {"url": "https://fresh.example/detail", "page_type_hint": "detail"}
+        )
+    )
+
+    assert result["known_detail_pattern"] is None
+    assert result["raw_page_count"] == 1
+
+
+def test_extract_structured_passes_through_known_detail_pattern(monkeypatch) -> None:
+    """The value plumbed through context.update() at the stage boundary
+    reaches the extract stage's own result dict unchanged, and — with a
+    RICH (non-thin) page this run — proves the cached hint does not
+    trigger supplement expansion on its own; only this run's actual
+    thin-page detection does."""
+    rich = {"name_en": "MSc Finance", "tuition_amount": 300000.0}
+    pipeline, extract_mock, expand_calls, _pattern_calls = _pipeline_with_mocks(
+        monkeypatch,
+        extract_side_effect=[(dict(rich), None)],
+        expand_result=("should never be used", []),
+    )
+
+    result = pipeline._stage_extract_structured(
+        {"univ_slug": "ln", "year": 2026, "page_type_hint": "detail"},
+        {"raw_pages": [_thin_row()], "known_detail_pattern": "thin_page_supplement"},
+    )
+
+    assert result["known_detail_pattern"] == "thin_page_supplement"
+    assert extract_mock.call_count == 1  # no re-extract: known pattern didn't force one
+    assert expand_calls == []  # cached hint alone never triggers expansion
+
+
+def test_extract_structured_known_detail_pattern_defaults_to_none(monkeypatch) -> None:
+    """Existing callers that never populate known_detail_pattern in context
+    (every pre-existing test in this file, and any caller running before
+    this feature existed) see it default to None, not a KeyError."""
+    rich = {"name_en": "MSc Finance", "tuition_amount": 300000.0}
+    pipeline, extract_mock, _expand_calls, _pattern_calls = _pipeline_with_mocks(
+        monkeypatch,
+        extract_side_effect=[(dict(rich), None)],
+        expand_result=("should never be used", []),
+    )
+
+    result = pipeline._stage_extract_structured(
+        {"univ_slug": "ln", "year": 2026, "page_type_hint": "detail"},
+        {"raw_pages": [_thin_row()]},
+    )
+
+    assert result["known_detail_pattern"] is None
+    assert extract_mock.call_count == 1
