@@ -154,11 +154,11 @@ The project includes a seed quality framework for offline regression checks:
 - scoring runner: `scripts/score_golden_samples.py`
 - CI gate: `.github/workflows/ci.yml` fails when quality threshold is not met
 
-Current seed set includes 7 benchmark universities (`golden_samples/manifest.json`):
-UCL, Manchester, Leeds, PolyU, CityU, CUHK, EdUHK — each added via a "battle-test"
-round (real crawl → find bugs → fix → lock in a golden-sample regression
-fixture). See README.md's crawl-strategy registry table for per-domain fetch
-mode / extractor kind.
+Current seed set includes 8 benchmark universities (`golden_samples/manifest.json`):
+UCL, Manchester, Leeds, PolyU, CityU, CUHK, EdUHK, Lingnan — each added via a
+"battle-test" round (real crawl → find bugs → fix → lock in a golden-sample
+regression fixture). See README.md's crawl-strategy registry table for
+per-domain fetch mode / extractor kind.
 
 ### 3.6 Taxonomy Runtime Matching
 
@@ -358,7 +358,7 @@ uni-admission-agent/
 - **Developer setup, tests, git hooks, CI**: README.md § "Developer Setup" /
   "Testing & Coverage" / "CI/CD".
 - **Making a real crawl work for a new university** ("battle-test" rounds —
-  the workflow used for the UCL/Manchester/Leeds/PolyU/CityU/CUHK/EdUHK golden
+  the workflow used for the UCL/Manchester/Leeds/PolyU/CityU/CUHK/EdUHK/Lingnan golden
   samples in §3.5): not yet formally written up anywhere; reconstruct from
   `git log` on `golden_samples/manifest.json` and past `feat/battle-test-*`
   branches until this gets its own doc.
