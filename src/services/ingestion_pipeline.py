@@ -33,6 +33,12 @@ from src.scrapers.page_processor import extract_program_data_from_page
 from src.scrapers.scout import run_scout
 from src.services.program_name_resolution import resolve_program_name
 from src.services.quality_gate import evaluate_extraction
+from src.services.thin_page_supplement import (
+    build_sibling_link_map,
+    dedupe_same_row_candidates,
+    expand_thin_page,
+    is_thin_program_result,
+)
 from src.services.subject_taxonomy import get_subject_taxonomy_service, normalize_name as normalize_taxonomy_name
 from src.storage.db_manager import DatabaseManager
 from src.utils.text import generate_program_group_code
@@ -690,6 +696,12 @@ class IngestionPipeline:
             for url, text in dict(request_payload.get("selected_link_texts") or {}).items()
             if str(url).strip() and str(text).strip()
         }
+        # Index-row sibling links per selected detail URL (e.g. a "Visit
+        # Website" link sitting next to the programme-name link). Captured
+        # here because row-level association only exists on the index page —
+        # the routing-stub detail pages this feeds never link back out. Used
+        # by the extract stage's thin-page supplement expansion.
+        selected_sibling_urls: Dict[str, List[str]] = {}
         html_content = request_payload.get("html_content")
         page_type_hint = str(request_payload.get("page_type_hint") or "auto")
         supplement_url_re: Optional[str] = request_payload.get("supplement_url_re") or None
@@ -810,6 +822,7 @@ class IngestionPipeline:
                     depth=depth,
                     from_browser=from_browser,
                     selected_link_texts=selected_link_texts,
+                    sibling_urls=selected_sibling_urls,
                 )
             )
             for page in pages:
@@ -963,6 +976,9 @@ class IngestionPipeline:
                 selected_link_texts.update(detail_link_texts)
                 crawl_urls = _cap_detail_urls(
                     self._dedupe_urls(detail_urls, visited_urls), source="index_probe")
+                selected_sibling_urls.update(
+                    build_sibling_link_map(probe.markdown, crawl_urls)
+                )
                 _emit_fetch_event(
                     "fetch_candidates_identified",
                     {
@@ -1025,6 +1041,9 @@ class IngestionPipeline:
                 selected_link_texts.update(detail_link_texts)
                 crawl_urls = _cap_detail_urls(
                     self._dedupe_urls(detail_urls, visited_urls), source="entry_index")
+                selected_sibling_urls.update(
+                    build_sibling_link_map(seed_page.markdown, crawl_urls)
+                )
                 _emit_fetch_event(
                     "fetch_candidates_identified",
                     {
@@ -1152,6 +1171,27 @@ class IngestionPipeline:
         extract_errors: List[Dict[str, str]] = []
         unresolved_urls: List[Dict[str, Any]] = []
 
+        # Thin-page supplement: when a detail page extracts as a routing
+        # stub (name + deadline, but no tuition/requirements/study options),
+        # fetch its index-row sibling links and their admission sub-pages,
+        # then re-extract on the merged markdown. Runs in this to_thread
+        # worker (no event loop), so asyncio.run is safe — same pattern as
+        # the agent-skills fallback fetch.
+        thin_supplement_enabled = self._coerce_bool(
+            request_payload.get("thin_page_supplement_enabled"),
+            default=True,
+        )
+        supplement_scraper: Optional[AdmissionScraper] = None
+        supplement_success_urls: List[str] = []
+
+        def _supplement_scraper_factory() -> AdmissionScraper:
+            # Lazily built and reused across pages; only invoked by
+            # expand_thin_page once it has actual candidates to fetch.
+            nonlocal supplement_scraper
+            if supplement_scraper is None:
+                supplement_scraper = AdmissionScraper()
+            return supplement_scraper
+
         for row in raw_pages:
             row_markdown = str(row.get("markdown") or "")
             row_html_raw = row.get("html")
@@ -1231,6 +1271,99 @@ class IngestionPipeline:
                 name_hints=name_hints,
                 selected_anchor_text=str(row.get("selected_anchor_text") or "").strip() or None,
             )
+
+            if (
+                thin_supplement_enabled
+                and program_data is not None
+                and is_thin_program_result(program_data)
+            ):
+                siblings = [
+                    str(u).strip()
+                    for u in (row.get("sibling_urls") or [])
+                    if str(u or "").strip()
+                ]
+                supplement_md, fetched_supplements = "", []
+                try:
+                    supplement_md, fetched_supplements = asyncio.run(
+                        expand_thin_page(
+                            _supplement_scraper_factory,
+                            getattr(cleaner, "router", None),
+                            page,
+                            sibling_urls=siblings,
+                        )
+                    )
+                except Exception:  # pylint: disable=broad-except
+                    logger.warning(
+                        "[ThinSupplement] expansion failed for %s", page.url,
+                        exc_info=True,
+                    )
+                if supplement_md:
+                    logger.info(
+                        "[ThinSupplement] %s extracted without tuition; "
+                        "fetched %d supplement page(s), re-extracting on "
+                        "merged content",
+                        page.url, len(fetched_supplements),
+                    )
+                    enriched_page = page.model_copy(update={
+                        "markdown": page.markdown + supplement_md,
+                        "char_count": len(page.markdown) + len(supplement_md),
+                    })
+                    enriched_data, enriched_error = extract_program_data_from_page(
+                        page=enriched_page,
+                        cleaner=cleaner,
+                        univ_slug=univ_slug,
+                        year=int(request_payload.get("year") or 0),
+                        current_depth=int(row.get("crawl_depth") or 0),
+                        from_browser=from_browser,
+                        name_hints=name_hints,
+                        selected_anchor_text=str(row.get("selected_anchor_text") or "").strip() or None,
+                    )
+                    if enriched_data is not None and not is_thin_program_result(enriched_data):
+                        # The merged markdown now contains the supplement
+                        # pages' own headings ("Tuition Fees, Scholarships
+                        # & Financial Assistance", a hub's hero banner...)
+                        # and extract_program_name's heading ladder can
+                        # pick one of THOSE as the enriched "name". The
+                        # first extraction saw only the page itself — when
+                        # it produced a legitimate name, that name wins;
+                        # supplement content is for fields, never naming.
+                        original_name = str(program_data.get("name_en") or "").strip()
+                        enriched_name = str(enriched_data.get("name_en") or "").strip()
+                        if (
+                            original_name
+                            and not is_noise_program_name(original_name)
+                            and enriched_name != original_name
+                        ):
+                            logger.info(
+                                "[ThinSupplement] keeping original name %r "
+                                "(enriched pass produced %r from merged content)",
+                                original_name, enriched_name,
+                            )
+                            enriched_data["name_en"] = original_name
+                            # Keep the catalog identity in sync with the
+                            # restored name — this flow (auto page-type, no
+                            # selected_urls) never passes through the
+                            # index-mode name resolution that regenerates
+                            # the code downstream, and a stale code from
+                            # the enriched name would break cross-run dedup
+                            # (the exact CUHK battle-test-3 bug shape).
+                            enriched_data["program_group_code"] = (
+                                generate_program_group_code(univ_slug, original_name)
+                            )
+                        meta = enriched_data.setdefault("extra_metadata", {})
+                        meta["thin_page_supplement"] = {
+                            "fetched_urls": fetched_supplements,
+                            "sibling_urls": siblings,
+                        }
+                        program_data, error = enriched_data, enriched_error
+                        supplement_success_urls.append(page.url)
+                    else:
+                        logger.info(
+                            "[ThinSupplement] %s still thin after supplement — "
+                            "keeping original result",
+                            page.url,
+                        )
+
             if program_data:
                 if is_index_mode_request:
                     resolution = resolve_program_name(
@@ -1321,12 +1454,31 @@ class IngestionPipeline:
                         "Failed to record silent-failure quarantine for %s", page.url
                     )
 
+        # Learned-pattern memory: once supplement expansion has actually
+        # recovered fields on this domain, record the layout pattern in the
+        # strategy cache so future crawls (and operators inspecting the
+        # cache) know this university publishes stub detail pages with the
+        # real content one-to-two hops away.
+        if supplement_success_urls:
+            try:
+                from src.services.crawl_strategy.learned_cache import record_detail_pattern
+
+                record_detail_pattern(
+                    supplement_success_urls[0], "thin_page_supplement"
+                )
+            except Exception:  # pylint: disable=broad-except
+                logger.warning(
+                    "Failed to record thin_page_supplement pattern in strategy cache",
+                    exc_info=True,
+                )
+
         return {
             "program_candidates": candidates,
             "extracted_count": len(candidates),
             "extract_errors": extract_errors,
             "unresolved_urls": unresolved_urls,
             "candidate_hash": _hash_payload(candidates),
+            "thin_supplement_urls": supplement_success_urls,
         }
 
     def _attach_taxonomy_trace(
@@ -1904,10 +2056,39 @@ class IngestionPipeline:
                     len(deduped),
                 )
 
+        # Same-row duplicate collapse: on hub-layout index pages the LLM
+        # filter selects both a programme's name link (stub) and its
+        # "Visit Website" action link as separate candidates — one real
+        # programme, two candidate rows, two DB records. Keep the
+        # name-bearing link; the demoted URL is re-attached as the
+        # keeper's sibling by build_sibling_link_map at the call site, so
+        # it still feeds the thin-page supplement instead of becoming its
+        # own (duplicate) programme.
+        deduped, row_dropped = dedupe_same_row_candidates(
+            page.markdown, deduped, url_to_text
+        )
+        if row_dropped:
+            logger.info(
+                "[LinkFilter] Same-row duplicate collapse dropped %d candidate(s) on %s",
+                len(row_dropped), page.url,
+            )
+            if funnel_out is not None:
+                drops = funnel_out.setdefault("dropped_links", [])
+                for record in row_dropped:
+                    drops.append(
+                        {
+                            "url": record["url"],
+                            "anchor_text": record.get("anchor_text"),
+                            "stage_dropped": "same_row_duplicate",
+                            "duplicate_of": record.get("duplicate_of"),
+                        }
+                    )
+        final_kept = {str(u).strip() for u in deduped}
+
         text_map = {
             str(url).strip(): str(text).strip()
             for url, text in link_pairs
-            if str(url).strip() and str(text).strip() and str(url).strip() in seen
+            if str(url).strip() and str(text).strip() and str(url).strip() in final_kept
         }
         if funnel_out is not None:
             funnel_out["candidate_count"] = len(deduped)
@@ -2035,8 +2216,10 @@ class IngestionPipeline:
         depth: int,
         from_browser: bool,
         selected_link_texts: Optional[Dict[str, str]] = None,
+        sibling_urls: Optional[Dict[str, List[str]]] = None,
     ) -> List[Dict[str, Any]]:
         selected_link_texts = selected_link_texts or {}
+        sibling_urls = sibling_urls or {}
         # Build a canonical-keyed view so a redirected / query-stripped
         # page.url still resolves to the index card's anchor text.
         canonical_texts: Dict[str, str] = {}
@@ -2044,12 +2227,20 @@ class IngestionPipeline:
             ckey = _canonical_url_key(key)
             if ckey and ckey not in canonical_texts:
                 canonical_texts[ckey] = text
+        canonical_siblings: Dict[str, List[str]] = {}
+        for key, sibs in sibling_urls.items():
+            ckey = _canonical_url_key(key)
+            if ckey and ckey not in canonical_siblings:
+                canonical_siblings[ckey] = sibs
         out: List[Dict[str, Any]] = []
         for page in pages:
             page_url = str(page.url or "").strip()
             anchor = selected_link_texts.get(page_url)
             if not anchor:
                 anchor = canonical_texts.get(_canonical_url_key(page_url))
+            siblings = sibling_urls.get(page_url)
+            if not siblings:
+                siblings = canonical_siblings.get(_canonical_url_key(page_url))
             out.append(
                 {
                     "url": page.url,
@@ -2061,6 +2252,7 @@ class IngestionPipeline:
                     "crawl_depth": depth,
                     "from_browser": from_browser,
                     "selected_anchor_text": anchor,
+                    "sibling_urls": list(siblings or []),
                 }
             )
         return out
