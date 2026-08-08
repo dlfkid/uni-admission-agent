@@ -42,6 +42,12 @@
       "name": "EdUHK",
       "index_url": "https://www.eduhk.hk/acadprog/postgrad/index.html",
       "detail_url": "https://www.eduhk.hk/fehd/en/programmes.php?id=9859"
+    },
+    {
+      "case_id": "ln_masters_finance",
+      "name": "Lingnan",
+      "index_url": "https://www.ln.edu.hk/sgs/programmes-on-offer",
+      "detail_url": "https://www.ln.edu.hk/fin/mfin"
     }
   ]
 }

@@ -1,0 +1,31 @@
+{
+  "case_id": "ln_masters_finance",
+  "name": "Lingnan",
+  "university": "Lingnan University",
+  "index_url": "https://www.ln.edu.hk/sgs/programmes-on-offer",
+  "detail_url": "https://www.ln.edu.hk/fin/mfin",
+  "fetched_at": "2026-08-08T14:00:00Z",
+  "expected_strategy": "server×inline_degree",
+  "expected_min_names": 47,
+  "notes": "Battle-test round targeting Lingnan's SGS taught-postgraduate index. The index page's ~94 raw candidates (LLM-filtered) resolve to ~47 real programmes once same-row duplicate collapse removes the stub+\"Visit Website\" pairs the filter selects as separate candidates. detail.md/detail.html are the Master of Science in Finance department homepage (chosen as the richest self-contained candidate: 13 requirements, full tuition/study-mode/deadline coverage), fetched directly rather than via the SGS routing-stub + supplement path.\n\nThis round's real finding was architectural, not a content-extraction bug: most Lingnan programmes publish an SGS \"detail page\" that is a pure routing stub (name + application period only) while the real admission content (tuition, requirements, study mode) lives one-to-two hops away on an independently-run department site, reachable only via a same-index-row \"Visit Website\" sibling link. Added a new generic mechanism (src/services/thin_page_supplement.py) that detects a missing-tuition extraction at runtime (any university, no registry entry) and expands via bounded sibling + admission-keyword-ranked sub-link fetches, re-extracting on the merged content. Also fixed: same-row candidate duplicate collapse (the LLM candidate filter selects both the stub and its sibling as separate top-level candidates, roughly doubling the true programme count), a same-threshold requirement dedup gap (a terse \"TOEFL 79\" and a full sentence stating the identical fact were extracted as two requirements, since neither substring containment nor text-similarity dedup catches a length mismatch that large), and a noise-name vocabulary gap (department-page furniture headings — hero banners, fee/scholarship section titles, HTML <title> site names — were slipping through as fake \"programme names\" once the supplement mechanism merged that content in).",
+  "pages": {
+    "index": {
+      "status": "ok",
+      "status_code": 200,
+      "url": "https://www.ln.edu.hk/sgs/programmes-on-offer",
+      "html_chars": 262965,
+      "markdown_chars": 37739,
+      "html_path": "golden_samples/cases/ln_masters_finance/index.html",
+      "markdown_path": "golden_samples/cases/ln_masters_finance/index.md"
+    },
+    "detail": {
+      "status": "ok",
+      "status_code": 200,
+      "url": "https://www.ln.edu.hk/fin/mfin",
+      "html_chars": 59980,
+      "markdown_chars": 9490,
+      "html_path": "golden_samples/cases/ln_masters_finance/detail.html",
+      "markdown_path": "golden_samples/cases/ln_masters_finance/detail.md"
+    }
+  }
+}
