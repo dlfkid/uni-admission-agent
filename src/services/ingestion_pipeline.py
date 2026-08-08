@@ -665,6 +665,35 @@ class IngestionPipeline:
         if not url:
             raise ValueError("url is required for fetch_raw stage")
 
+        # Learned-pattern memory: surface any previously-recorded detail-page
+        # layout pattern for this domain (e.g. "thin_page_supplement" from a
+        # past crawl) into the shared stage context. Observability only —
+        # the extract stage still detects thinness on the ACTUAL fetched
+        # page and decides whether to expand it exactly as before; a known
+        # pattern from a prior run can inform monitoring (does this run's
+        # behavior still match what was learned?) but never skips or
+        # shortcuts a real check, since the site may have changed since it
+        # was recorded. Defaults to None with zero effect when no cache
+        # entry exists (fresh domain, or someone deleted the cache file).
+        known_detail_pattern: Optional[str] = None
+        try:
+            from src.services.crawl_strategy.learned_cache import lookup as _lookup_strategy_cache
+
+            cached_entry = _lookup_strategy_cache(url)
+            if cached_entry:
+                known_detail_pattern = cached_entry.get("detail_pattern") or None
+                if known_detail_pattern:
+                    logger.info(
+                        "strategy_cache: domain of %s has known detail_pattern=%s "
+                        "(recorded_at=%s)",
+                        url, known_detail_pattern,
+                        cached_entry.get("detail_pattern_recorded_at"),
+                    )
+        except Exception:  # pylint: disable=broad-except
+            logger.warning(
+                "Failed to look up strategy cache for %s", url, exc_info=True
+            )
+
         continue_depth = max(0, int(request_payload.get("continue_depth") or 0))
         selected_urls = [u for u in (request_payload.get("selected_urls") or []) if u]
         # Caller-supplied cap on how many index-discovered detail pages to fetch
@@ -798,6 +827,7 @@ class IngestionPipeline:
                 "scout_call_count": scout_call_count,
                 "source_content_hash": source_content_hash,
                 "audit_funnel": dict(audit_funnel) if audit_funnel else None,
+                "known_detail_pattern": known_detail_pattern,
             }
 
         _emit_fetch_event(
@@ -1125,6 +1155,14 @@ class IngestionPipeline:
         context: Dict[str, Any],
     ) -> Dict[str, Any]:
         raw_pages = context.get("raw_pages") or []
+        known_detail_pattern = context.get("known_detail_pattern")
+        if known_detail_pattern:
+            logger.info(
+                "extract_structured: domain has known_detail_pattern=%s from a "
+                "prior crawl; this run's own thin-page detection still runs "
+                "unchanged and will confirm or contradict it below",
+                known_detail_pattern,
+            )
         cleaner = LLMCleanerAgent()
         univ_slug = str(request_payload.get("univ_slug") or "")
         page_type_hint = str(request_payload.get("page_type_hint") or "auto").strip().lower()
@@ -1471,6 +1509,17 @@ class IngestionPipeline:
                     "Failed to record thin_page_supplement pattern in strategy cache",
                     exc_info=True,
                 )
+        elif known_detail_pattern == "thin_page_supplement" and raw_pages:
+            # A domain previously flagged as needing supplement expansion
+            # produced no successful supplement this run — worth a flag for
+            # operators (site layout may have changed) without touching
+            # extraction behavior; this run's own detection is authoritative
+            # either way.
+            logger.info(
+                "strategy_cache: known_detail_pattern=thin_page_supplement did not "
+                "reproduce this run (no successful supplement expansion) — "
+                "site layout may have changed"
+            )
 
         return {
             "program_candidates": candidates,
@@ -1479,6 +1528,7 @@ class IngestionPipeline:
             "unresolved_urls": unresolved_urls,
             "candidate_hash": _hash_payload(candidates),
             "thin_supplement_urls": supplement_success_urls,
+            "known_detail_pattern": known_detail_pattern,
         }
 
     def _attach_taxonomy_trace(

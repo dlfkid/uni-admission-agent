@@ -121,3 +121,35 @@ def test_parse_deadlines_empty() -> None:
 def test_parse_deadlines_unparseable() -> None:
     # Completely non-date text
     assert DataCleaner.parse_deadlines("Contact us for details") == []
+
+
+def test_parse_deadlines_rejects_implausible_year_from_fuzzy_misparse() -> None:
+    """Regression: a real Manchester golden-sample line that merely
+    mentions "deadline" in passing ("...pay a tuition fee deposit of
+    £2,500 by the deadline stated in your offer letter...") was fed
+    whole into dateutil.parse(fuzzy=True), which misread "2,500" as a
+    bare 3-digit year and fabricated cutoff_date=0500-02-08 — a line
+    with no real date in it produced one anyway. The line still contains
+    the word "deadline" (the caller's own selection heuristic is keyword-
+    based and can't rule this out), so the guard must live here."""
+    line = (
+        "If you are successful in receiving an offer, you will be "
+        "required to pay a tuition fee deposit of £2,500 by the deadline "
+        "stated in your offer letter to confirm your place."
+    )
+    assert DataCleaner.parse_deadlines(line) == []
+
+
+def test_parse_deadlines_keeps_genuine_date_alongside_implausible_line() -> None:
+    """The plausible-year guard must reject only the bad line, not
+    poison the whole batch — a genuine deadline elsewhere in the same
+    multi-line input still comes through."""
+    text = (
+        "If you are successful in receiving an offer, you will be "
+        "required to pay a tuition fee deposit of £2,500 by the deadline "
+        "stated in your offer letter to confirm your place.\n"
+        "Application deadline: 31 May 2026"
+    )
+    results = DataCleaner.parse_deadlines(text)
+    assert len(results) == 1
+    assert "2026-05-31" in results[0]["cutoff_date"]

@@ -8,8 +8,28 @@ from src.agent_runtime.pydanticai_runtime import PydanticAIRuntime
 
 @pytest.mark.asyncio
 async def test_pydanticai_runtime_executes_skill_plan(monkeypatch):
-    del monkeypatch
+    """Happy-path wiring: run() -> _run_agent() -> agent_loop() produces a
+    "done" AgentResponse carrying the loop's trace through.
 
+    Previously called the REAL agent_loop with no mocking — unlike every
+    other test in this file — against the bogus URL "https://x". That
+    isn't a fast failure: PAGE_TIMEOUT (src/agent_runtime/loop.py) is
+    3600s, so a real run only ever *resolves* (success or
+    AgentPageTimeout) after up to an hour of the live agent actually
+    retrying the unreachable fetch, not the near-instant unit test this
+    file's name implies. Mocking agent_loop — the same seam
+    test_pydanticai_runtime_emits_lifecycle_events already uses — verifies
+    the same wiring deterministically in milliseconds.
+    """
+    async def fake_loop(**_kwargs):
+        return {
+            "response": "done",
+            "trace": ["step-1"],
+            "iterations": 1,
+            "collected_programs": [],
+        }
+
+    monkeypatch.setattr("src.agent_runtime.pydanticai_runtime.agent_loop", fake_loop)
     runtime = PydanticAIRuntime()
     result = await runtime.run(AgentRequest(task="crawl", payload={"url": "https://x"}))
 
