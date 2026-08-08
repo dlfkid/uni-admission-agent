@@ -768,7 +768,7 @@ def test_serialize_pages_attaches_sibling_urls() -> None:
 # ── learned cache pattern recording ──────────────────────────────────
 
 def test_record_detail_pattern_merges_into_domain_entry(monkeypatch, tmp_path) -> None:
-    import src.core.paths as paths
+    from src.core import paths
 
     monkeypatch.setattr(paths, "get_data_dir", lambda: tmp_path)
 
