@@ -43,6 +43,7 @@ from src.api.schemas import (
     ProgramResponse,
     ProgramPatchRequest,
     DeleteProgramResponse,
+    BatchDeleteProgramsResponse,
     StatusResponse,
     TaskStatusResponse,
     ConfigResponse,
@@ -75,6 +76,8 @@ from src.services.crawler import (
     get_db_status,
     list_ingestion_jobs,
     delete_program_snapshot,
+    count_programs_by_scope,
+    delete_programs_by_scope,
     patch_program_snapshot,
     query_programs,
     run_agent_crawl,
@@ -1488,6 +1491,45 @@ async def api_programs(
     """Query programs for a university."""
     programs = query_programs(univ_slug=univ_slug, year=year)
     return [ProgramResponse(**p.model_dump()) for p in programs]
+
+
+@app.delete("/programs", response_model=BatchDeleteProgramsResponse)
+async def api_delete_programs_by_scope(
+    univ_slug: str = Query(..., description="University slug"),
+    year: Optional[int] = Query(None, description="Academic year filter"),
+    confirm: bool = Query(
+        False, description="Set true to actually delete; false (default) previews the count."
+    ),
+) -> BatchDeleteProgramsResponse:
+    """Preview or execute a batch delete of programs scoped by university/year."""
+    if not confirm:
+        scope = count_programs_by_scope(univ_slug, year)
+        if scope.count:
+            message = (
+                f"This will delete {scope.count} programs across years {scope.years} "
+                f'for "{univ_slug}". Re-run with confirm=true to execute.'
+            )
+        else:
+            suffix = f" in {year}" if year is not None else ""
+            message = f'No programs found for "{univ_slug}"{suffix}.'
+        return BatchDeleteProgramsResponse(
+            university_slug=scope.university_slug,
+            year=year,
+            count=scope.count,
+            years=scope.years,
+            deleted=False,
+            message=message,
+        )
+
+    scope = delete_programs_by_scope(univ_slug, year)
+    return BatchDeleteProgramsResponse(
+        university_slug=scope.university_slug,
+        year=year,
+        count=scope.count,
+        years=scope.years,
+        deleted=True,
+        message=f'Deleted {scope.count} programs for "{univ_slug}".',
+    )
 
 
 @app.delete("/programs/{program_id}", response_model=DeleteProgramResponse)

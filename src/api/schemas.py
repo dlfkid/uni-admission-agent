@@ -508,6 +508,17 @@ class DeleteProgramResponse(BaseModel):
     message: str
 
 
+class BatchDeleteProgramsResponse(BaseModel):
+    """Response for `DELETE /programs?univ_slug=...` (preview or execute)."""
+
+    university_slug: str
+    year: Optional[int] = None
+    count: int
+    years: list[int] = Field(default_factory=list)
+    deleted: bool
+    message: str
+
+
 class ConfigResponse(BaseModel):
     """Current configuration content (Raw)."""
 
