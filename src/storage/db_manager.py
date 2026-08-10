@@ -864,11 +864,14 @@ class DatabaseManager:
                 stmt = stmt.where(Program.academic_year == year)
             rows = session.exec(stmt).all()
 
+            years = sorted({row.academic_year for row in rows})
+            names = [row.name_en for row in rows]
+
         return ProgramDeleteScope(
             university_slug=university_slug,
             count=len(rows),
-            years=sorted({row.academic_year for row in rows}),
-            deleted_names=[row.name_en for row in rows],
+            years=years,
+            deleted_names=names,
         )
 
     def delete_programs_by_scope(

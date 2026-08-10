@@ -509,7 +509,7 @@ class DeleteProgramResponse(BaseModel):
 
 
 class BatchDeleteProgramsResponse(BaseModel):
-    """Response for `DELETE /programs?univ_slug=...` (preview or execute)."""
+    """Response for ``DELETE /programs?univ_slug=...`` (preview or execute)."""
 
     university_slug: str
     year: Optional[int] = None

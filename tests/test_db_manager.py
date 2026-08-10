@@ -19,7 +19,7 @@ from src.models.requirement import (
     ProgramStudyOption,
     RequirementVersion,
 )
-from src.storage.db_manager import _normalize_text_payload, DatabaseManager
+from src.storage.db_manager import _attach_sqlite_pragmas, _normalize_text_payload, DatabaseManager
 
 
 # ── _normalize_text_payload ──────────────────────────────────────────
@@ -536,6 +536,7 @@ class TestProgramDeleteScope:
         self.engine = create_engine(
             "sqlite:///:memory:", connect_args={"check_same_thread": False}
         )
+        _attach_sqlite_pragmas(self.engine)
         SQLModel.metadata.create_all(self.engine)
         self.dm = DatabaseManager()
         self.dm.engine = self.engine

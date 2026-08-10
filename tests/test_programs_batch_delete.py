@@ -84,6 +84,24 @@ class TestDeleteProgramsRestEndpoint:
         assert "ghost" in response.json()["message"]
         mock_delete.assert_not_called()
 
+    def test_confirm_true_with_zero_match_returns_deleted_true_and_zero_count(self) -> None:
+        scope = ProgramDeleteScope(university_slug="ghost", count=0)
+        with (
+            patch("src.api.server.count_programs_by_scope") as mock_count,
+            patch("src.api.server.delete_programs_by_scope", return_value=scope) as mock_delete,
+            TestClient(fastapi_app) as client,
+        ):
+            response = client.delete(
+                "/programs", params={"univ_slug": "ghost", "confirm": "true"}
+            )
+
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["deleted"] is True
+        assert payload["count"] == 0
+        mock_count.assert_not_called()
+        mock_delete.assert_called_once_with("ghost", None)
+
 
 class TestProgramsDeleteCli:
     def test_preview_without_yes_performs_no_delete(self) -> None:
@@ -156,3 +174,18 @@ class TestProgramsDeleteCli:
         assert result.exit_code == 0
         assert "No programs found" in result.stdout
         mock_delete.assert_not_called()
+
+    def test_yes_with_zero_match_reports_zero_deleted(self) -> None:
+        scope = ProgramDeleteScope(university_slug="ghost", count=0)
+        with (
+            patch("src.cmd.cli.count_programs_by_scope") as mock_count,
+            patch("src.cmd.cli.delete_programs_by_scope", return_value=scope) as mock_delete,
+        ):
+            result = CliRunner().invoke(
+                cli_app, ["programs", "delete", "--university", "ghost", "--yes"]
+            )
+
+        assert result.exit_code == 0
+        assert "0" in result.stdout
+        mock_count.assert_not_called()
+        mock_delete.assert_called_once_with("ghost", None)

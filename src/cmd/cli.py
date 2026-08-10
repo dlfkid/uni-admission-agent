@@ -102,7 +102,8 @@ DATABASE & STATUS:
     audit drill      Show URLs dropped at each filter stage for one audit row
     crawl-summary    One-shot summary of the most recent crawl (for LLM CLI / quick scan)
     diagnostics clear One-shot wipe of quarantine + audit data for one university
-    
+    programs delete  Batch-delete program snapshots for one university (preview unless --yes)
+
 LLM CONFIGURATION:
     llm-config Interactive wizard to configure LLM providers
     
