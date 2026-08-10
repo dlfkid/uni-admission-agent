@@ -10,8 +10,16 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from src.models.admission import StudyMode
-from src.storage.db_manager import _normalize_text_payload, DatabaseManager
+from sqlmodel import Session, SQLModel, create_engine, select
+
+from src.models.admission import StudyMode, University, Program, ProgramCatalog
+from src.models.requirement import (
+    ProgramDeadline,
+    ProgramRequirement,
+    ProgramStudyOption,
+    RequirementVersion,
+)
+from src.storage.db_manager import _attach_sqlite_pragmas, _normalize_text_payload, DatabaseManager
 
 
 # ── _normalize_text_payload ──────────────────────────────────────────
@@ -517,3 +525,186 @@ class TestInferExamFieldsWordBoundary:
             {"category": "language", "requirement_text": "IELTS 6.5 overall"}
         )
         assert r["exam_display_name"] == "IELTS"
+
+
+# ── count_programs_by_scope / delete_programs_by_scope ───────────────
+
+
+class TestProgramDeleteScope:
+    def setup_method(self) -> None:
+        DatabaseManager._instance = None
+        self.engine = create_engine(
+            "sqlite:///:memory:", connect_args={"check_same_thread": False}
+        )
+        _attach_sqlite_pragmas(self.engine)
+        SQLModel.metadata.create_all(self.engine)
+        self.dm = DatabaseManager()
+        self.dm.engine = self.engine
+
+    def teardown_method(self) -> None:
+        DatabaseManager._instance = None
+
+    def _seed(self):
+        """One university (leeds) with 2 programs sharing a catalog (2025,
+        2026) plus full child rows on the 2025 one; one other university
+        (hku) with 1 unrelated program — proves scoping."""
+        with Session(self.engine) as session:
+            leeds = University(name="Leeds", slug="leeds")
+            hku = University(name="HKU", slug="hku")
+            session.add(leeds)
+            session.add(hku)
+            session.commit()
+            session.refresh(leeds)
+            session.refresh(hku)
+
+            catalog = ProgramCatalog(
+                university_id=leeds.id,
+                catalog_key="msc-cs",
+                canonical_name_en="MSc Computer Science",
+            )
+            session.add(catalog)
+            session.commit()
+            session.refresh(catalog)
+
+            p2025 = Program(
+                university_id=leeds.id,
+                program_catalog_id=catalog.id,
+                academic_year=2025,
+                name_en="MSc Computer Science",
+            )
+            p2026 = Program(
+                university_id=leeds.id,
+                program_catalog_id=catalog.id,
+                academic_year=2026,
+                name_en="MSc Computer Science",
+            )
+            other_program = Program(
+                university_id=hku.id,
+                academic_year=2026,
+                name_en="MSc Finance",
+            )
+            session.add(p2025)
+            session.add(p2026)
+            session.add(other_program)
+            session.commit()
+            session.refresh(p2025)
+            session.refresh(p2026)
+            session.refresh(other_program)
+
+            version = RequirementVersion(program_id=p2025.id)
+            session.add(version)
+            session.commit()
+            session.refresh(version)
+
+            session.add(
+                ProgramRequirement(
+                    program_id=p2025.id,
+                    version_id=version.id,
+                    requirement_text="IELTS 6.5",
+                )
+            )
+            session.add(ProgramStudyOption(program_id=p2025.id, duration_months=12))
+            session.add(
+                ProgramDeadline(program_id=p2025.id, round=1, description="Main")
+            )
+            session.commit()
+
+            return {
+                "catalog_id": catalog.id,
+                "p2025_id": p2025.id,
+                "p2026_id": p2026.id,
+                "other_program_id": other_program.id,
+                "other_university_id": hku.id,
+            }
+
+    def test_count_programs_by_scope_slug_only(self) -> None:
+        self._seed()
+        result = self.dm.count_programs_by_scope("leeds")
+        assert result.university_slug == "leeds"
+        assert result.count == 2
+        assert result.years == [2025, 2026]
+        assert sorted(result.deleted_names) == ["MSc Computer Science", "MSc Computer Science"]
+
+    def test_count_programs_by_scope_slug_and_year(self) -> None:
+        self._seed()
+        result = self.dm.count_programs_by_scope("leeds", year=2025)
+        assert result.count == 1
+        assert result.years == [2025]
+
+    def test_count_programs_by_scope_unknown_slug_is_noop(self) -> None:
+        self._seed()
+        result = self.dm.count_programs_by_scope("ghost")
+        assert result.count == 0
+        assert result.years == []
+        assert result.deleted_names == []
+
+    def test_count_programs_by_scope_unknown_year_is_noop(self) -> None:
+        self._seed()
+        result = self.dm.count_programs_by_scope("leeds", year=2099)
+        assert result.count == 0
+
+    def test_delete_programs_by_scope_slug_only_deletes_all_years_and_cascades(self) -> None:
+        ids = self._seed()
+
+        result = self.dm.delete_programs_by_scope("leeds")
+
+        assert result.count == 2
+        assert result.years == [2025, 2026]
+
+        with Session(self.engine) as session:
+            assert session.get(Program, ids["p2025_id"]) is None
+            assert session.get(Program, ids["p2026_id"]) is None
+            # No siblings left in the catalog -> catalog itself is removed.
+            assert session.get(ProgramCatalog, ids["catalog_id"]) is None
+            assert session.exec(
+                select(ProgramRequirement).where(
+                    ProgramRequirement.program_id == ids["p2025_id"]
+                )
+            ).all() == []
+            assert session.exec(
+                select(RequirementVersion).where(
+                    RequirementVersion.program_id == ids["p2025_id"]
+                )
+            ).all() == []
+            assert session.exec(
+                select(ProgramStudyOption).where(
+                    ProgramStudyOption.program_id == ids["p2025_id"]
+                )
+            ).all() == []
+            assert session.exec(
+                select(ProgramDeadline).where(
+                    ProgramDeadline.program_id == ids["p2025_id"]
+                )
+            ).all() == []
+            # Other university's program is untouched.
+            assert session.get(Program, ids["other_program_id"]) is not None
+            assert session.get(University, ids["other_university_id"]) is not None
+
+    def test_delete_programs_by_scope_with_year_keeps_sibling_and_catalog(self) -> None:
+        ids = self._seed()
+
+        result = self.dm.delete_programs_by_scope("leeds", year=2025)
+
+        assert result.count == 1
+        assert result.years == [2025]
+
+        with Session(self.engine) as session:
+            assert session.get(Program, ids["p2025_id"]) is None
+            # 2026 sibling survives -> catalog must survive too.
+            assert session.get(Program, ids["p2026_id"]) is not None
+            assert session.get(ProgramCatalog, ids["catalog_id"]) is not None
+
+    def test_delete_programs_by_scope_unknown_slug_is_noop(self) -> None:
+        self._seed()
+        result = self.dm.delete_programs_by_scope("ghost")
+        assert result.count == 0
+        assert result.years == []
+        assert result.deleted_names == []
+
+    def test_delete_programs_by_scope_unknown_year_is_noop(self) -> None:
+        ids = self._seed()
+        result = self.dm.delete_programs_by_scope("leeds", year=2099)
+        assert result.count == 0
+        with Session(self.engine) as session:
+            assert session.get(Program, ids["p2025_id"]) is not None
+            assert session.get(Program, ids["p2026_id"]) is not None

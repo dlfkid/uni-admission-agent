@@ -48,6 +48,8 @@ from src.services.crawler import (
     import_file,
     list_ingestion_jobs,
     resume_crawl_job,
+    count_programs_by_scope,
+    delete_programs_by_scope,
 )
 from src.services.golden_samples import collect_golden_samples
 from src.services.quality_scoring import score_manifest
@@ -100,7 +102,8 @@ DATABASE & STATUS:
     audit drill      Show URLs dropped at each filter stage for one audit row
     crawl-summary    One-shot summary of the most recent crawl (for LLM CLI / quick scan)
     diagnostics clear One-shot wipe of quarantine + audit data for one university
-    
+    programs delete  Batch-delete program snapshots for one university (preview unless --yes)
+
 LLM CONFIGURATION:
     llm-config Interactive wizard to configure LLM providers
     
@@ -1675,6 +1678,55 @@ upgrade:
         """
     
     typer.echo(help_text)
+
+
+# ---------------------------------------------------------------------------
+#  Programs subcommands
+# ---------------------------------------------------------------------------
+
+programs_app = typer.Typer(
+    name="programs",
+    help="Manage stored program records.",
+    add_completion=False,
+)
+app.add_typer(programs_app)
+
+
+@programs_app.command(name="delete")
+def programs_delete(
+    university: str = typer.Option(
+        ..., "--university", "-u",
+        help="University slug to delete programs for (required).",
+    ),
+    year: Optional[int] = typer.Option(
+        None, "--year", "-y", help="Academic year filter.",
+    ),
+    yes: bool = typer.Option(
+        False, "--yes", help="Skip the preview and execute the delete.",
+    ),
+) -> None:
+    """Batch-delete program snapshots for a university, optionally scoped to one year.
+
+    Without --yes, only previews the affected count — no data is deleted.
+    Deletes each matching program and its child rows (requirements, deadlines,
+    study options, requirement versions), collapsing any program catalog left
+    with zero remaining programs. University/quarantine/audit records are
+    never touched by this command.
+    """
+    if not yes:
+        scope = count_programs_by_scope(university, year)
+        if not scope.count:
+            suffix = f" in {year}" if year is not None else ""
+            typer.echo(f"No programs found for {university!r}{suffix}.")
+            return
+        typer.echo(
+            f"⚠️  This will delete {scope.count} programs across years {scope.years} "
+            f"for {university!r}. Re-run with --yes to confirm."
+        )
+        return
+
+    scope = delete_programs_by_scope(university, year)
+    typer.echo(f"✅ Deleted {scope.count} programs for {university!r}.")
 
 
 # ---------------------------------------------------------------------------

@@ -5,6 +5,7 @@ import json
 import hashlib
 import threading
 from datetime import datetime, timezone
+from dataclasses import dataclass, field
 from typing import Any, Optional, Tuple, List, Dict
 
 from sqlalchemy import event, inspect as sa_inspect
@@ -70,6 +71,21 @@ def _attach_sqlite_pragmas(engine) -> None:
             cursor.execute("PRAGMA synchronous=NORMAL")
         finally:
             cursor.close()
+
+
+@dataclass
+class ProgramDeleteScope:
+    """Result of a university/year-scoped program count or delete.
+
+    `deleted_names` carries each matched program's `name_en` — populated
+    by both count and delete so `src.services.crawler`'s wrapper can feed
+    a delete's names to the taxonomy pruner without a second query.
+    """
+
+    university_slug: str
+    count: int
+    years: list[int] = field(default_factory=list)
+    deleted_names: list[str] = field(default_factory=list)
 
 
 class DatabaseManager:
@@ -831,6 +847,108 @@ class DatabaseManager:
 
             session.commit()
             return True
+
+    def count_programs_by_scope(
+        self, university_slug: str, year: Optional[int] = None
+    ) -> ProgramDeleteScope:
+        """Read-only preview: count/years/names of Program rows matching scope."""
+        with self.get_session() as session:
+            univ = session.exec(
+                select(University).where(University.slug == university_slug)
+            ).first()
+            if not univ:
+                return ProgramDeleteScope(university_slug=university_slug, count=0)
+
+            stmt = select(Program).where(Program.university_id == univ.id)
+            if year is not None:
+                stmt = stmt.where(Program.academic_year == year)
+            rows = session.exec(stmt).all()
+
+            years = sorted({row.academic_year for row in rows})
+            names = [row.name_en for row in rows]
+
+        return ProgramDeleteScope(
+            university_slug=university_slug,
+            count=len(rows),
+            years=years,
+            deleted_names=names,
+        )
+
+    def delete_programs_by_scope(
+        self, university_slug: str, year: Optional[int] = None
+    ) -> ProgramDeleteScope:
+        """Delete all Program rows matching scope + their children, one transaction."""
+        with self.get_session() as session:
+            univ = session.exec(
+                select(University).where(University.slug == university_slug)
+            ).first()
+            if not univ:
+                return ProgramDeleteScope(university_slug=university_slug, count=0)
+
+            stmt = select(Program).where(Program.university_id == univ.id)
+            if year is not None:
+                stmt = stmt.where(Program.academic_year == year)
+            programs = session.exec(stmt).all()
+
+            if not programs:
+                return ProgramDeleteScope(university_slug=university_slug, count=0)
+
+            program_ids = [p.id for p in programs if p.id is not None]
+            years = sorted({p.academic_year for p in programs})
+            names = [p.name_en for p in programs]
+            catalog_ids = {
+                p.program_catalog_id for p in programs if p.program_catalog_id is not None
+            }
+
+            for row in session.exec(
+                select(ProgramRequirement).where(
+                    col(ProgramRequirement.program_id).in_(program_ids)
+                )
+            ).all():
+                session.delete(row)
+
+            for row in session.exec(
+                select(RequirementVersion).where(
+                    col(RequirementVersion.program_id).in_(program_ids)
+                )
+            ).all():
+                session.delete(row)
+
+            for row in session.exec(
+                select(ProgramStudyOption).where(
+                    col(ProgramStudyOption.program_id).in_(program_ids)
+                )
+            ).all():
+                session.delete(row)
+
+            for row in session.exec(
+                select(ProgramDeadline).where(
+                    col(ProgramDeadline.program_id).in_(program_ids)
+                )
+            ).all():
+                session.delete(row)
+
+            for program in programs:
+                session.delete(program)
+            session.flush()
+
+            for catalog_id in catalog_ids:
+                has_sibling = session.exec(
+                    select(Program.id).where(Program.program_catalog_id == catalog_id)
+                ).first()
+                if has_sibling is None:
+                    catalog = session.get(ProgramCatalog, catalog_id)
+                    if catalog is not None:
+                        session.delete(catalog)
+
+            session.commit()
+
+        return ProgramDeleteScope(
+            university_slug=university_slug,
+            count=len(program_ids),
+            years=years,
+            deleted_names=names,
+        )
 
     def patch_program_snapshot(
         self,

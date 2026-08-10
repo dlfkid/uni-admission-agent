@@ -169,6 +169,7 @@ AGENT_RUNTIME=pydanticai
 | `uni-admission taxonomy-export [--output <file>] [--include-learned] [--min-confidence 0.90]` | Export taxonomy snapshot |
 | `uni-admission quarantine list --university <slug> [--year Y]` | List quarantined extractions |
 | `uni-admission quarantine clear --university <slug> [--reason <r>]` | Clear quarantine entries |
+| `uni-admission programs delete --university <slug> [--year Y] [--yes]` | Batch-delete program snapshots for a university, optionally scoped to one year. Preview-only without `--yes`. |
 | `uni-admission audit list --university <slug> [--year Y] [--limit N]` | Inspect index→detail funnel |
 | `uni-admission audit drill <id>` | Drill into one audit row |
 | `uni-admission crawl-summary --university <slug> [--year Y]` | Post-crawl summary (LLM-CLI friendly) |

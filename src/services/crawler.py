@@ -50,7 +50,7 @@ from src.services.crawl_strategy.discovery import (
 )
 from src.services.ingestion_pipeline import IngestionPipeline
 from src.services.subject_taxonomy import get_subject_taxonomy_service
-from src.storage.db_manager import DatabaseManager
+from src.storage.db_manager import DatabaseManager, ProgramDeleteScope
 from src.storage.exporter import ExcelExporter
 from src.storage.importer import ExcelImporter
 from src.agent_runtime.base import AgentRequest
@@ -1256,6 +1256,41 @@ def delete_program_snapshot(program_id: int) -> bool:
             )
 
     return deleted
+
+
+def count_programs_by_scope(
+    university_slug: str, year: Optional[int] = None
+) -> ProgramDeleteScope:
+    """Read-only preview of programs matching a university/year scope."""
+    db = DatabaseManager()
+    return db.count_programs_by_scope(university_slug, year)
+
+
+def delete_programs_by_scope(
+    university_slug: str, year: Optional[int] = None
+) -> ProgramDeleteScope:
+    """Delete all programs matching a university/year scope.
+
+    Prunes orphaned learned taxonomy names for the whole deleted batch in
+    one call after the delete commits, mirroring delete_program_snapshot's
+    per-row taxonomy prune. A prune failure is logged and swallowed — the
+    delete has already committed and must be reported regardless.
+    """
+    db = DatabaseManager()
+    result = db.delete_programs_by_scope(university_slug, year)
+    if result.count > 0 and result.deleted_names:
+        try:
+            get_subject_taxonomy_service().prune_orphaned_learned_names(
+                result.deleted_names
+            )
+        except Exception as exc:  # pylint: disable=broad-except
+            logger.warning(
+                "Failed pruning taxonomy after batch-deleting university_slug=%s year=%s: %s",
+                university_slug,
+                year,
+                exc,
+            )
+    return result
 
 
 def patch_program_snapshot(
