@@ -9,14 +9,15 @@ this level; ``none`` is a single page.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Callable, List, Optional, Tuple
 from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 
 from src.services.crawl_strategy.fetch_ladder import content_is_usable
 from src.services.crawl_strategy.types import (
-    CrawlRange, ExtractItem, FetchMode, PaginateMode, Strategy,
+    CrawlRange, ExtractItem, FetchMode, PaginateMode, SiblingMap, Strategy,
 )
+from src.services.thin_page_supplement import build_sibling_link_map
 
 Fetch = Callable[..., Tuple[str, str]]
 Extract = Callable[[str, str], List[ExtractItem]]
@@ -36,6 +37,13 @@ class PaginateResult:
     items: List[ExtractItem]
     pages_fetched: int
     stopped_reason: str  # reached_limit|exhausted|unusable|safety_cap
+    # Index-row sibling links per detail URL, built from the SAME markdown
+    # each page's items were extracted from (see build_sibling_link_map).
+    sibling_urls: SiblingMap = field(default_factory=dict)
+
+
+def _detail_urls(items: List[ExtractItem]) -> List[str]:
+    return [it.detail_url for it in items if it.detail_url]
 
 
 def _key(item: ExtractItem) -> str:
@@ -100,8 +108,10 @@ def _fetch_for(strategy: Strategy, server_fetch: Fetch, client_fetch: Fetch) -> 
 def _single(first_md: str, index_url: str, crawl_range: CrawlRange,
             extract: Extract) -> PaginateResult:
     items = extract(first_md, index_url)
+    truncated = _truncate(items, crawl_range.limit)
     reason = "reached_limit" if _over(items, crawl_range.limit) else "exhausted"
-    return PaginateResult(_truncate(items, crawl_range.limit), 1, reason)
+    sibling_urls = build_sibling_link_map(first_md, _detail_urls(truncated))
+    return PaginateResult(truncated, 1, reason, sibling_urls)
 
 
 def _paginate_url(*, index_url: str, strategy: Strategy, first_md: str,
@@ -111,26 +121,36 @@ def _paginate_url(*, index_url: str, strategy: Strategy, first_md: str,
     fetch = _fetch_for(strategy, server_fetch, client_fetch)
     acc: List[ExtractItem] = []
     seen: set = set()
-    _absorb(acc, seen, extract(first_md, index_url))
+    # Built incrementally per page from that SAME page's own markdown —
+    # row-level sibling association only exists on the page a link came
+    # from, so it must be captured here, not re-derived later.
+    sibling_urls: SiblingMap = {}
+    first_items = extract(first_md, index_url)
+    _absorb(acc, seen, first_items)
+    sibling_urls.update(build_sibling_link_map(first_md, _detail_urls(first_items)))
     pages = 1
     cur_url, cur_md = index_url, first_md
     while True:
         if _reached(acc, crawl_range.limit):
-            return PaginateResult(_truncate(acc, crawl_range.limit), pages, "reached_limit")
+            return PaginateResult(
+                _truncate(acc, crawl_range.limit), pages, "reached_limit", sibling_urls)
         if pages >= _MAX_URL_PAGES:
-            return PaginateResult(_truncate(acc, crawl_range.limit), pages, "safety_cap")
+            return PaginateResult(
+                _truncate(acc, crawl_range.limit), pages, "safety_cap", sibling_urls)
         nxt = _derive_next_url(cur_url, pages, cur_md, strategy.params)
         if not nxt:
-            return PaginateResult(acc, pages, "exhausted")
+            return PaginateResult(acc, pages, "exhausted", sibling_urls)
         _html, md = fetch(nxt)
         pages += 1
         if not is_usable(md):
-            return PaginateResult(acc, pages, "unusable")
+            return PaginateResult(acc, pages, "unusable", sibling_urls)
         before = len(acc)
-        _absorb(acc, seen, extract(md, nxt))
+        new_items = extract(md, nxt)
+        _absorb(acc, seen, new_items)
+        sibling_urls.update(build_sibling_link_map(md, _detail_urls(new_items)))
         cur_url, cur_md = nxt, md
         if len(acc) == before:
-            return PaginateResult(acc, pages, "exhausted")
+            return PaginateResult(acc, pages, "exhausted", sibling_urls)
 
 
 def _paginate_scroll(*, index_url: str, crawl_range: CrawlRange,
@@ -139,8 +159,10 @@ def _paginate_scroll(*, index_url: str, crawl_range: CrawlRange,
     del first_md  # scroll always re-fetches with the proper target_count
     _html, md = client_fetch(index_url, wait=True, target_count=crawl_range.limit)
     items = extract(md, index_url)
+    truncated = _truncate(items, crawl_range.limit)
     reason = "reached_limit" if _over(items, crawl_range.limit) else "exhausted"
-    return PaginateResult(_truncate(items, crawl_range.limit), 1, reason)
+    sibling_urls = build_sibling_link_map(md, _detail_urls(truncated))
+    return PaginateResult(truncated, 1, reason, sibling_urls)
 
 
 def paginate(*, mechanism: PaginateMode, crawl_range: CrawlRange, index_url: str,

@@ -46,6 +46,37 @@ def test_unknown_known_structure_classifies(tmp_path):
     assert out.strategy_used.endswith("inline_degree")
 
 
+def test_crawl_index_propagates_sibling_urls_end_to_end(tmp_path):
+    """Regression: crawl_index (the strategy-discovery entry point that
+    crawler.py's fast path calls) must surface the sibling map it built
+    from the index page's own markdown all the way out in CrawlOutcome —
+    this is what lets the thin-page-supplement mechanism still work on
+    domains that match a cached strategy instead of going through the
+    LLM index-analysis branch."""
+    md = "".join(
+        f"Programme Name: [Programme {i} BSc](https://example.edu/degrees/programme-{i}-bsc) | "
+        f"[Visit Website](https://example.edu/degrees/programme-{i}-site)\n"
+        for i in range(9)
+    )
+
+    def server(url):
+        return ("<html>", md)
+
+    def client(url, **kw):
+        return ("", "")
+
+    out = crawl_index("https://example.edu/degrees",
+                      server_fetch=server, client_fetch=client,
+                      report_out=tmp_path, timestamp="t")
+    assert out.status == "ok"
+    assert out.names_count == 9
+    assert out.sibling_urls == {
+        f"https://example.edu/degrees/programme-{i}-bsc":
+            [f"https://example.edu/degrees/programme-{i}-site"]
+        for i in range(9)
+    }
+
+
 def test_unsupported_page_exports_report(tmp_path):
     def server(url):
         return ("<html>nav</html>", "[Home](https://x/)\n[Apply](https://x/a)\n")

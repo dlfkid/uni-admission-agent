@@ -1,3 +1,4 @@
+from src.services.crawl_strategy.extractors import extract_inline_degree
 from src.services.crawl_strategy.paginator import detect_mechanism, paginate, PaginateResult
 from src.services.crawl_strategy.types import (
     CrawlRange, ExtractItem, ExtractKind, FetchMode, PaginateMode, Strategy,
@@ -184,3 +185,94 @@ def test_scroll_all_passes_none_target():
     assert received.get("target_count") is None
     assert len(r.items) == 8
     assert r.stopped_reason == "exhausted"
+
+
+# ── sibling-map building (thin-page-supplement fast-path fix) ───────────
+#
+# Regression: strategy-discovery's fast path bypasses the pipeline's LLM
+# index-analysis branch entirely (it feeds `selected_urls` straight in),
+# so it must build its OWN sibling map from the same markdown it already
+# fetched — otherwise any domain matched here silently loses sibling-link
+# discovery, starving the thin-page-supplement mechanism of its main input.
+# `_extract_from_marker`'s synthetic "P:<prefix>:<n>" markdown has no real
+# link syntax, so these use the real extract_inline_degree extractor
+# against Lingnan-shaped rows (name link + "Visit Website" sibling link).
+
+def _row_with_sibling(name: str, url: str, sibling_url: str) -> str:
+    return f"Programme Name: [{name} MSc]({url}) | [Visit Website]({sibling_url})\n"
+
+
+def test_none_builds_sibling_map_from_first_page():
+    md = (
+        _row_with_sibling("Master A0", "https://x.edu/a0", "https://x.edu/a0-site")
+        + _row_with_sibling("Master A1", "https://x.edu/a1", "https://x.edu/a1-site")
+    )
+    r = paginate(
+        mechanism=PaginateMode.NONE, crawl_range=CrawlRange.of(10),
+        index_url="https://x.edu/p", strategy=_STRAT,
+        first_html="<html>", first_md=md,
+        server_fetch=lambda u: ("", ""), client_fetch=lambda u, **k: ("", ""),
+        extract=extract_inline_degree)
+    assert len(r.items) == 2
+    assert r.sibling_urls == {
+        "https://x.edu/a0": ["https://x.edu/a0-site"],
+        "https://x.edu/a1": ["https://x.edu/a1-site"],
+    }
+
+
+def test_url_pages_accumulates_sibling_map_across_pages():
+    pages = {
+        1: _row_with_sibling("Master A0", "https://x.edu/a0", "https://x.edu/a0-site"),
+        2: _row_with_sibling("Master B0", "https://x.edu/b0", "https://x.edu/b0-site"),
+    }
+
+    def server(url):
+        import urllib.parse as up
+        q = dict(up.parse_qsl(up.urlsplit(url).query))
+        return ("<html>", pages[int(q.get("page", 2))])
+
+    r = paginate(
+        mechanism=PaginateMode.URL_PAGES, crawl_range=CrawlRange.of(2),
+        index_url="https://x.edu/p", strategy=_STRAT,
+        first_html="<html>", first_md=pages[1],
+        server_fetch=server, client_fetch=lambda u, **k: ("", ""),
+        extract=extract_inline_degree, is_usable=bool)
+    assert r.stopped_reason == "reached_limit"
+    assert len(r.items) == 2
+    # Both pages' sibling links present — proves accumulation, not just
+    # "whichever page happened to run last" overwriting the other.
+    assert r.sibling_urls == {
+        "https://x.edu/a0": ["https://x.edu/a0-site"],
+        "https://x.edu/b0": ["https://x.edu/b0-site"],
+    }
+
+
+def test_scroll_builds_sibling_map():
+    md = _row_with_sibling("Master A0", "https://x.edu/a0", "https://x.edu/a0-site")
+
+    def client(url, **kw):
+        return ("<html>", md)
+
+    r = paginate(
+        mechanism=PaginateMode.SCROLL, crawl_range=CrawlRange.of(10),
+        index_url="https://x.edu/p",
+        strategy=Strategy(FetchMode.CLIENT_WAIT, ExtractKind.TEXT_HEADING,
+                          paginate=PaginateMode.SCROLL),
+        first_html="<html>", first_md="",
+        server_fetch=lambda u: ("", ""), client_fetch=client,
+        extract=extract_inline_degree)
+    assert r.sibling_urls == {"https://x.edu/a0": ["https://x.edu/a0-site"]}
+
+
+def test_no_sibling_link_on_row_yields_empty_map():
+    """A bare stub with no sibling row-mate must not fabricate an entry —
+    matches the real "Master of Arts in Chinese" structural-ceiling case."""
+    md = "Programme Name: [Master A0 MSc](https://x.edu/a0)\n"
+    r = paginate(
+        mechanism=PaginateMode.NONE, crawl_range=CrawlRange.of(10),
+        index_url="https://x.edu/p", strategy=_STRAT,
+        first_html="<html>", first_md=md,
+        server_fetch=lambda u: ("", ""), client_fetch=lambda u, **k: ("", ""),
+        extract=extract_inline_degree)
+    assert len(r.items) == 1
+    assert r.sibling_urls == {}

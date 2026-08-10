@@ -551,9 +551,11 @@ async def crawl_url(
         crawl_range = resolve_crawl_range(limit, crawl_all)
         discovery = await asyncio.to_thread(
             discover_with_default_adapters, url, crawl_range)
+    discovery_sibling_urls = None
     if discovery is not None and discovery.matched:
         selected_urls = list(discovery.link_texts)
         selected_link_texts = dict(discovery.link_texts)
+        discovery_sibling_urls = discovery.sibling_urls
         logger.info(
             "strategy discovery matched url=%s strategy=%s names=%d nameless=%d "
             "stopped=%s", url, discovery.strategy_used, len(selected_urls),
@@ -587,6 +589,7 @@ async def crawl_url(
         supplement_url_re=(
             discovery.supplement_url_re if discovery is not None else None
         ),
+        selected_sibling_urls=discovery_sibling_urls,
         candidate_taxonomy_filter_enabled=candidate_taxonomy_filter_enabled,
         candidate_taxonomy_filter_threshold=candidate_taxonomy_filter_threshold,
         candidate_taxonomy_filter_top_k=candidate_taxonomy_filter_top_k,

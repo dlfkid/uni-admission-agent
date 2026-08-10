@@ -12,7 +12,8 @@ def _matched():
         matched=True,
         link_texts={"https://x.edu/a": "A MSc", "https://x.edu/b": "B MSc"},
         names_total=2, strategy_used="server×heading_link",
-        stopped_reason="exhausted", pages_fetched=1)
+        stopped_reason="exhausted", pages_fetched=1,
+        sibling_urls={"https://x.edu/a": ["https://x.edu/a-dept-site"]})
 
 
 @pytest.fixture(name="run_new_job_spy")
@@ -39,6 +40,43 @@ async def test_matched_discovery_injects_selected_urls(run_new_job_spy, monkeypa
     kwargs = run_new_job_spy.call_args.kwargs
     assert sorted(kwargs["selected_urls"]) == ["https://x.edu/a", "https://x.edu/b"]
     assert kwargs["selected_link_texts"] == _matched().link_texts
+
+
+@pytest.mark.asyncio
+async def test_matched_discovery_injects_sibling_urls(run_new_job_spy, monkeypatch):
+    """Regression: the strategy-discovery fast path takes the pipeline's
+    `selected_urls` branch, which never builds a sibling map on its own
+    (that only happens in the LLM index-analysis branch) — so a domain
+    matched by this fast path silently starved the thin-page-supplement
+    mechanism of its main input on every crawl. discover_with_default_adapters
+    now builds the sibling map from the SAME markdown it already fetched to
+    extract names, and crawl_url must thread it through to run_new_job."""
+    monkeypatch.setattr(
+        crawler_mod, "discover_with_default_adapters", lambda url, rng: _matched())
+
+    await crawler_mod.crawl_url(
+        "https://x.edu/p", "xuni", 2026, page_type_hint="index", limit=10)
+
+    kwargs = run_new_job_spy.call_args.kwargs
+    assert kwargs["selected_sibling_urls"] == {
+        "https://x.edu/a": ["https://x.edu/a-dept-site"]
+    }
+
+
+@pytest.mark.asyncio
+async def test_unmatched_discovery_passes_no_sibling_urls(run_new_job_spy, monkeypatch):
+    """An unsupported/fallback discovery (matched=False) must not inject a
+    sibling map either — it carries no useful data and the caller should
+    behave exactly as if strategy discovery had never run."""
+    monkeypatch.setattr(
+        crawler_mod, "discover_with_default_adapters",
+        lambda url, rng: DiscoveryResult(matched=False))
+
+    await crawler_mod.crawl_url(
+        "https://x.edu/p", "xuni", 2026, page_type_hint="index")
+
+    kwargs = run_new_job_spy.call_args.kwargs
+    assert kwargs["selected_sibling_urls"] is None
 
 
 @pytest.mark.asyncio
@@ -70,6 +108,7 @@ async def test_unmatched_discovery_falls_back_unchanged(run_new_job_spy, monkeyp
         "batch_index": None,
         "batch_total": None,
         "supplement_url_re": None,
+        "selected_sibling_urls": None,
         "candidate_taxonomy_filter_enabled": False,
         "candidate_taxonomy_filter_threshold": 0.75,
         "candidate_taxonomy_filter_top_k": 30,

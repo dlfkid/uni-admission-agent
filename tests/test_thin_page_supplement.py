@@ -869,6 +869,83 @@ def test_fetch_raw_surfaces_known_detail_pattern_from_cache(monkeypatch) -> None
     assert result["raw_page_count"] == 1  # fetch behavior itself untouched
 
 
+class _FakeSelectedUrlsScraper:
+    """Minimal AdmissionScraper stand-in for the `selected_urls` fetch path
+    (the one strategy-discovery's fast path takes — never builds its own
+    sibling map, unlike the auto-detected "entry_index" branch)."""
+
+    def __init__(self) -> None:
+        self.router = MagicMock()
+        self._export_md = False
+        self._export_path = None
+
+    def _reset_session_state(self) -> None:
+        return
+
+    async def _crawl_urls(self, urls):
+        from src.models.scraper_models import CrawlPageResult
+
+        return [
+            CrawlPageResult(
+                url=u, markdown="# Some Page", char_count=11, links=[],
+                status_code=200, html="<html>Some Page</html>",
+            )
+            for u in urls
+        ]
+
+
+def test_fetch_raw_seeds_sibling_urls_from_strategy_discovery(monkeypatch) -> None:
+    """Regression: the `selected_urls` branch (taken when strategy-discovery
+    matches a domain) never calls build_sibling_link_map itself — it must
+    use whatever sibling map the caller supplies via
+    selected_sibling_urls, or a domain matched by that fast path silently
+    loses sibling-link discovery on every crawl."""
+    from src.services.ingestion_pipeline import IngestionPipeline
+
+    monkeypatch.setattr(
+        "src.services.ingestion_pipeline.AdmissionScraper", _FakeSelectedUrlsScraper
+    )
+
+    pipeline = IngestionPipeline(db_manager=MagicMock())
+    result = asyncio.run(
+        pipeline._stage_fetch_raw(
+            {
+                "url": "https://www.ln.edu.hk/sgs/programmes-on-offer",
+                "page_type_hint": "index",
+                "selected_urls": [_LN_STUB_URL],
+                "selected_sibling_urls": {_LN_STUB_URL: [_DEPT_HOME]},
+            }
+        )
+    )
+
+    rows_by_url = {row["url"]: row for row in result["raw_pages"]}
+    assert rows_by_url[_LN_STUB_URL]["sibling_urls"] == [_DEPT_HOME]
+
+
+def test_fetch_raw_selected_urls_without_sibling_hint_stays_empty(monkeypatch) -> None:
+    """No selected_sibling_urls supplied (today's every other caller) must
+    behave exactly as before — empty sibling_urls, not a crash."""
+    from src.services.ingestion_pipeline import IngestionPipeline
+
+    monkeypatch.setattr(
+        "src.services.ingestion_pipeline.AdmissionScraper", _FakeSelectedUrlsScraper
+    )
+
+    pipeline = IngestionPipeline(db_manager=MagicMock())
+    result = asyncio.run(
+        pipeline._stage_fetch_raw(
+            {
+                "url": "https://www.ln.edu.hk/sgs/programmes-on-offer",
+                "page_type_hint": "index",
+                "selected_urls": [_LN_STUB_URL],
+            }
+        )
+    )
+
+    rows_by_url = {row["url"]: row for row in result["raw_pages"]}
+    assert rows_by_url[_LN_STUB_URL]["sibling_urls"] == []
+
+
 def test_fetch_raw_tolerates_cache_lookup_failure(monkeypatch) -> None:
     """A broken/corrupt strategy_cache.json must not take down the fetch
     stage — known_detail_pattern degrades to None, same as no entry."""
@@ -936,3 +1013,242 @@ def test_extract_structured_known_detail_pattern_defaults_to_none(monkeypatch) -
 
     assert result["known_detail_pattern"] is None
     assert extract_mock.call_count == 1
+
+
+# ── concurrent supplement fetch across multiple thin rows ───────────────
+#
+# expand_thin_page's own hop1/hop2 fetches are inherently sequential (hop2
+# depends on hop1's content) — that's not the bug. The bug was ACROSS rows:
+# each thin row's asyncio.run(expand_thin_page(...)) ran to completion
+# before the loop even reached the next row, so N thin rows in one crawl
+# cost N times a single row's network latency for no reason (nothing about
+# row K's fetch depends on row K-1's). These lock in the fix: all thin
+# rows' fetches now run in ONE event loop, concurrently, bounded by
+# thin_page_supplement_max_concurrency.
+
+def test_pipeline_fetches_thin_supplements_concurrently(monkeypatch) -> None:
+    """Two thin rows must have OVERLAPPING supplement fetches, not
+    sequential ones.
+
+    Proven structurally with a rendezvous barrier, NOT a wall-clock
+    duration threshold — an earlier version of this test asserted
+    elapsed-time-close-to-one-sleep and passed reliably standalone, but
+    failed 4/4 times when run as part of the full suite (shared-process
+    scheduling/GC overhead inflated the measured duration past the
+    threshold on an otherwise-correct, genuinely concurrent run). A timing
+    assertion can't tell "really sequential" apart from "briefly delayed by
+    an unrelated process," so it isn't reliable evidence either way.
+
+    Instead: each fake fetch waits on an Event that only gets set once BOTH
+    rows have started. A sequential implementation could never satisfy
+    this — row 2 cannot increment ``started`` while row 1 is still blocked
+    waiting for it — so this proves genuine concurrent scheduling by
+    construction, not by racing a clock. A regression to sequential
+    execution fails this test via timeout, not flakiness.
+    """
+    from unittest.mock import MagicMock as MM
+
+    from src.services.ingestion_pipeline import IngestionPipeline
+
+    monkeypatch.setattr("src.services.ingestion_pipeline.LLMCleanerAgent", MM)
+
+    thin = {"name_en": "MA in AI", "deadlines": [{"round": 1}]}
+    rich = {"name_en": "MA in AI", "tuition_amount": 180000.0, "currency": "HKD"}
+    extract_mock = MM(side_effect=[
+        (dict(thin), None), (dict(thin), None),   # pass 1 (first extraction): row1, row2
+        (dict(rich), None), (dict(rich), None),   # pass 3 (post-supplement re-extract): row1, row2
+    ])
+    monkeypatch.setattr(
+        "src.services.ingestion_pipeline.extract_program_data_from_page", extract_mock,
+    )
+
+    started = 0
+    both_started = asyncio.Event()
+
+    async def fake_expand(scraper, router, page, sibling_urls=None):
+        nonlocal started
+        started += 1
+        if started >= 2:
+            both_started.set()
+        # Deadlocks (until the timeout) under sequential execution: row 2
+        # can only reach the `started += 1` above once row 1 has already
+        # returned, but row 1 cannot return until this resolves.
+        await asyncio.wait_for(both_started.wait(), timeout=1.0)
+        return "\n\n## Supplemental Detail\nTuition HK$180,000", ["https://x.edu/sub"]
+
+    monkeypatch.setattr("src.services.ingestion_pipeline.expand_thin_page", fake_expand)
+    monkeypatch.setattr(
+        "src.services.crawl_strategy.learned_cache.record_detail_pattern",
+        lambda url, pattern: None,
+    )
+
+    pipeline = IngestionPipeline(db_manager=MM())
+    row1 = _thin_row()
+    row2 = dict(_thin_row())
+    row2["url"] = _thin_row()["url"] + "-2"
+
+    result = pipeline._stage_extract_structured(
+        {"univ_slug": "ln", "year": 2026, "page_type_hint": "detail"},
+        {"raw_pages": [row1, row2]},
+    )
+
+    assert started == 2
+    assert len(result["program_candidates"]) == 2
+    # Both rows' re-extraction succeeded — a row stuck on the barrier past
+    # its timeout would have kept tuition_amount None (no re-extract pass).
+    assert all(
+        c.get("tuition_amount") == 180000.0 for c in result["program_candidates"]
+    )
+
+
+def test_pipeline_thin_supplement_concurrency_is_bounded(monkeypatch) -> None:
+    """thin_page_supplement_max_concurrency caps how many fetches run at
+    once — necessary so a crawl with many thin pages doesn't fire dozens of
+    simultaneous browser contexts at the target site (impolite, and a
+    plausible anti-bot trigger). With max_concurrency=2 and 4 thin rows, at
+    most 2 fake fetches may be in flight at any instant — and the bound
+    must actually be reached, proving this isn't secretly still serial."""
+    from unittest.mock import MagicMock as MM
+
+    from src.services.ingestion_pipeline import IngestionPipeline
+
+    monkeypatch.setattr("src.services.ingestion_pipeline.LLMCleanerAgent", MM)
+
+    thin = {"name_en": "MA in X", "deadlines": [{"round": 1}]}
+    extract_mock = MM(side_effect=[(dict(thin), None) for _ in range(4)])
+    monkeypatch.setattr(
+        "src.services.ingestion_pipeline.extract_program_data_from_page", extract_mock,
+    )
+
+    in_flight = 0
+    max_in_flight = 0
+
+    async def fake_expand(scraper, router, page, sibling_urls=None):
+        nonlocal in_flight, max_in_flight
+        in_flight += 1
+        max_in_flight = max(max_in_flight, in_flight)
+        await asyncio.sleep(0.05)
+        in_flight -= 1
+        return "", []  # no supplement content found -> no re-extract pass needed
+
+    monkeypatch.setattr("src.services.ingestion_pipeline.expand_thin_page", fake_expand)
+
+    pipeline = IngestionPipeline(db_manager=MM())
+    rows = []
+    for i in range(4):
+        r = dict(_thin_row())
+        r["url"] = f"{_thin_row()['url']}-{i}"
+        rows.append(r)
+
+    result = pipeline._stage_extract_structured(
+        {
+            "univ_slug": "ln",
+            "year": 2026,
+            "page_type_hint": "detail",
+            "thin_page_supplement_max_concurrency": 2,
+        },
+        {"raw_pages": rows},
+    )
+
+    assert extract_mock.call_count == 4  # first pass only; no supplement found
+    assert result["thin_supplement_urls"] == []
+    assert max_in_flight == 2  # bounded, and the bound was actually reached
+
+
+def test_pipeline_thin_supplement_concurrency_defaults_without_config(monkeypatch) -> None:
+    """No explicit thin_page_supplement_max_concurrency in the request must
+    not crash and must still allow more than one fetch in flight (the
+    documented default is 3) — existing callers that never set this key
+    keep working exactly as before, just faster."""
+    from unittest.mock import MagicMock as MM
+
+    from src.services.ingestion_pipeline import IngestionPipeline
+
+    monkeypatch.setattr("src.services.ingestion_pipeline.LLMCleanerAgent", MM)
+
+    thin = {"name_en": "MA in X", "deadlines": [{"round": 1}]}
+    extract_mock = MM(side_effect=[(dict(thin), None) for _ in range(2)])
+    monkeypatch.setattr(
+        "src.services.ingestion_pipeline.extract_program_data_from_page", extract_mock,
+    )
+
+    max_in_flight = 0
+    in_flight = 0
+
+    async def fake_expand(scraper, router, page, sibling_urls=None):
+        nonlocal in_flight, max_in_flight
+        in_flight += 1
+        max_in_flight = max(max_in_flight, in_flight)
+        await asyncio.sleep(0.05)
+        in_flight -= 1
+        return "", []
+
+    monkeypatch.setattr("src.services.ingestion_pipeline.expand_thin_page", fake_expand)
+
+    pipeline = IngestionPipeline(db_manager=MM())
+    rows = []
+    for i in range(2):
+        r = dict(_thin_row())
+        r["url"] = f"{_thin_row()['url']}-{i}"
+        rows.append(r)
+
+    pipeline._stage_extract_structured(
+        {"univ_slug": "ln", "year": 2026, "page_type_hint": "detail"},
+        {"raw_pages": rows},
+    )
+
+    assert max_in_flight == 2  # both ran concurrently under the default cap of 3
+
+
+def test_pipeline_thin_supplement_one_row_failure_does_not_abort_others(monkeypatch) -> None:
+    """A single row's expand_thin_page exception must not prevent OTHER
+    rows' supplements from completing — asyncio.gather without
+    return_exceptions=True would cancel every sibling task the moment one
+    coroutine raises."""
+    from unittest.mock import MagicMock as MM
+
+    from src.services.ingestion_pipeline import IngestionPipeline
+
+    monkeypatch.setattr("src.services.ingestion_pipeline.LLMCleanerAgent", MM)
+
+    thin = {"name_en": "MA in X", "deadlines": [{"round": 1}]}
+    rich = {"name_en": "MA in X", "tuition_amount": 100000.0, "currency": "HKD"}
+    extract_mock = MM(side_effect=[
+        (dict(thin), None), (dict(thin), None),  # pass 1: row1 (fails), row2 (succeeds)
+        (dict(rich), None),                       # pass 3 re-extract: row2 only
+    ])
+    monkeypatch.setattr(
+        "src.services.ingestion_pipeline.extract_program_data_from_page", extract_mock,
+    )
+
+    async def fake_expand(scraper, router, page, sibling_urls=None):
+        if "fails" in page.url:
+            raise RuntimeError("network exploded")
+        return "\n\n## Supplemental Detail\nTuition HK$100,000", ["https://x.edu/sub"]
+
+    monkeypatch.setattr("src.services.ingestion_pipeline.expand_thin_page", fake_expand)
+    monkeypatch.setattr(
+        "src.services.crawl_strategy.learned_cache.record_detail_pattern",
+        lambda url, pattern: None,
+    )
+
+    pipeline = IngestionPipeline(db_manager=MM())
+    row_fails = dict(_thin_row())
+    row_fails["url"] = _thin_row()["url"] + "-fails"
+    row_ok = dict(_thin_row())
+    row_ok["url"] = _thin_row()["url"] + "-ok"
+
+    result = pipeline._stage_extract_structured(
+        {"univ_slug": "ln", "year": 2026, "page_type_hint": "detail"},
+        {"raw_pages": [row_fails, row_ok]},
+    )
+
+    assert len(result["program_candidates"]) == 2
+    # The failing row keeps its original thin result (no tuition).
+    failing_candidate = next(
+        c for c in result["program_candidates"]
+        if c.get("tuition_amount") is None
+    )
+    assert failing_candidate.get("tuition_amount") is None
+    # The other row's supplement still succeeded despite the sibling's crash.
+    assert result["thin_supplement_urls"] == [row_ok["url"]]
