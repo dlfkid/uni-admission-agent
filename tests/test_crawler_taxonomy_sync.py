@@ -123,10 +123,10 @@ def test_delete_programs_by_scope_swallows_taxonomy_prune_failure(monkeypatch) -
         def prune_orphaned_learned_names(self, names):
             raise RuntimeError("taxonomy db unavailable")
 
-    monkeypatch.setattr("src.services.crawler.DatabaseManager", lambda: _FakeDb())
+    monkeypatch.setattr("src.services.crawler.DatabaseManager", _FakeDb)
     monkeypatch.setattr(
         "src.services.crawler.get_subject_taxonomy_service",
-        lambda: _FakeTaxonomyService(),
+        _FakeTaxonomyService,
     )
 
     # Must not raise, and must still report the delete that already committed.
