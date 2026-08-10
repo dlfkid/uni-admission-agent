@@ -132,6 +132,7 @@ def crawl_index(
     items = []
     pages_fetched = 0
     stopped_reason = ""
+    sibling_urls: dict = {}
     if confident and kind is not None and usable and extractor is not None:
         pr = paginate(
             mechanism=mechanism, crawl_range=crawl_range, index_url=index_url,
@@ -141,6 +142,7 @@ def crawl_index(
         items = pr.items
         pages_fetched = pr.pages_fetched
         stopped_reason = pr.stopped_reason
+        sibling_urls = pr.sibling_urls
 
     if items:
         names = [it.name_en for it in items]
@@ -150,6 +152,7 @@ def crawl_index(
             status="ok", university=uni, names=names, items=items,
             names_count=len(names), strategy_used=strat,
             pages_fetched=pages_fetched, stopped_reason=stopped_reason,
+            sibling_urls=sibling_urls,
             message_for_user=(
                 f"成功抓取 {len(names)} 门课程名字"
                 f"（策略 {strat}，翻页 {mechanism.value}，{reason_zh}）。"),

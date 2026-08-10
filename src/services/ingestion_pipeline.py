@@ -8,7 +8,7 @@ import logging
 import re
 import uuid
 from datetime import datetime, timedelta, timezone
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from pydantic import BaseModel, Field, ValidationError, field_validator
 from sqlmodel import col, select
@@ -259,6 +259,7 @@ class IngestionPipeline:
         html_content: Optional[str] = None,
         selected_urls: Optional[List[str]] = None,
         selected_link_texts: Optional[Dict[str, str]] = None,
+        selected_sibling_urls: Optional[Dict[str, List[str]]] = None,
         max_detail_pages: Optional[int] = None,
         browser_automation_enabled: bool = False,
         detail_pages_batch: Optional[List[Dict[str, Any]]] = None,
@@ -289,6 +290,10 @@ class IngestionPipeline:
             "html_content": html_content,
             "selected_urls": selected_urls or [],
             "selected_link_texts": dict(selected_link_texts or {}),
+            "selected_sibling_urls": {
+                str(url): list(sibs)
+                for url, sibs in dict(selected_sibling_urls or {}).items()
+            },
             "max_detail_pages": max_detail_pages,
             "browser_automation_enabled": bool(browser_automation_enabled),
             "detail_pages_batch": list(detail_pages_batch or []),
@@ -730,7 +735,19 @@ class IngestionPipeline:
         # here because row-level association only exists on the index page —
         # the routing-stub detail pages this feeds never link back out. Used
         # by the extract stage's thin-page supplement expansion.
-        selected_sibling_urls: Dict[str, List[str]] = {}
+        #
+        # Seeded from the caller when one is supplied (the strategy-discovery
+        # fast path below builds its own map from the same markdown it
+        # already fetched, since taking the `selected_urls` branch skips the
+        # "entry_index" branch that would otherwise build this map). Without
+        # this seed, any domain whose fetch strategy gets cached loses
+        # sibling-link discovery on every subsequent crawl — the
+        # thin-page-supplement mechanism silently stops finding anything to
+        # fetch even though the source markdown still has the links.
+        selected_sibling_urls: Dict[str, List[str]] = {
+            str(url): [str(u) for u in sibs]
+            for url, sibs in dict(request_payload.get("selected_sibling_urls") or {}).items()
+        }
         html_content = request_payload.get("html_content")
         page_type_hint = str(request_payload.get("page_type_hint") or "auto")
         supplement_url_re: Optional[str] = request_payload.get("supplement_url_re") or None
@@ -1219,6 +1236,18 @@ class IngestionPipeline:
             request_payload.get("thin_page_supplement_enabled"),
             default=True,
         )
+        # Bounds how many rows' supplement fetches run at once (see the
+        # concurrent-gather pass below). Each fetch is 1-5 real HTTP round
+        # trips against the SAME target university, so this is a politeness
+        # cap as much as a throughput knob — unbounded concurrency across a
+        # crawl with dozens of thin rows would fire that many simultaneous
+        # browser contexts at one site, a plausible anti-bot trigger.
+        thin_supplement_max_concurrency = self._coerce_int(
+            request_payload.get("thin_page_supplement_max_concurrency"),
+            default=3,
+            minimum=1,
+            maximum=10,
+        )
         supplement_scraper: Optional[AdmissionScraper] = None
         supplement_success_urls: List[str] = []
 
@@ -1230,6 +1259,55 @@ class IngestionPipeline:
                 supplement_scraper = AdmissionScraper()
             return supplement_scraper
 
+        async def _gather_thin_supplements(
+            items: List[Tuple[Any, List[str]]],
+        ) -> List[Tuple[str, List[str]]]:
+            """Run expand_thin_page for every thin row concurrently, bounded
+            by thin_supplement_max_concurrency. A single row's exception is
+            caught HERE (per-item, matching the previous per-row try/except)
+            so one row's fetch failure can never abort another row's — same
+            behavior as before, just no longer serialized across rows.
+            """
+            semaphore = asyncio.Semaphore(thin_supplement_max_concurrency)
+
+            async def _one(item_page: Any, item_siblings: List[str]) -> Tuple[str, List[str]]:
+                async with semaphore:
+                    # Unconditional start marker — the success-path logging
+                    # below is gated on supplement_md being non-empty, which
+                    # silently produces zero log output for the common
+                    # "no usable sibling/candidate" case (a real, valid
+                    # outcome, not a failure). Without this line there is no
+                    # way to observe from logs alone that N rows' fetches
+                    # actually ran concurrently in production.
+                    logger.info(
+                        "[ThinSupplement] fetching supplement for %s (siblings=%d)",
+                        item_page.url, len(item_siblings),
+                    )
+                    try:
+                        return await expand_thin_page(
+                            _supplement_scraper_factory,
+                            getattr(cleaner, "router", None),
+                            item_page,
+                            sibling_urls=item_siblings,
+                        )
+                    except Exception:  # pylint: disable=broad-except
+                        logger.warning(
+                            "[ThinSupplement] expansion failed for %s", item_page.url,
+                            exc_info=True,
+                        )
+                        return "", []
+
+            return list(
+                await asyncio.gather(*(_one(p, s) for p, s in items))
+            )
+
+        # Pass 1: first-pass extraction for every row. Thin rows are flagged
+        # but NOT fetched yet — their supplement fetch is deferred to pass 2
+        # so all of them run concurrently instead of one row blocking the
+        # next for its own full network round-trip (the bug this whole
+        # restructure exists to fix: nothing about row K's fetch depends on
+        # row K-1's).
+        row_states: List[Dict[str, Any]] = []
         for row in raw_pages:
             row_markdown = str(row.get("markdown") or "")
             row_html_raw = row.get("html")
@@ -1310,6 +1388,7 @@ class IngestionPipeline:
                 selected_anchor_text=str(row.get("selected_anchor_text") or "").strip() or None,
             )
 
+            thin_pending: Optional[Dict[str, Any]] = None
             if (
                 thin_supplement_enabled
                 and program_data is not None
@@ -1320,21 +1399,65 @@ class IngestionPipeline:
                     for u in (row.get("sibling_urls") or [])
                     if str(u or "").strip()
                 ]
-                supplement_md, fetched_supplements = "", []
-                try:
-                    supplement_md, fetched_supplements = asyncio.run(
-                        expand_thin_page(
-                            _supplement_scraper_factory,
-                            getattr(cleaner, "router", None),
-                            page,
-                            sibling_urls=siblings,
-                        )
-                    )
-                except Exception:  # pylint: disable=broad-except
-                    logger.warning(
-                        "[ThinSupplement] expansion failed for %s", page.url,
-                        exc_info=True,
-                    )
+                # The actual fetch is deferred to pass 2 below (concurrent
+                # across all thin rows) — nothing about this row's
+                # supplement depends on any other row's.
+                thin_pending = {"siblings": siblings}
+
+            row_states.append({
+                "row": row,
+                "page": page,
+                "row_html": row_html,
+                "from_browser": from_browser,
+                "taxonomy_matches": taxonomy_matches,
+                "best_match": best_match,
+                "best_score": best_score,
+                "name_hints": name_hints,
+                "program_data": program_data,
+                "error": error,
+                "thin_pending": thin_pending,
+            })
+
+        # Pass 2: fetch every thin row's supplement concurrently (bounded by
+        # thin_supplement_max_concurrency) in one event loop. This IS the
+        # fix: previously each row's asyncio.run(expand_thin_page(...)) ran
+        # to completion before the loop even reached the next row, so N thin
+        # rows cost N times a single row's network latency for no reason.
+        thin_indices = [
+            i for i, rs in enumerate(row_states) if rs["thin_pending"] is not None
+        ]
+        if thin_indices:
+            fetch_items = [
+                (row_states[i]["page"], row_states[i]["thin_pending"]["siblings"])
+                for i in thin_indices
+            ]
+            supplement_results = asyncio.run(_gather_thin_supplements(fetch_items))
+            for i, (supplement_md, fetched_supplements) in zip(thin_indices, supplement_results):
+                row_states[i]["thin_pending"]["supplement_md"] = supplement_md
+                row_states[i]["thin_pending"]["fetched_supplements"] = fetched_supplements
+
+        # Pass 3: finalize every row in original order — merge supplement
+        # content (if pass 2 found any for this row), then run the shared
+        # post-processing that applies identically whether or not thin-page
+        # expansion ran. Everything from here down is unchanged behavior
+        # from before the pass 1/2/3 split; only the "when does the network
+        # fetch happen" part moved.
+        for rs in row_states:
+            row = rs["row"]
+            page = rs["page"]
+            row_html = rs["row_html"]
+            from_browser = rs["from_browser"]
+            taxonomy_matches = rs["taxonomy_matches"]
+            best_match = rs["best_match"]
+            best_score = rs["best_score"]
+            name_hints = rs["name_hints"]
+            program_data, error = rs["program_data"], rs["error"]
+
+            thin_pending = rs["thin_pending"]
+            if thin_pending is not None:
+                siblings = thin_pending["siblings"]
+                supplement_md = thin_pending.get("supplement_md") or ""
+                fetched_supplements = thin_pending.get("fetched_supplements") or []
                 if supplement_md:
                     logger.info(
                         "[ThinSupplement] %s extracted without tuition; "

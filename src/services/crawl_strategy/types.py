@@ -5,6 +5,8 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Dict, List, Literal, Optional
 
+SiblingMap = Dict[str, List[str]]
+
 
 class FetchMode(str, Enum):
     """Transport/rendering mode used to retrieve a page."""
@@ -111,3 +113,12 @@ class CrawlOutcome:
     message_for_user: str = ""
     pages_fetched: int = 0
     stopped_reason: str = ""
+    # Index-row sibling links per detail URL (e.g. a "Visit Website" link
+    # sitting next to the programme-name link on the SAME row) — built from
+    # the same markdown this strategy already fetched to extract `items`.
+    # The thin-page-supplement mechanism (src/services/thin_page_supplement.py)
+    # needs this to recover fields hidden behind a hub/stub detail-page
+    # layout; without it, strategy-discovery's fast path (which never goes
+    # through the LLM index-analysis branch) silently starves that
+    # mechanism of its main input on every domain it matches.
+    sibling_urls: SiblingMap = field(default_factory=dict)

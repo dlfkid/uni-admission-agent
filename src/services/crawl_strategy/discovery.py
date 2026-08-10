@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 
 from src.services.crawl_strategy.orchestrator import crawl_index
 from src.services.crawl_strategy.registry import lookup
@@ -45,6 +45,11 @@ class DiscoveryResult:
     # Regex string from the matched Strategy — pipeline uses it to fetch supplemental
     # sub-pages (e.g. CityU tuition pages) before LLM extraction.
     supplement_url_re: Optional[str] = None
+    # Index-row sibling links per detail URL (see CrawlOutcome.sibling_urls) —
+    # feeds the thin-page-supplement mechanism when this fast path is taken,
+    # since it otherwise never goes through the LLM index-analysis branch
+    # that would normally build this map.
+    sibling_urls: Dict[str, List[str]] = field(default_factory=dict)
 
 
 def discover_candidates(
@@ -90,6 +95,7 @@ def discover_candidates(
         stopped_reason=outcome.stopped_reason,
         pages_fetched=outcome.pages_fetched,
         supplement_url_re=supplement_url_re,
+        sibling_urls=outcome.sibling_urls,
     )
 
 
