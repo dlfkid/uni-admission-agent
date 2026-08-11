@@ -46,6 +46,7 @@ Once preflight passes, pick the sub-skill that matches the user's intent:
 |---|---|
 | "抓取 / 爬取 / extract / crawl" + university name or URL | **[[uni-admission-crawl]]** |
 | "上次爬失败了 / quarantine / 数据质量 / 检查失败 / why did it fail" | **[[uni-admission-diagnose]]** |
+| "删除 / 清空 <university> 的数据 / delete programs for" | **[[uni-admission-diagnose]]** (Step 5 — cleanup commands) |
 | "导出 / Excel / CSV / 下载数据 / export" | **[[uni-admission-export]]** |
 | "安装 / 升级 / 启动 / 重装 / install / upgrade / restart" | **[[uni-admission-install]]** |
 | Mixed: "帮我爬利兹大学" but cli=missing | Install **first**, then auto-continue to crawl |
@@ -65,7 +66,7 @@ These terms appear across all sub-skills. Internalize them so you don't have to 
 - **detail page** — a page for one specific program (e.g., "MSc Finance" entry page).
 - **paginated crawl** — multi-page index walk; auto-stops via signals (`url_drift`, `decreasing_yield`, `quality_failed`).
 - **quarantine** — extracted records that failed quality gate. Visible via `adm-agent quarantine list`. Not deleted; kept for review.
-- **audit funnel** — per-crawl counts at each pipeline stage: raw → filtered → candidates → extracted. Visible via `adm-agent audit drill`.
+- **audit funnel** — per-crawl counts at each pipeline stage: raw → filtered → candidates → extracted. Visible via `adm-agent audit list`; `adm-agent audit drill <ID>` (an id from that list, not a university/year filter) goes one level deeper into the actual dropped URLs for one row.
 - **stop_reason** — why a paginated crawl stopped. Values: `exhausted` (normal), `max_pages` (cap hit), `url_drift` (URL pattern broke — ⚠️), `decreasing_yield` (last few pages near-empty — ⚠️), `quality_failed` (quality gate blocked — ⚠️).
 
 ---
