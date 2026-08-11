@@ -10,8 +10,8 @@
 
 <body>
     <div class="container">
-        <header>
-            <h1>🎓 UniAdmission</h1>
+        <header class="app-header">
+            <div class="app-title"><span class="glyph">🎓</span> UniAdmission</div>
             <div class="header-actions">
                 <button id="preview-btn" class="icon-btn" title="Preview Database">👁</button>
                 <button id="export-btn" class="icon-btn" title="Export to Excel">📥</button>
@@ -21,91 +21,127 @@
 
         <!-- INPUT FORM MODE -->
         <div id="input-section">
-            <div class="field">
-                <label for="slug">University Slug</label>
-                <div class="autocomplete-wrapper">
-                    <input id="slug" type="text" placeholder="e.g. hku" autocomplete="off" />
-                    <ul id="slug-dropdown" class="slug-dropdown hidden"></ul>
+            <div class="group-block">
+                <div class="group-title">University</div>
+                <div class="settings-group">
+                    <div class="settings-row">
+                        <div class="row-inner">
+                            <label class="row-label" for="slug">Slug</label>
+                            <div class="row-control">
+                                <div class="autocomplete-wrapper">
+                                    <input id="slug" class="inline-input" type="text" placeholder="e.g. hku" autocomplete="off" />
+                                    <ul id="slug-dropdown" class="slug-dropdown hidden"></ul>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="settings-row">
+                        <div class="row-inner">
+                            <label class="row-label" for="year">Academic Year</label>
+                            <div class="row-control">
+                                <input id="year" class="inline-input" type="number" placeholder="e.g. 2026" value="2026" />
+                            </div>
+                        </div>
+                    </div>
                 </div>
             </div>
 
-            <div class="field">
-                <label for="year">Academic Year</label>
-                <input id="year" type="number" placeholder="e.g. 2026" value="2026" />
-            </div>
-
-            <div class="field">
-                <label>Current URL</label>
-                <p id="current-url" class="url-display">Loading…</p>
-            </div>
-
-            <div class="field">
-                <label for="page-type">Page Type</label>
-                <select id="page-type">
-                    <option value="auto">Auto Detect</option>
-                    <option value="index">Index Page (Program List)</option>
-                    <option value="detail">Detail Page (Single Program)</option>
-                </select>
-            </div>
-
-            <div class="field checkbox-field" id="auto-paginate-field">
-                <label>
-                    <input id="auto-paginate" type="checkbox" />
-                    Auto-paginate (collect all pages)
-                </label>
-            </div>
-
-            <div class="field checkbox-field">
-                <label>
-                    <input id="export-md" type="checkbox" />
-                    Export Markdown Files
-                </label>
-            </div>
-
-            <div class="field" id="export-path-field" style="display: none;">
-                <label for="export-path">Export Path</label>
-                <input id="export-path" type="text" placeholder="e.g. /Users/username/crawl-output" />
-            </div>
-
-            <div class="field">
-                <label for="browser-provider">Browser Source</label>
-                <div class="browser-source-row">
-                    <select id="browser-provider">
-                        <option value="server">🌐 Server (built-in fetcher)</option>
-                        <option value="client">🛡️ Local Client (best anti-detection)</option>
-                    </select>
-                    <span id="browser-source-status" class="source-status">Detecting…</span>
+            <div class="group-block">
+                <div class="group-title">Page</div>
+                <div class="settings-group">
+                    <div class="settings-row stacked">
+                        <div class="row-inner">
+                            <span class="row-label">Current URL</span>
+                            <p id="current-url" class="url-display">Loading…</p>
+                        </div>
+                    </div>
+                    <div class="settings-row">
+                        <div class="row-inner">
+                            <label class="row-label" for="page-type">Page Type</label>
+                            <div class="row-control">
+                                <select id="page-type">
+                                    <option value="auto">Auto Detect</option>
+                                    <option value="index">Index Page (Program List)</option>
+                                    <option value="detail">Detail Page (Single Program)</option>
+                                </select>
+                            </div>
+                        </div>
+                    </div>
                 </div>
             </div>
 
-            <div class="field checkbox-field">
-                <label>
-                    <input id="taxonomy-enabled" type="checkbox" checked />
-                    Enable Taxonomy Guidance
-                </label>
+            <div class="group-block">
+                <div class="group-title">Options</div>
+                <div class="settings-group">
+                    <div class="settings-row" id="auto-paginate-field">
+                        <div class="row-inner">
+                            <label class="row-label" for="auto-paginate">Auto-paginate<span class="hint">Collect all result pages</span></label>
+                            <label class="switch"><input id="auto-paginate" type="checkbox" /><span class="track"></span></label>
+                        </div>
+                    </div>
+                    <div class="settings-row">
+                        <div class="row-inner">
+                            <label class="row-label" for="export-md">Export Markdown Files</label>
+                            <label class="switch"><input id="export-md" type="checkbox" /><span class="track"></span></label>
+                        </div>
+                    </div>
+                    <div class="settings-row stacked" id="export-path-field" style="display: none;">
+                        <div class="row-inner">
+                            <label class="row-label" for="export-path">Export Path</label>
+                            <input id="export-path" type="text" placeholder="e.g. /Users/username/crawl-output" />
+                        </div>
+                    </div>
+                    <div class="settings-row">
+                        <div class="row-inner">
+                            <label class="row-label" for="browser-provider">Browser Source</label>
+                            <div class="row-control browser-source-row">
+                                <select id="browser-provider">
+                                    <option value="server">🌐 Server (built-in fetcher)</option>
+                                    <option value="client">🛡️ Local Client (best anti-detection)</option>
+                                </select>
+                                <span id="browser-source-status" class="source-status">Detecting…</span>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="settings-row">
+                        <div class="row-inner">
+                            <label class="row-label" for="taxonomy-enabled">Enable Taxonomy Guidance</label>
+                            <label class="switch"><input id="taxonomy-enabled" type="checkbox" checked /><span class="track"></span></label>
+                        </div>
+                    </div>
+                </div>
             </div>
 
-            <div id="taxonomy-settings">
-                <div class="field">
-                    <label for="taxonomy-low-threshold">Taxonomy Low Threshold</label>
-                    <input id="taxonomy-low-threshold" type="number" min="0" max="1" step="0.01" value="0.80" />
+            <div id="taxonomy-settings" class="settings-group">
+                <div class="settings-row">
+                    <div class="row-inner">
+                        <label class="row-label" for="taxonomy-low-threshold">Taxonomy Low Threshold</label>
+                        <div class="row-control">
+                            <input id="taxonomy-low-threshold" class="inline-input" type="number" min="0" max="1" step="0.01" value="0.80" />
+                        </div>
+                    </div>
                 </div>
-
-                <div class="field">
-                    <label for="taxonomy-high-threshold">Taxonomy High Threshold</label>
-                    <input id="taxonomy-high-threshold" type="number" min="0" max="1" step="0.01" value="0.92" />
+                <div class="settings-row">
+                    <div class="row-inner">
+                        <label class="row-label" for="taxonomy-high-threshold">Taxonomy High Threshold</label>
+                        <div class="row-control">
+                            <input id="taxonomy-high-threshold" class="inline-input" type="number" min="0" max="1" step="0.01" value="0.92" />
+                        </div>
+                    </div>
                 </div>
-
-                <div class="field">
-                    <label for="taxonomy-hint-top-k">Taxonomy Hint Top-K</label>
-                    <input id="taxonomy-hint-top-k" type="number" min="1" max="5" step="1" value="3" />
+                <div class="settings-row">
+                    <div class="row-inner">
+                        <label class="row-label" for="taxonomy-hint-top-k">Taxonomy Hint Top-K</label>
+                        <div class="row-control">
+                            <input id="taxonomy-hint-top-k" class="inline-input" type="number" min="1" max="5" step="1" value="3" />
+                        </div>
+                    </div>
                 </div>
-
-                <div class="field checkbox-field">
-                    <label>
-                        <input id="taxonomy-override-enabled" type="checkbox" checked />
-                        Allow High-Confidence Name Override
-                    </label>
+                <div class="settings-row">
+                    <div class="row-inner">
+                        <label class="row-label" for="taxonomy-override-enabled">Allow High-Confidence Name Override</label>
+                        <label class="switch"><input id="taxonomy-override-enabled" type="checkbox" checked /><span class="track"></span></label>
+                    </div>
                 </div>
             </div>
 
@@ -135,11 +171,11 @@
                 <span id="link-count" class="link-count-badge">0 selected</span>
             </div>
             <div class="link-automation-settings extension-only">
-                <label class="select-all-label">
-                    <input id="browser-automation-enabled" type="checkbox" />
-                    <span>Browser Automation (Index only)</span>
-                </label>
-                <div class="field compact-field">
+                <div class="row-inner">
+                    <label class="row-label" for="browser-automation-enabled">Browser Automation<span class="hint">Index only</span></label>
+                    <label class="switch"><input id="browser-automation-enabled" type="checkbox" /><span class="track"></span></label>
+                </div>
+                <div class="compact-field">
                     <label for="automation-concurrency">Automation Concurrency (1-3)</label>
                     <input id="automation-concurrency" type="number" min="1" max="3" step="1" value="2" />
                 </div>
@@ -193,13 +229,20 @@
             </div>
 
             <div class="config-body">
-                <div class="field">
-                    <label>Database URL</label>
-                    <input id="db-url-input" type="text" placeholder="postgresql://..." />
+                <div class="group-block">
+                    <div class="group-title">Database</div>
+                    <div class="settings-group">
+                        <div class="settings-row stacked">
+                            <div class="row-inner">
+                                <label class="row-label" for="db-url-input">Database URL</label>
+                                <input id="db-url-input" type="text" placeholder="postgresql://..." />
+                            </div>
+                        </div>
+                    </div>
                 </div>
 
-                <div class="field">
-                    <label>LLM Priority (Drag to reorder)</label>
+                <div class="group-block">
+                    <div class="group-title">LLM Priority (Drag to reorder)</div>
                     <ul id="llm-list">
                         <!-- Items injected by TS -->
                     </ul>
@@ -221,17 +264,24 @@
             </div>
 
             <div class="config-body">
-                <div class="field">
-                    <label for="export-slug">University Slug</label>
-                    <div class="autocomplete-wrapper">
-                        <input id="export-slug" type="text" placeholder="e.g. hku" autocomplete="off" />
-                        <ul id="export-slug-dropdown" class="slug-dropdown hidden"></ul>
+                <div class="settings-group">
+                    <div class="settings-row stacked">
+                        <div class="row-inner">
+                            <label class="row-label" for="export-slug">University Slug</label>
+                            <div class="autocomplete-wrapper">
+                                <input id="export-slug" type="text" placeholder="e.g. hku" autocomplete="off" />
+                                <ul id="export-slug-dropdown" class="slug-dropdown hidden"></ul>
+                            </div>
+                        </div>
                     </div>
-                </div>
-
-                <div class="field">
-                    <label for="export-year">Academic Year (optional)</label>
-                    <input id="export-year" type="number" placeholder="Leave empty for all years" />
+                    <div class="settings-row">
+                        <div class="row-inner">
+                            <label class="row-label" for="export-year">Academic Year</label>
+                            <div class="row-control">
+                                <input id="export-year" class="inline-input" type="number" placeholder="Leave empty for all years" />
+                            </div>
+                        </div>
+                    </div>
                 </div>
             </div>
 
@@ -251,14 +301,14 @@
 
             <div class="preview-filters">
                 <div class="preview-filter-row">
-                    <div class="field preview-field">
+                    <div class="preview-field">
                         <label for="preview-slug">University</label>
                         <div class="autocomplete-wrapper">
                             <input id="preview-slug" type="text" placeholder="e.g. hku" autocomplete="off" />
                             <ul id="preview-slug-dropdown" class="slug-dropdown hidden"></ul>
                         </div>
                     </div>
-                    <div class="field preview-field">
+                    <div class="preview-field">
                         <label for="preview-year">Year</label>
                         <input id="preview-year" type="number" placeholder="All" />
                     </div>
@@ -284,45 +334,45 @@
             </div>
             <div class="config-body">
                 <div class="program-edit-grid">
-                    <div class="field">
+                    <div class="stacked-field">
                         <label for="preview-edit-name-en">Program Name (EN)</label>
                         <input id="preview-edit-name-en" type="text" />
                     </div>
-                    <div class="field">
+                    <div class="stacked-field">
                         <label for="preview-edit-name-zh">Program Name (ZH)</label>
                         <input id="preview-edit-name-zh" type="text" />
                     </div>
-                    <div class="field">
+                    <div class="stacked-field">
                         <label for="preview-edit-faculty">Faculty</label>
                         <input id="preview-edit-faculty" type="text" />
                     </div>
-                    <div class="field">
+                    <div class="stacked-field">
                         <label for="preview-edit-group-code">Group Code</label>
                         <input id="preview-edit-group-code" type="text" />
                     </div>
-                    <div class="field">
+                    <div class="stacked-field">
                         <label for="preview-edit-tuition">Tuition Amount</label>
                         <input id="preview-edit-tuition" type="number" step="0.01" />
                     </div>
-                    <div class="field">
+                    <div class="stacked-field">
                         <label for="preview-edit-currency">Currency</label>
                         <input id="preview-edit-currency" type="text" placeholder="HKD" />
                     </div>
-                    <div class="field">
+                    <div class="stacked-field">
                         <label for="preview-edit-source-url">Source URL</label>
                         <input id="preview-edit-source-url" type="text" />
                     </div>
                 </div>
 
-                <div class="field">
+                <div class="stacked-field">
                     <label for="preview-edit-study-options">Study Options (JSON Array)</label>
                     <textarea id="preview-edit-study-options" rows="4"></textarea>
                 </div>
-                <div class="field">
+                <div class="stacked-field">
                     <label for="preview-edit-deadlines">Deadlines (JSON Array)</label>
                     <textarea id="preview-edit-deadlines" rows="4"></textarea>
                 </div>
-                <div class="field">
+                <div class="stacked-field">
                     <label for="preview-edit-requirements">Requirements (JSON Array)</label>
                     <textarea id="preview-edit-requirements" rows="6"></textarea>
                 </div>
