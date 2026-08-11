@@ -38,61 +38,71 @@ def _list_mcp_tool_names(server_module) -> set[str]:
     return anyio.run(_collect)
 
 
-def test_base_tools_registered_without_internal_llm(monkeypatch) -> None:
+_BASE_TOOL_NAMES = {
+    "analyze",
+    "crawl",
+    "crawl_detail_batch",
+    "ingest",
+    "db_query",
+    "runtime_status",
+    "program_patch",
+    "program_patch_batch",
+    "help",
+}
+
+# The MCP server used to register a parallel "*_internal_llm" toolset,
+# doubling the tool surface. 7 of 9 variants were byte-identical aliases
+# with zero behavioral difference from their base counterpart; only
+# analyze/crawl actually branched (server LLM vs. a deterministic
+# heuristic — never actually "the caller's LLM does it", despite the
+# naming). That whole toolset was removed: MCP tools now always use the
+# server's configured LLM, with a single name per capability. These tests
+# lock in that the alias tools are gone for good, regardless of whether an
+# internal LLM happens to be configured (`internal_llm_available` is still
+# a real, useful diagnostic field on `runtime_status` — it just no longer
+# gates a second copy of every tool).
+_REMOVED_INTERNAL_LLM_TOOL_NAMES = {
+    "analyze_internal_llm",
+    "crawl_internal_llm",
+    "crawl_detail_batch_internal_llm",
+    "ingest_internal_llm",
+    "db_query_internal_llm",
+    "runtime_status_internal_llm",
+    "program_patch_internal_llm",
+    "program_patch_batch_internal_llm",
+    "help_internal_llm",
+}
+
+
+def test_base_tools_always_registered(monkeypatch) -> None:
     server_module = _reload_server_with_router_probe(
         monkeypatch,
         router_available=False,
     )
     tool_names = _list_mcp_tool_names(server_module)
 
-    assert {
-        "analyze",
-        "crawl",
-        "crawl_detail_batch",
-        "ingest",
-        "db_query",
-        "runtime_status",
-        "program_patch",
-        "program_patch_batch",
-        "help",
-    }.issubset(tool_names)
-    assert "analyze_internal_llm" not in tool_names
-    assert "crawl_internal_llm" not in tool_names
-    assert "crawl_detail_batch_internal_llm" not in tool_names
-    assert "db_query_internal_llm" not in tool_names
-    assert "runtime_status_internal_llm" not in tool_names
-    assert "program_patch_internal_llm" not in tool_names
-    assert "program_patch_batch_internal_llm" not in tool_names
-    assert "help_internal_llm" not in tool_names
+    assert _BASE_TOOL_NAMES.issubset(tool_names)
+    assert not _REMOVED_INTERNAL_LLM_TOOL_NAMES & tool_names
 
 
-def test_internal_llm_tools_registered_only_when_available(monkeypatch) -> None:
+def test_no_internal_llm_variant_tools_exist_regardless_of_router_availability(
+    monkeypatch,
+) -> None:
     server_without_internal = _reload_server_with_router_probe(
         monkeypatch,
         router_available=False,
     )
     tool_names_without_internal = _list_mcp_tool_names(server_without_internal)
-    assert "analyze_internal_llm" not in tool_names_without_internal
-    assert "crawl_internal_llm" not in tool_names_without_internal
-    assert "crawl_detail_batch_internal_llm" not in tool_names_without_internal
-    assert "ingest_internal_llm" not in tool_names_without_internal
+    assert not _REMOVED_INTERNAL_LLM_TOOL_NAMES & tool_names_without_internal
+    assert _BASE_TOOL_NAMES.issubset(tool_names_without_internal)
 
     server_with_internal = _reload_server_with_router_probe(
         monkeypatch,
         router_available=True,
     )
     tool_names_with_internal = _list_mcp_tool_names(server_with_internal)
-    assert {
-        "analyze_internal_llm",
-        "crawl_internal_llm",
-        "crawl_detail_batch_internal_llm",
-        "ingest_internal_llm",
-        "db_query_internal_llm",
-        "runtime_status_internal_llm",
-        "program_patch_internal_llm",
-        "program_patch_batch_internal_llm",
-        "help_internal_llm",
-    }.issubset(tool_names_with_internal)
+    assert not _REMOVED_INTERNAL_LLM_TOOL_NAMES & tool_names_with_internal
+    assert _BASE_TOOL_NAMES.issubset(tool_names_with_internal)
 
 
 def test_agent_tools_registered_only_when_agent_enabled(monkeypatch) -> None:

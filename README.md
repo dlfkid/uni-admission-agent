@@ -262,21 +262,22 @@ Full request/response schemas: visit **`http://localhost:8910/docs`** (FastAPI S
 
 ## MCP Server
 
-The MCP server is mounted at `/mcp`. Tools are grouped into three sets:
+The MCP server is mounted at `/mcp`. Tools are grouped into two sets:
 
-- **Base toolset** (always): `analyze`, `crawl`, `crawl_detail_batch`, `ingest`, `db_query`, `runtime_status`, `program_patch`, `program_patch_batch`, `help`.
+- **Base toolset** (always): `analyze`, `crawl`, `crawl_detail_batch`, `ingest`, `db_query`, `runtime_status`, `program_patch`, `program_patch_batch`, `help`. All page-understanding tools (`analyze`, `crawl`, `crawl_detail_batch`) always use the server's own configured LLM — there is no caller-selectable "use a different LLM" mode. (An earlier design registered a parallel `*_internal_llm` toolset for that; it was removed — 7 of 9 variants were byte-identical aliases with zero behavioral difference, and the two that did differ used a deterministic heuristic, not "the caller's LLM", so the duplication bought nothing.)
 - **Agent toolset** (default, unless agent runtime is disabled): `agent_run`, `agent_review_confirm`.
-- **Internal-LLM toolset** (when server-side LLM is available): `*_internal_llm` variants of the base tools.
+
+`ingest` is the one deliberate exception: it persists **already-structured** program data from any source (the caller did its own extraction by whatever means, a bulk backfill, a different pipeline) without running any server-side LLM extraction — that is a generically useful capability independent of the "which LLM" question, not a caller-driven mode of `analyze`/`crawl`.
 
 **Recommended MCP interactive flow:**
 
-1. Call `runtime_status` — inspect available runtime path (`client_available`, `internal_llm_available`).
+1. Call `runtime_status` — inspect available runtime path (`client_available`, `internal_llm_available` — whether the server's LLM is actually configured, so `analyze`/`crawl` calls will succeed).
 2. Call `analyze` as the **single entrypoint**. Read `page_type_detected`, `requires_user_confirmation`, `next_step_options`.
 3. If `requires_user_confirmation=true`, ask the user whether to proceed with detected `index` / `detail`.
 4. Follow the selected next-step path:
-   - **detail path:** `crawl` or `crawl_internal_llm`
-   - **index + external LLM:** select candidates → structure data externally → `ingest`
-   - **index + server LLM:** `crawl_detail_batch_internal_llm` (or `crawl_detail_batch`)
+   - **detail path:** `crawl`
+   - **index, already have structured data:** select candidates → structure data yourself → `ingest`
+   - **index, want the server to extract it:** `crawl_detail_batch`
 5. Apply user corrections via `program_patch` / `program_patch_batch` (partial-failure safe).
 
 **Crawl decision details:**

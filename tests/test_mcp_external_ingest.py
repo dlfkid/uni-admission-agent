@@ -70,6 +70,4 @@ async def test_mcp_ingest_calls_external_ingest_service(monkeypatch) -> None:
 
     assert captured["univ_slug"] == "edinburgh"
     assert captured["year"] == 2026
-    assert result["analysis_mode"] == "external_llm"
-    assert result["ingest_mode"] == "external_llm"
     assert result["review_token"] == "token-x"
