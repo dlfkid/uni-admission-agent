@@ -92,7 +92,7 @@ class TestDbImportCli:
             result = runner.invoke(cli.app, ["db-import", "--file", "in.zip", "--yes"])
 
         assert result.exit_code != 0
-        assert "already has data" in result.stdout
+        assert "already has data" in result.output
 
     def test_import_migration_failure_reports_error(self) -> None:
         with (
@@ -105,4 +105,4 @@ class TestDbImportCli:
             result = runner.invoke(cli.app, ["db-import", "--file", "in.zip", "--yes"])
 
         assert result.exit_code != 0
-        assert "migration" in result.stdout.lower()
+        assert "migration" in result.output.lower()

@@ -1355,7 +1355,7 @@ def db_export(
     try:
         row_counts = export_database(output)
     except Exception as e:
-        typer.echo(f"❌ Database export failed: {e}")
+        typer.echo(f"❌ Database export failed: {e}", err=True)
         raise typer.Exit(code=1)
 
     total = sum(row_counts.values())
@@ -1394,14 +1394,14 @@ def db_import(
     try:
         row_counts = import_database(file, force=force)
     except DatabaseNotEmptyError as e:
-        typer.echo(f"❌ {e}")
-        typer.echo("👉 Re-run with --force to proceed anyway.")
+        typer.echo(f"❌ {e}", err=True)
+        typer.echo("👉 Re-run with --force to proceed anyway.", err=True)
         raise typer.Exit(code=1)
     except MigrationError as e:
-        typer.echo(f"❌ Database migration failed: {e}")
+        typer.echo(f"❌ Database migration failed: {e}", err=True)
         raise typer.Exit(code=1)
     except Exception as e:
-        typer.echo(f"❌ Database import failed: {e}")
+        typer.echo(f"❌ Database import failed: {e}", err=True)
         raise typer.Exit(code=1)
 
     total = sum(row_counts.values())
