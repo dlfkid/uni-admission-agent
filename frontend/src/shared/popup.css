@@ -16,6 +16,8 @@
   --control-bg: #e4e4e8;
   --success: #34c759;
   --error: #ff3b30;
+  --success-text: #1a7f37;
+  --error-text: #cf222e;
 
   --radius: 10px;
   --radius-sm: 7px;
@@ -35,6 +37,8 @@
     --control-bg: #3a3a3c;
     --success: #32d74b;
     --error: #ff453a;
+    --success-text: #32d74b;
+    --error-text: #ff453a;
   }
 }
 
@@ -146,6 +150,14 @@ body {
 
 .group-block { display: flex; flex-direction: column; gap: 6px; }
 
+#input-section,
+#monitor-section,
+#link-selection-section {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
 .group-title {
   margin: 0 2px;
   font-size: 11px;
@@ -159,7 +171,6 @@ body {
   background: var(--group-bg);
   border-radius: var(--radius);
   box-shadow: 0 0 0 1px var(--divider);
-  overflow: hidden;
 }
 
 /* IMPORTANT: stays plain block (the <div> default) — never `display: flex`
@@ -194,7 +205,8 @@ body {
   font-size: 13px;
   font-weight: 400;
   color: var(--text);
-  flex-shrink: 0;
+  flex-shrink: 1;
+  min-width: 0;
 }
 .row-label .hint {
   display: block;
@@ -373,8 +385,8 @@ button:active { transform: scale(0.97); }
   font-weight: 500;
   line-height: 1.4;
 }
-.status.success { background: rgba(52, 199, 89, 0.12); color: var(--success); }
-.status.error { background: rgba(255, 59, 48, 0.12); color: var(--error); }
+.status.success { background: rgba(52, 199, 89, 0.12); color: var(--success-text); }
+.status.error { background: rgba(255, 59, 48, 0.12); color: var(--error-text); }
 .status.info { background: var(--accent-soft); color: var(--accent); }
 
 .task-badge {
@@ -406,7 +418,7 @@ button:active { transform: scale(0.97); }
 }
 
 .source-status { font-size: 11px; color: var(--text-muted); white-space: nowrap; }
-.source-status.connected { color: var(--success); }
+.source-status.connected { color: var(--success-text); }
 .source-status.unavailable { color: #ff9500; }
 
 .browser-source-row { display: flex; align-items: center; gap: 8px; }
@@ -817,7 +829,7 @@ button:active { transform: scale(0.97); }
   white-space: nowrap;
 }
 .program-tag.faculty { background: var(--accent-soft); color: var(--accent); }
-.program-tag.tuition { background: rgba(52, 199, 89, 0.12); color: var(--success); }
+.program-tag.tuition { background: rgba(52, 199, 89, 0.12); color: var(--success-text); }
 .program-tag.mode { background: rgba(255, 149, 0, 0.12); color: #ff9500; }
 
 .program-card-deadlines { margin-top: 6px; padding-top: 6px; border-top: 1px solid var(--divider); }
