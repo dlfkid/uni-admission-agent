@@ -947,7 +947,7 @@ def serve_install(
 
     typer.echo(f"🚀 Server daemon started (PID {proc.pid})")
     typer.echo(f"   Log: {_LOG_FILE}")
-    typer.echo("   Stop: uni-admission serve-stop")
+    typer.echo("   Stop: adm-agent serve-stop")
 
 
 @app.command(name="serve-stop")
@@ -1303,10 +1303,12 @@ def db_reinit(
     """Drop and recreate the configured database, then migrate to head."""
     _setup_logging(verbose)
 
-    db_url = os.getenv("DATABASE_URL")
-    if not db_url:
-        typer.echo("❌ DATABASE_URL is not configured.", err=True)
-        raise typer.Exit(code=1)
+    # DatabaseManager.init_db() (the path every other command uses) falls
+    # back to a default SQLite URL when DATABASE_URL is unset — SQLite is
+    # the documented zero-config default (see uni-admission-install SKILL.md
+    # §1.6). This command used to hard-fail instead of matching that
+    # fallback, so it was unusable for exactly the setup most users have.
+    db_url = os.getenv("DATABASE_URL") or DatabaseManager._default_sqlite_url()
 
     if not yes:
         confirm = typer.confirm(

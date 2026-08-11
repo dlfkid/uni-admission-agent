@@ -218,11 +218,12 @@ A passing `check` means the next `adm-agent serve` + crawl will actually work �
 # Foreground (recommended — user sees logs, can Ctrl+C)
 adm-agent serve
 
-# OR: daemon mode (only if user explicitly asks)
-adm-agent serve --daemon
+# OR: daemon mode (only if user explicitly asks) — a SEPARATE command,
+# not a flag on `serve`. There is no `serve --daemon`.
+adm-agent serve-install
 ```
 
-After kickoff, the server prints:
+`adm-agent serve` prints the startup banner directly to the terminal:
 
 ```
 🚀 Starting server on 0.0.0.0:8910
@@ -231,7 +232,17 @@ After kickoff, the server prints:
    🩺 Health:   http://127.0.0.1:8910/health
 ```
 
-Wait until `/health` returns `200`:
+`adm-agent serve-install` instead detaches immediately and prints only:
+
+```
+🚀 Server daemon started (PID <pid>)
+   Log: <path>
+   Stop: adm-agent serve-stop
+```
+
+(the banner above goes into that log file, not the terminal — the PID line
+is your only synchronous confirmation). Either way, wait until `/health`
+returns `200` before telling the user it's ready:
 
 ```bash
 for i in 1 2 3 4 5 6 7 8 9 10; do

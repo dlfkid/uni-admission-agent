@@ -3,4 +3,4 @@ description: "Export crawled program data to Excel/CSV, or preview what's stored
 disable-model-invocation: true
 ---
 
-Invoke the uni-admission-agent:uni-admission-export skill and follow it exactly as presented to you.
+Invoke the uni-admission-agent:uni-admission-export skill and follow it exactly as presented to you. Use the user's message that triggered this command as the export/preview request.
