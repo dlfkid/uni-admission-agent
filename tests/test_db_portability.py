@@ -20,6 +20,7 @@ from src.models.requirement import (
     RequirementCategory,
     RequirementVersion,
 )
+from src.services.migrations import MigrationError
 from src.storage.db_manager import DatabaseManager, _attach_sqlite_pragmas
 from src.storage.db_portability import (
     DatabaseNotEmptyError,
@@ -268,6 +269,33 @@ class TestImportDatabase(_PortabilityTestBase):
         # collides on unique constraints — must raise, not silently succeed.
         with pytest.raises(Exception):
             import_database(str(output), force=True)
+
+    def test_import_raises_migration_error_when_still_pending(self, tmp_path, monkeypatch) -> None:
+        self._seed_multi_type_dataset()
+        output = tmp_path / "export.zip"
+        export_database(str(output))
+
+        # Fresh empty target engine — separate from the source.
+        DatabaseManager._instance = None
+        target_engine = create_engine(
+            "sqlite:///:memory:", connect_args={"check_same_thread": False}
+        )
+        _attach_sqlite_pragmas(target_engine)
+        SQLModel.metadata.create_all(target_engine)
+        target_dm = DatabaseManager()
+        target_dm.engine = target_engine
+
+        # Monkeypatch run_db_migrations to return pending=True, simulating
+        # a schema migration that didn't fully complete.
+        mock_migrate = MagicMock(
+            return_value={"pending": True, "after_revision": "not-head"}
+        )
+        monkeypatch.setattr("src.storage.db_portability.run_db_migrations", mock_migrate)
+
+        # Assert that import_database raises MigrationError when migrations
+        # still have pending changes.
+        with pytest.raises(MigrationError):
+            import_database(str(output))
 
 
 class TestCountAllRowsAndIsDatabaseEmpty(_PortabilityTestBase):
