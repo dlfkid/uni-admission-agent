@@ -258,13 +258,21 @@ async def analyze_url_candidates(
     browser_provider: str = "auto",
     client_id: Optional[str] = None,
     strict_client: bool = False,
-    use_internal_llm: bool = True,
 ) -> dict[str, Any]:
     """Analyze one URL and return detail-link candidates for interactive selection.
 
     If ``html_content`` is missing, this function resolves browser inputs via the
     configured browser provider (server/client/auto), then runs the normal
     ``analyze_page`` logic.
+
+    Always uses the server's configured LLM (``analyze_page``, backed by
+    ``RouterAgent``) — this is the MCP entrypoint's analysis, and MCP tool
+    calls always get the server's real classification, not a cheaper
+    heuristic stand-in. (``analyze_page_external`` still exists and is used
+    elsewhere — the agent runtime's own internal ``analyze_page`` skill
+    deliberately uses it to avoid a redundant nested LLM call inside a loop
+    that is already LLM-driven — but that is a different caller with a
+    different reason, not a mode MCP callers should be able to pick.)
     """
     source = "provided" if html_content else "unknown"
     resolved_browser_provider = "server"
@@ -299,13 +307,11 @@ async def analyze_url_candidates(
             "Provide html_content or use browser_provider=client with an online client."
         )
 
-    analyzer = analyze_page if use_internal_llm else analyze_page_external
-    result = await asyncio.to_thread(analyzer, url, html_content, page_type_hint)
+    result = await asyncio.to_thread(analyze_page, url, html_content, page_type_hint)
     payload = dict(result or {})
     payload["html_source"] = source
     payload["resolved_browser_provider"] = resolved_browser_provider
     payload["client_id_used"] = client_id_used
-    payload["analysis_mode"] = "internal_llm" if use_internal_llm else "external_llm"
     return payload
 
 
