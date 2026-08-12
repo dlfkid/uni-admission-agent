@@ -210,32 +210,62 @@ survives (not part of the original design):**
   the real, live Postgres instance: reproduced the original
   `DuplicateTable` failure on a fresh database, then confirmed the fix
   replays cleanly through all 9 migrations.
-  **Known follow-on limitation, found in the same manual test, NOT fixed
-  here — out of scope for this feature:** the real database's `program`
-  table has rows that violate `uq_program_year` (`UNIQUE(university_id,
-  academic_year, name_en)`), a constraint defined in the very first
-  migration (`20260302_0001`) and never dropped by any later one, even
-  though the model's current `__table_args__` only declares the narrower
-  `uq_program_version_year` (`UNIQUE(program_catalog_id, academic_year)`).
-  The live database was evidently never bootstrapped by actually running
-  `20260302_0001`'s raw SQL (likely `create_all()`-bootstrapped before
-  Alembic tracking existed, then stamped to a baseline that skipped it),
-  so it never acquired this now-obsolete constraint — but a genuinely
-  fresh Postgres install, migrated from scratch by this same codebase
-  today, WOULD get it. Two different programs sharing the same
-  `(university, year, name)` but different `program_catalog_id` — already
-  known, accepted tech debt (deferred cross-row duplicate collapse) — import
-  cleanly today because the live database's own constraint is narrower
-  than what a from-scratch install would enforce. Importing today's real
-  export into a from-scratch-migrated Postgres target hits this and fails
-  on `program`'s insert. This is a **pre-existing migration-history
-  inconsistency independent of db-export/db-import's own code** — not
-  something this feature can or should fix (it would mean writing a new
-  migration to drop `uq_program_year`, a change to shared migration
-  history affecting every Postgres deployment, needing its own review).
-  Flagged for a separate follow-up; not blocking this feature, which is
-  verified correct up to the point this pre-existing data/schema mismatch
-  is reached.
+- **The real database's `program` table has rows that violate
+  `uq_program_year` (`UNIQUE(university_id, academic_year, name_en)`), a
+  constraint defined in the very first migration (`20260302_0001`) and
+  never dropped by any later one, even though the model's current
+  `__table_args__` only declares the narrower `uq_program_version_year`
+  (`UNIQUE(program_catalog_id, academic_year)`).** The live database was
+  never bootstrapped by actually running `20260302_0001`'s raw SQL (it was
+  `create_all()`-bootstrapped before Alembic tracking existed, then
+  legacy-stamped to a baseline that skipped it), so it never acquired this
+  now-obsolete constraint — but a genuinely fresh Postgres install,
+  migrated from scratch by today's history (as the previous fix now
+  correctly enables), WOULD get it, and two different programs sharing the
+  same `(university, year, name)` but different `program_catalog_id` —
+  already known, accepted tech debt (deferred cross-row duplicate
+  collapse) — legitimately exist in the real data. **Resolved (decided
+  with the user):** added migration `20260812_0010` that drops
+  `uq_program_year` and creates `uq_program_version_year` if missing,
+  defensively checking each constraint's presence first (via
+  `inspector.get_unique_constraints`) so it's a safe no-op on a database
+  that already has the new constraint (like the live one) and a real fix
+  on one that only has the old one (a from-scratch install). Both
+  directions verified against real Postgres: upgrade from a from-scratch
+  head produces exactly `uq_program_version_year`; downgrade restores
+  exactly `uq_program_year`; re-running upgrade against a database already
+  holding only the new constraint (stamped back to the prior revision,
+  mirroring the live database's actual state) is a clean no-op.
+- **26 of 28 `timestamp`-typed columns differ between the live database
+  (`TIMESTAMP WITHOUT TIME ZONE`, from the same `create_all()`-bootstrap
+  history as the constraint above) and a from-scratch migration
+  (`TIMESTAMP WITH TIME ZONE` — several migrations explicitly declare
+  `DateTime(timezone=True)`, while the models' bare `datetime` type hints
+  don't).** This is not cosmetic: verified by direct execution that
+  round-tripping a naive datetime from a without-time-zone column into a
+  with-time-zone target column (or vice versa) is reinterpreted using the
+  Postgres session's `TimeZone` setting — which defaults to the
+  server/OS's configured zone, not UTC (`Asia/Taipei`, `+08:00`, in this
+  environment) — silently shifting the stored instant by that offset.
+  **Resolved (decided with the user):** `db_portability.py` now forces
+  `SET TIME ZONE 'UTC'` on both the export and import sessions
+  (`_force_utc_session`, dialect-gated — a no-op on SQLite, which has no
+  session-timezone concept). This makes every timestamp round-trip to the
+  same UTC instant regardless of which side has which column type,
+  without touching the broader migration history (reconciling all 26
+  columns onto one type consistently is a separate, much larger effort,
+  deliberately not undertaken here). Verified against real Postgres:
+  compared `program.updated_at` and five other previously-mismatched
+  columns across different tables, converting both sides to UTC before
+  comparison — all matched exactly after the fix; before it, the same
+  comparison showed an 8-hour discrepancy matching the session's
+  `Asia/Taipei` offset.
+
+Both of the last two discoveries were found the same way: a full,
+real export of the live, data-populated Postgres database (13,445 rows
+across 17 tables) imported into a genuinely fresh Postgres database,
+with every row count checked against the export manifest and representative
+rows compared field-by-field — not just unit tests against synthetic data.
 
 ## 6. Explicit assumptions / non-goals (to prevent later "wasn't this supposed to..." confusion)
 

@@ -103,6 +103,32 @@ def _deserialize_value(value: Any, column: Column) -> Any:
     return value
 
 
+def _force_utc_session(session: Session, db: DatabaseManager) -> None:
+    """Set this Postgres session's TIME ZONE to UTC.
+
+    Found via a real end-to-end test against a live database: this
+    project's models declare bare `datetime` (no `timezone=True`), but the
+    migration history explicitly declares several columns as
+    `DateTime(timezone=True)`. A database bootstrapped by
+    `create_all()` (before Alembic tracking existed) ends up with
+    `TIMESTAMP WITHOUT TIME ZONE` for those columns; one migrated from
+    scratch by today's history gets `TIMESTAMP WITH TIME ZONE` for the
+    same columns. Round-tripping a naive datetime read from a
+    without-time-zone column into a with-time-zone column (or vice versa)
+    is interpreted using the session's TimeZone setting — which is *not*
+    UTC by default (it's whatever the OS/Postgres server is configured
+    with), silently shifting the stored instant by that offset. Forcing
+    UTC on both the export and import sessions makes the round-trip
+    correct regardless of which column type either side has — this is a
+    property this feature itself must guarantee, independent of whether
+    the wider column-type drift ever gets formally reconciled by a
+    migration. No-op on SQLite, which has no session timezone concept and
+    is unaffected by this issue (its type affinity ignores tz metadata).
+    """
+    if db.engine.dialect.name == "postgresql":
+        session.execute(text("SET TIME ZONE 'UTC'"))
+
+
 def export_database(output_path: str) -> dict[str, int]:
     """Write every portable table's rows to one zip file (manifest.json +
     one <table_name>.json per table). Returns {table_name: row_count}."""
@@ -112,6 +138,7 @@ def export_database(output_path: str) -> dict[str, int]:
 
     with zipfile.ZipFile(output_path, "w", zipfile.ZIP_DEFLATED) as zf:
         with db.get_session() as session:
+            _force_utc_session(session, db)
             for table in tables:
                 rows = session.execute(select(table)).mappings().all()
                 serialized = [
@@ -203,6 +230,7 @@ def import_database(file_path: str, force: bool = False) -> dict[str, int]:
 
     row_counts: dict[str, int] = {}
     with zipfile.ZipFile(file_path, "r") as zf, db.get_session() as session:
+        _force_utc_session(session, db)
         for table in tables:
             raw_rows = json.loads(zf.read(f"{table.name}.json"))
             deserialized = [
