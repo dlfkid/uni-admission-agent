@@ -101,7 +101,7 @@ work automatically:
 |---|---|---|
 | `DateTime` / `Date` | `.isoformat()` string | `datetime.fromisoformat(...)` / `date.fromisoformat(...)` |
 | `Numeric` (`Program.tuition_amount`) | `str(value)` (preserves precision) | `Decimal(value)` |
-| `Enum`-backed columns (`StudyMode`, `RequirementCategory`, `CurrencyCode`, `IngestionJobStatus`, `IngestionStage`, etc. — all `str, Enum` subclasses) | the string value itself (already JSON-safe) | passed through as-is — SQLAlchemy's `Enum` type accepts the raw string value on bind |
+| `Enum`-backed columns (`StudyMode`, `RequirementCategory`, `CurrencyCode`, `IngestionJobStatus`, `IngestionStage`, etc. — all `str, Enum` subclasses) | detected on the VALUE (`isinstance(value, Enum)`), not the column type — a raw Core `select()` returns an actual Enum member, not its `.value`; export calls `.value` on it | reconstructed via `column.type.enum_class(value)` — passing the raw string through unreconstructed is not reliably accepted by every SQLAlchemy/driver combination, so this is explicit, not assumed |
 | `JSON` columns (`Program.deadlines`/`study_options`/`extra_metadata`, `RequirementVersion.diff_payload`, `SubjectDim.aliases`) | already JSON-compatible structures — no conversion | already JSON-compatible structures — no conversion |
 | Everything else (str, int, bool, None) | passed through | passed through |
 
@@ -141,6 +141,44 @@ work automatically:
    same kind of step for exactly the same reason.
 6. **Report.** Print per-table inserted-row counts and a final success
    message.
+
+**Two implementation discoveries, found during final review, resolved
+before merge (not part of the original design — recorded here so the
+"why" survives):**
+
+- **SQLite's `create_all()` silently created only 14 of the 17 portable
+  tables.** `program_quarantine`, `extraction_audit`, and
+  `extraction_audit_link`'s model modules were only ever imported lazily
+  elsewhere in the codebase (inside `quarantine_repo.py`/`audit_repo.py`,
+  themselves only imported inside specific `DatabaseManager` methods), so
+  on a process that hadn't happened to trigger those imports first,
+  `SQLModel.metadata` was incomplete when `create_all()` ran, and any
+  query against the missing three raised `OperationalError: no such
+  table`. Fixed by adding both modules to the existing eager side-effect
+  import lists in `db_manager.py` and `migrations.py`'s
+  `_sqlite_create_all` — a latent gap in the schema-bootstrap path,
+  independent of this feature, that this feature's "all 17 tables"
+  requirement happened to surface.
+- **The "target database is empty" premise (§2) was unreachable in
+  practice.** Every CLI command — including `db-import` itself, via the
+  shared `_init_db()` helper — auto-seeds `subject_taxonomy` with ~700+
+  rows from a bundled seed file (`bootstrap_subject_taxonomy()`) before
+  the command's own logic runs. So by the time step 1's emptiness check
+  ran, the target was already non-empty from its own startup, and refused
+  every import — including on a genuinely fresh install, the exact
+  scenario this feature exists for. **Resolved (decided with the user):**
+  `db-import` does not call the shared `_init_db()` wrapper — it calls
+  `DatabaseManager().init_db()` directly, which still creates the schema
+  but skips the taxonomy auto-seed step (`import_database()` already runs
+  its own migration internally, making `_init_db()`'s separate
+  migration-status check redundant for this command anyway). `db-export`
+  is unaffected and still calls `_init_db()` as before — export is
+  read-only, so including whatever taxonomy rows already exist is correct
+  and harmless. Net effect: `db-import` run as the very first command
+  against a brand-new database sees a truly empty target, as designed; if
+  other commands already ran first (so `subject_taxonomy` — or anything
+  else — is already seeded), the emptiness check still correctly refuses,
+  requiring `--force`.
 
 ## 6. Explicit assumptions / non-goals (to prevent later "wasn't this supposed to..." confusion)
 
