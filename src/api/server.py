@@ -2033,32 +2033,22 @@ def _analyze_next_step_options(
     if normalized == "detail":
         return [
             {
-                "mode": "external_llm_or_server_pipeline",
-                "tool": "crawl",
-                "when": "Use direct detail-page crawl/import path.",
-            },
-            {
                 "mode": "server_llm",
-                "tool": "crawl_internal_llm",
-                "when": "Use server-side LLM path for detail-page crawl/import.",
+                "tool": "crawl",
+                "when": "Use direct detail-page crawl/import path (server-side LLM extraction).",
             },
         ]
     if normalized == "index":
         return [
             {
-                "mode": "external_llm",
+                "mode": "caller_supplied",
                 "tool": "ingest",
-                "when": "After selecting candidates and externally extracting structured programs[].",
-            },
-            {
-                "mode": "external_or_hybrid",
-                "tool": "crawl_detail_batch",
-                "when": "Use selected candidate URLs for batched detail crawl/import.",
+                "when": "After selecting candidates and structuring programs[] yourself (no server LLM extraction).",
             },
             {
                 "mode": "server_llm",
-                "tool": "crawl_detail_batch_internal_llm",
-                "when": "Use server-side LLM batch detail crawl/import path.",
+                "tool": "crawl_detail_batch",
+                "when": "Use selected candidate URLs for batched detail crawl/import (server-side LLM extraction).",
             },
         ]
     return [
@@ -2113,7 +2103,6 @@ async def _mcp_analyze_impl(
     client_id: Optional[str] = None,
     strict_client: bool = False,
     html_content: Optional[str] = None,
-    use_internal_llm: bool,
 ) -> dict:
     normalized_hint = _normalize_page_type_hint(page_type_hint)
     result = await analyze_url_candidates(
@@ -2123,7 +2112,6 @@ async def _mcp_analyze_impl(
         browser_provider=browser_provider,
         client_id=client_id,
         strict_client=strict_client,
-        use_internal_llm=use_internal_llm,
     )
     response = dict(result or {})
     if "resolved_browser_provider" not in response:
@@ -2135,7 +2123,6 @@ async def _mcp_analyze_impl(
         response.update(metadata)
     if "client_id_used" not in response:
         response["client_id_used"] = None
-    response.setdefault("analysis_mode", "internal_llm" if use_internal_llm else "external_llm")
     response["page_type_hint_applied"] = normalized_hint
     detected_page_type = str(response.get("page_type") or "unknown").strip().lower()
     response["page_type_detected"] = detected_page_type if detected_page_type in {"index", "detail"} else "unknown"
@@ -2167,7 +2154,6 @@ async def _mcp_crawl_impl(
     candidate_taxonomy_filter_enabled: bool = False,
     candidate_taxonomy_filter_threshold: float = 0.75,
     candidate_taxonomy_filter_top_k: int = 30,
-    use_internal_llm: bool,
 ) -> dict:
     valid_year = _to_valid_year(year)
     if valid_year is None:
@@ -2192,7 +2178,6 @@ async def _mcp_crawl_impl(
                 browser_provider=browser_provider,
                 client_id=client_id,
                 strict_client=strict_client,
-                use_internal_llm=use_internal_llm,
             )
             if normalized_hint == "auto":
                 page_type = str(analysis_result.get("page_type") or "unknown").strip().lower()
@@ -2219,7 +2204,6 @@ async def _mcp_crawl_impl(
                 client_id=client_id,
                 strict_client=strict_client,
             )
-            response["analysis_mode"] = "internal_llm" if use_internal_llm else "external_llm"
             response["page_type_hint_applied"] = normalized_hint
             return response
 
@@ -2231,7 +2215,6 @@ async def _mcp_crawl_impl(
                 client_id=client_id,
                 strict_client=strict_client,
             )
-            response["analysis_mode"] = "internal_llm" if use_internal_llm else "external_llm"
             response["page_type_hint_applied"] = normalized_hint
             return response
 
@@ -2251,7 +2234,6 @@ async def _mcp_crawl_impl(
                 client_id=client_id,
                 strict_client=strict_client,
             )
-            response["analysis_mode"] = "internal_llm" if use_internal_llm else "external_llm"
             response["page_type_hint_applied"] = normalized_hint
             return response
 
@@ -2290,7 +2272,6 @@ async def _mcp_crawl_impl(
         )
         if "client_id_used" not in response:
             response["client_id_used"] = None
-        response["analysis_mode"] = "internal_llm" if use_internal_llm else "external_llm"
         response["page_type_hint_applied"] = normalized_hint
         response.update(_client_id_usage_metadata(client_id=client_id))
         return response
@@ -2322,7 +2303,6 @@ async def _mcp_crawl_impl(
     response.setdefault("auto_ready", True)
     response.setdefault("requires_user_review", False)
     response.setdefault("decision_reason", "direct_crawl")
-    response["analysis_mode"] = "internal_llm" if use_internal_llm else "external_llm"
     response["page_type_hint_applied"] = normalized_hint
     response.update(_client_id_usage_metadata(client_id=client_id))
     return response
@@ -2333,7 +2313,6 @@ async def _mcp_ingest_impl(
     univ_slug: str,
     year: int,
     programs: List[Dict[str, Any]],
-    use_internal_llm: bool,
 ) -> dict:
     try:
         payload = ingest_program_records_external(
@@ -2356,13 +2335,9 @@ async def _mcp_ingest_impl(
             "review_token": uuid.uuid4().hex,
             "review_items": [],
             "summary": str(exc),
-            "analysis_mode": "internal_llm" if use_internal_llm else "external_llm",
-            "ingest_mode": "internal_llm" if use_internal_llm else "external_llm",
         }
 
     response = dict(payload or {})
-    response["analysis_mode"] = "internal_llm" if use_internal_llm else "external_llm"
-    response["ingest_mode"] = "internal_llm" if use_internal_llm else "external_llm"
     response.setdefault(
         "next_action_hint",
         "Use db_query to inspect persisted rows, then apply program_patch if corrections are needed.",
@@ -2398,7 +2373,7 @@ try:
         3) Let user decide which links to crawl next
 
         Notes:
-        - This non-suffixed tool uses external-LLM friendly analysis path.
+        - Always uses the server's configured LLM for page classification.
         - ``client_id`` is a browser client identifier (from ``runtime_status.client_ids``),
           not a university slug.
         """
@@ -2409,7 +2384,6 @@ try:
             client_id=client_id,
             strict_client=strict_client,
             html_content=html_content,
-            use_internal_llm=False,
         )
 
     @mcp.tool(name="crawl_detail_batch")
@@ -2487,7 +2461,6 @@ try:
             candidate_taxonomy_filter_enabled=candidate_taxonomy_filter_enabled,
             candidate_taxonomy_filter_threshold=candidate_taxonomy_filter_threshold,
             candidate_taxonomy_filter_top_k=candidate_taxonomy_filter_top_k,
-            use_internal_llm=False,
         )
 
     @mcp.tool(name="ingest")
@@ -2496,18 +2469,18 @@ try:
         year: int,
         programs: List[Dict[str, Any]],
     ) -> dict:
-        """Persist externally structured program records (no internal LLM extraction).
+        """Persist already-structured program records (no LLM extraction here).
 
-        Intended for caller-side LLM workflows:
-        1) Caller fetches/parses pages on its side
-        2) Caller sends normalized `programs` JSON list
-        3) Server validates + upserts and returns review metadata
+        For callers that have already turned page content into structured
+        program data by whatever means (their own reasoning, a different
+        pipeline, a bulk backfill) and just need it validated and upserted:
+        1) Caller sends normalized `programs` JSON list
+        2) Server validates + upserts and returns review metadata
         """
         return await _mcp_ingest_impl(
             univ_slug=univ_slug,
             year=year,
             programs=programs,
-            use_internal_llm=False,
         )
 
     @mcp.tool(name="db_query")
@@ -2856,124 +2829,6 @@ repair:
 
     _register_agent_mcp_tools_if_enabled = _register_agent_mcp_tools_impl
     _register_agent_mcp_tools_if_enabled()
-
-    if _internal_llm_available():
-        @mcp.tool(name="analyze_internal_llm")
-        async def mcp_analyze_internal_llm(
-            url: str,
-            page_type_hint: str = "auto",
-            browser_provider: str = "auto",
-            client_id: Optional[str] = None,
-            strict_client: bool = False,
-            html_content: Optional[str] = None,
-        ) -> dict:
-            """Analyze page using the explicit internal-LLM toolset path."""
-            return await _mcp_analyze_impl(
-                url=url,
-                page_type_hint=page_type_hint,
-                browser_provider=browser_provider,
-                client_id=client_id,
-                strict_client=strict_client,
-                html_content=html_content,
-                use_internal_llm=True,
-            )
-
-        @mcp.tool(name="crawl_detail_batch_internal_llm")
-        async def mcp_crawl_detail_batch_internal_llm(
-            index_url: str,
-            selected_urls: List[str],
-            univ_slug: str,
-            year: int,
-            batch_size: int = 4,
-            client_id: Optional[str] = None,
-            strict_client: bool = True,
-            selected_link_texts: Optional[Dict[str, str]] = None,
-        ) -> dict:
-            """Batch detail crawl using explicit internal-LLM toolset path."""
-            return await mcp_crawl_detail_batch(
-                index_url=index_url,
-                selected_urls=selected_urls,
-                univ_slug=univ_slug,
-                year=year,
-                batch_size=batch_size,
-                client_id=client_id,
-                strict_client=strict_client,
-                selected_link_texts=selected_link_texts,
-            )
-
-        @mcp.tool(name="crawl_internal_llm")
-        async def mcp_crawl_internal_llm(
-            url: str,
-            univ_slug: str,
-            year: Optional[int] = None,
-            continue_depth: int = 0,
-            page_type_hint: str = "auto",
-            browser_provider: str = "auto",
-            client_id: Optional[str] = None,
-            strict_client: bool = False,
-            candidate_taxonomy_filter_enabled: bool = False,
-            candidate_taxonomy_filter_threshold: float = 0.75,
-            candidate_taxonomy_filter_top_k: int = 30,
-        ) -> dict:
-            """Crawl using explicit internal-LLM toolset path."""
-            return await _mcp_crawl_impl(
-                url=url,
-                univ_slug=univ_slug,
-                year=year,
-                continue_depth=continue_depth,
-                page_type_hint=page_type_hint,
-                browser_provider=browser_provider,
-                client_id=client_id,
-                strict_client=strict_client,
-                candidate_taxonomy_filter_enabled=candidate_taxonomy_filter_enabled,
-                candidate_taxonomy_filter_threshold=candidate_taxonomy_filter_threshold,
-                candidate_taxonomy_filter_top_k=candidate_taxonomy_filter_top_k,
-                use_internal_llm=True,
-            )
-
-        @mcp.tool(name="ingest_internal_llm")
-        async def mcp_ingest_internal_llm(
-            univ_slug: str,
-            year: int,
-            programs: List[Dict[str, Any]],
-        ) -> dict:
-            """Persist caller-provided structured records via internal-LLM namespaced tool."""
-            return await _mcp_ingest_impl(
-                univ_slug=univ_slug,
-                year=year,
-                programs=programs,
-                use_internal_llm=True,
-            )
-
-        @mcp.tool(name="db_query_internal_llm")
-        def mcp_db_query_internal_llm(
-            univ_slug: str,
-            year: Optional[int] = None,
-        ) -> list:
-            """Internal-LLM namespaced alias of db_query."""
-            return mcp_db_query(univ_slug=univ_slug, year=year)
-
-        @mcp.tool(name="runtime_status_internal_llm")
-        def mcp_runtime_status_internal_llm() -> dict:
-            """Internal-LLM namespaced alias of runtime_status."""
-            return mcp_runtime_status()
-
-        @mcp.tool(name="program_patch_internal_llm")
-        def mcp_program_patch_internal_llm(program_id: int, patch: Dict[str, Any]) -> dict:
-            """Internal-LLM namespaced alias of program_patch."""
-            return mcp_program_patch(program_id=program_id, patch=patch)
-
-        @mcp.tool(name="program_patch_batch_internal_llm")
-        def mcp_program_patch_batch_internal_llm(items: List[Dict[str, Any]]) -> dict:
-            """Internal-LLM namespaced alias of program_patch_batch."""
-            return mcp_program_patch_batch(items=items)
-
-        @mcp.tool(name="help_internal_llm")
-        def mcp_help_internal_llm(verbose: bool = False) -> dict:
-            """Internal-LLM namespaced alias of help."""
-            return mcp_help(verbose=verbose)
-    else:
-        logger.info("MCP internal_llm tools not registered (internal LLM unavailable).")
 
     # Mount MCP as a sub-application at /mcp
     app.mount("/mcp", mcp.sse_app())

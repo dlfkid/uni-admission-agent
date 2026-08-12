@@ -28,7 +28,7 @@ Build a trusted, self-updating database of university admission requirements.
 - **Opt-in Agent Runtime layer** (`legacy` + `pydanticai`) with default-off safety gate
 - **Agent chat entrypoint** (`POST /agent/chat`) with SSE event streaming on `/tasks/{id}/events`
 - **Typed Agent Bridge contracts** (`src/agent_bridge`) decoupling runtime orchestration from core services
-- **Dual MCP toolsets**: base tools (external-LLM friendly) + conditional `_internal_llm` tools
+- **Single MCP toolset**: page-understanding tools always use the server's own configured LLM — no caller-selectable LLM mode (an earlier dual-toolset design was removed; see §3.8)
 - **Runtime-aware MCP metadata**: provider resolution + client selection visibility
 - **Policy profile precedence and normalization** (`request > client > server`) with warning output
 - **Post-persist review-and-patch loop** with stable `program_id` correction path
@@ -196,11 +196,11 @@ Client dispatch flow:
 3. Client executes external browser command (e.g. client), returns HTML/`detail_pages_batch`
 4. Existing ingestion pipeline consumes returned payload (no extension dependency required)
 
-### 3.8 MCP Dual Toolset + Decision Policy
+### 3.8 MCP Toolset + Decision Policy
 
-MCP now exposes two toolsets:
-- Base tools (always registered): `analyze`, `crawl`, `crawl_detail_batch`, `db_query`, `runtime_status`, `program_patch`, `program_patch_batch`, `help`
-- Internal LLM tools (conditional): `analyze_internal_llm`, `crawl_internal_llm`, `crawl_detail_batch_internal_llm`
+MCP exposes one toolset, always registered: `analyze`, `crawl`, `crawl_detail_batch`, `ingest`, `db_query`, `runtime_status`, `program_patch`, `program_patch_batch`, `help`. Page-understanding tools (`analyze`, `crawl`, `crawl_detail_batch`) always use the server's own configured LLM.
+
+(An earlier design registered a parallel `*_internal_llm` toolset gated on LLM availability, doubling the tool count. Removed: 7 of 9 variants were byte-identical aliases with zero behavioral difference from their base counterpart, and the two that did differ branched between the server's LLM and a deterministic heuristic — never actually "the caller's LLM does it" despite the naming — so the duplication cost tool-surface complexity for no real capability.)
 
 Runtime introspection:
 - `runtime_status` exposes `client_available`, `client_count`, `client_ids`, `internal_llm_available`, `default_browser_provider_resolved`

@@ -66,7 +66,9 @@ async def test_mcp_tools_return_resolved_browser_provider(monkeypatch) -> None:
     assert crawl_result["resolved_browser_provider"] == "server"
     assert crawl_result["client_id_used"] is None
     assert len(analyze_calls) >= 1
-    assert analyze_calls[0]["use_internal_llm"] is False
+    # No use_internal_llm knob anymore — MCP tools always use the server's
+    # configured LLM; there's only one calling convention to verify.
+    assert "use_internal_llm" not in analyze_calls[0]
 
 
 @pytest.mark.asyncio
@@ -140,11 +142,11 @@ async def test_mcp_analyze_auto_requires_confirmation_and_next_steps(monkeypatch
     assert result["requires_user_confirmation"] is True
     assert "是否按 index 流程继续" in result["confirmation_prompt"]
     assert any(item["tool"] == "ingest" for item in result["next_step_options"])
-    assert any(item["tool"] == "crawl_detail_batch_internal_llm" for item in result["next_step_options"])
+    assert any(item["tool"] == "crawl_detail_batch" for item in result["next_step_options"])
 
 
 @pytest.mark.asyncio
-async def test_mcp_analyze_detail_next_steps_include_crawl_variants(monkeypatch) -> None:
+async def test_mcp_analyze_detail_next_steps_include_crawl(monkeypatch) -> None:
     async def _fake_analyze_url_candidates(**_kwargs):
         return {"page_type": "detail", "links": [], "total_found": 0}
 
@@ -156,13 +158,12 @@ async def test_mcp_analyze_detail_next_steps_include_crawl_variants(monkeypatch)
     )
 
     tools = {item["tool"] for item in result["next_step_options"]}
-    assert "crawl" in tools
-    assert "crawl_internal_llm" in tools
+    assert tools == {"crawl"}  # single path now — no _internal_llm variant to choose
     assert result["requires_user_confirmation"] is False
 
 
 @pytest.mark.asyncio
-async def test_mcp_analyze_index_next_steps_include_external_and_internal_paths(monkeypatch) -> None:
+async def test_mcp_analyze_index_next_steps_include_ingest_and_crawl_detail_batch(monkeypatch) -> None:
     async def _fake_analyze_url_candidates(**_kwargs):
         return {
             "page_type": "index",
@@ -178,7 +179,5 @@ async def test_mcp_analyze_index_next_steps_include_external_and_internal_paths(
     )
 
     tools = {item["tool"] for item in result["next_step_options"]}
-    assert "ingest" in tools
-    assert "crawl_detail_batch" in tools
-    assert "crawl_detail_batch_internal_llm" in tools
+    assert tools == {"ingest", "crawl_detail_batch"}  # no _internal_llm variant to choose
     assert result["requires_user_confirmation"] is False
