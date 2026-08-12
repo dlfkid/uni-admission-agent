@@ -142,9 +142,10 @@ work automatically:
 6. **Report.** Print per-table inserted-row counts and a final success
    message.
 
-**Two implementation discoveries, found during final review, resolved
-before merge (not part of the original design — recorded here so the
-"why" survives):**
+**Three implementation discoveries — two found during final review, one
+found during manual end-to-end testing against the real, data-populated
+Postgres instance before opening the PR — recorded here so the "why"
+survives (not part of the original design):**
 
 - **SQLite's `create_all()` silently created only 14 of the 17 portable
   tables.** `program_quarantine`, `extraction_audit`, and
@@ -167,18 +168,74 @@ before merge (not part of the original design — recorded here so the
   ran, the target was already non-empty from its own startup, and refused
   every import — including on a genuinely fresh install, the exact
   scenario this feature exists for. **Resolved (decided with the user):**
-  `db-import` does not call the shared `_init_db()` wrapper — it calls
-  `DatabaseManager().init_db()` directly, which still creates the schema
-  but skips the taxonomy auto-seed step (`import_database()` already runs
-  its own migration internally, making `_init_db()`'s separate
-  migration-status check redundant for this command anyway). `db-export`
-  is unaffected and still calls `_init_db()` as before — export is
-  read-only, so including whatever taxonomy rows already exist is correct
-  and harmless. Net effect: `db-import` run as the very first command
-  against a brand-new database sees a truly empty target, as designed; if
-  other commands already ran first (so `subject_taxonomy` — or anything
-  else — is already seeded), the emptiness check still correctly refuses,
-  requiring `--force`.
+  `db-import`'s CLI code does not call `_init_db()`, and — after the third
+  discovery below — does not call `DatabaseManager().init_db()` directly
+  either; it calls nothing at all before `import_database()`, which is now
+  fully self-sufficient (see next item). `db-export` is unaffected and
+  still calls `_init_db()` as before — export is read-only, so including
+  whatever taxonomy rows already exist is correct and harmless. Net
+  effect: `db-import` run as the very first command against a brand-new
+  database sees a truly empty target, as designed; if other commands
+  already ran first (so `subject_taxonomy` — or anything else — is
+  already seeded), the emptiness check still correctly refuses, requiring
+  `--force`.
+- **On a genuinely fresh Postgres target, `create_all()` running before
+  Alembic migrates causes a schema collision — found during manual
+  end-to-end testing against the real, data-populated Postgres instance
+  before opening the PR (not caught by any automated test — this repo has
+  no live Postgres test fixture; see §7).** `DatabaseManager.init_db()`
+  unconditionally runs `SQLModel.metadata.create_all()` as a "self-healing
+  schema" step (used everywhere in the app, not specific to this
+  feature), and `get_session()` triggers `init_db()` lazily on first use.
+  If anything called `get_session()` (directly, or via the emptiness
+  check, or via a `DatabaseManager().init_db()` pre-call) BEFORE Alembic
+  ran, `create_all()` created all 17 tables directly from the current
+  model definitions — with no `alembic_version` row. Alembic's own
+  legacy-schema detection (`_bootstrap_legacy_schema` in
+  `src/services/migrations.py`) then saw tables with no `alembic_version`
+  and concluded, reasonably for its own use case, that this must be an old
+  pre-Alembic database — it stamped to an early baseline revision and
+  replayed every later migration forward, including `CREATE TABLE`
+  migrations for tables `create_all()` had already made, raising
+  `psycopg2.errors.DuplicateTable`. **Resolved:** `import_database()` now
+  runs `run_db_migrations(revision="head")` as its literal first
+  statement, before anything else (including the emptiness check) touches
+  the database. On a truly empty target, Alembic then sees zero tables,
+  skips the legacy-stamp branch entirely, and replays the full migration
+  history cleanly in one pass with nothing to collide with; the later
+  `create_all()` (triggered by `get_session()`) becomes a harmless no-op
+  once the schema already matches. This also let `db_import`'s CLI code
+  drop its `DatabaseManager().init_db()` pre-call entirely — nothing needs
+  to touch the database before `import_database()` runs. Verified against
+  the real, live Postgres instance: reproduced the original
+  `DuplicateTable` failure on a fresh database, then confirmed the fix
+  replays cleanly through all 9 migrations.
+  **Known follow-on limitation, found in the same manual test, NOT fixed
+  here — out of scope for this feature:** the real database's `program`
+  table has rows that violate `uq_program_year` (`UNIQUE(university_id,
+  academic_year, name_en)`), a constraint defined in the very first
+  migration (`20260302_0001`) and never dropped by any later one, even
+  though the model's current `__table_args__` only declares the narrower
+  `uq_program_version_year` (`UNIQUE(program_catalog_id, academic_year)`).
+  The live database was evidently never bootstrapped by actually running
+  `20260302_0001`'s raw SQL (likely `create_all()`-bootstrapped before
+  Alembic tracking existed, then stamped to a baseline that skipped it),
+  so it never acquired this now-obsolete constraint — but a genuinely
+  fresh Postgres install, migrated from scratch by this same codebase
+  today, WOULD get it. Two different programs sharing the same
+  `(university, year, name)` but different `program_catalog_id` — already
+  known, accepted tech debt (deferred cross-row duplicate collapse) — import
+  cleanly today because the live database's own constraint is narrower
+  than what a from-scratch install would enforce. Importing today's real
+  export into a from-scratch-migrated Postgres target hits this and fails
+  on `program`'s insert. This is a **pre-existing migration-history
+  inconsistency independent of db-export/db-import's own code** — not
+  something this feature can or should fix (it would mean writing a new
+  migration to drop `uq_program_year`, a change to shared migration
+  history affecting every Postgres deployment, needing its own review).
+  Flagged for a separate follow-up; not blocking this feature, which is
+  verified correct up to the point this pre-existing data/schema mismatch
+  is reached.
 
 ## 6. Explicit assumptions / non-goals (to prevent later "wasn't this supposed to..." confusion)
 
