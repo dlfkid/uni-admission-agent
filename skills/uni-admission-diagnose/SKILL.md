@@ -46,7 +46,7 @@ The funnel has four stages: **raw → filtered → candidates → extracted**. W
 
 | Drop location | Likely cause | What to tell the user |
 |---|---|---|
-| `raw=0` | Index page returned no HTML (anti-bot, JS-required) | "页面拉不到内容——可能反爬或全 JS 渲染。试试 client browser_provider。" |
+| `raw=0` | Index page returned no HTML (anti-bot, JS-required) | "页面拉不到内容——可能反爬或全 JS 渲染。" Then follow **Anti-crawl remediation** below. |
 | `raw=N, filtered=0` | Filter rejected every candidate (taxonomy too strict?) | "候选 link 全被 taxonomy 过滤掉了。检查 candidate_taxonomy_filter_threshold。" |
 | `filtered=N, candidates=0` | URL pattern detection failed | "找不到 detail 页面 pattern。是不是给错了 index URL？" |
 | `candidates=N, extracted=0` | LLM 抽取全失败 | "LLM 抽不出结构化字段——看 quarantine 里的原因。" |
@@ -64,12 +64,46 @@ Aggregate by `reason` field. Top patterns:
 
 | Reason | What it means | Fix-path |
 |---|---|---|
-| `NO_MARKDOWN` | Crawler got no usable text (JS-only page, blocked) | Try `browser_provider=client` (Playwright stealth) |
+| `NO_MARKDOWN` | Crawler got no usable text (JS-only page, blocked) | Follow **Anti-crawl remediation** below |
 | `EXTRACTION_FAILED` | LLM返回了空/不可解析的 JSON | One-off — usually fine. If > 50% of records: check LLM provider quota / model name. |
 | `NAME_SUSPECT` | Extracted name looks like noise ("Faculty of X", "About us") | Self-critique didn't recover — the page genuinely doesn't have program info. Filter out the URL. |
 | `TAXONOMY_MISMATCH` | Name doesn't fit any known taxonomy bucket | Either rare-but-real program or junk. Manual review. |
 
 For each top reason, quote 2-3 example records (truncate `extra_payload` to first 200 chars) so the user can see the actual failure shape.
+
+---
+
+## Anti-crawl remediation
+
+Reached from `raw=0` (Step 2) or `NO_MARKDOWN` (Step 3). Follow these three
+in order — don't jump straight to retrying with a client before confirming
+one is even connected:
+
+1. **Check whether a browser client is even connected:**
+   ```bash
+   curl -sS http://127.0.0.1:8910/clients
+   ```
+   Empty array (`[]`) → no client. Route to [[uni-admission-install]] §5 to
+   set one up (or ask the user to), then come back here.
+
+2. **If a client is connected, retry the SAME crawl forcing client mode** —
+   see [[uni-admission-crawl]] §3.1's browser-provider table for exact
+   flags:
+   ```bash
+   adm-agent crawl --name <SLUG> --year <YEAR> --url '<URL>' \
+     --page-type <detail|index> --browser-provider client --strict-client
+   ```
+   (`--strict-client` matters here — without it, a broken client silently
+   falls back to server mode and you get the exact same `raw=0` failure
+   with no new information.)
+
+3. **Set expectations honestly, don't loop.** Client mode currently has a
+   known, reproducible reliability issue (WebSocket disconnects shortly
+   after dispatch — see [[uni-admission-install]] §5.5). If the retry in
+   step 2 also fails, say so plainly — "client 模式目前不稳定，这个站点可能
+   暂时爬不了" — don't retry a third time hoping it clears up, and don't
+   imply the tool will definitely fix it once client mode is set up. This
+   is a real, open limitation, not something you did wrong.
 
 ---
 
@@ -119,3 +153,4 @@ user before ever adding `--yes`.
 - Don't recommend `db-reinit` as a "fix" — it's a developer reset, not a recovery tool.
 - Don't run `programs delete --yes` straight off — always run it unconfirmed first (it previews the affected count and does nothing) and get explicit confirmation on the actual number before adding `--yes`.
 - Don't reach for `db-reinit` (wipes every university) when the user only wants one university's data gone — that's `programs delete --university <SLUG>`.
+- Don't retry client-mode more than once after a failure — it's a known, currently-unfixed reliability issue (see **Anti-crawl remediation**), not a transient blip.
