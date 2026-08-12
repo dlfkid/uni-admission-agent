@@ -38,11 +38,14 @@ class TestDbExportCli:
 
 
 class TestDbImportCli:
-    """db_import no longer calls _init_db() (see Fix 2, C2): it calls
-    DatabaseManager().init_db() directly, skipping _init_db()'s taxonomy
-    auto-seed which would falsify the "target is empty" check. Every test
-    here patches src.cmd.cli.DatabaseManager so it never touches a real
-    (dev/CI) database via that direct call."""
+    """db_import calls neither _init_db() nor DatabaseManager().init_db()
+    directly — import_database() must be the first thing to touch the
+    target database (see import_database()'s docstring: on a fresh
+    Postgres target, create_all() running before alembic migrates causes
+    alembic's legacy-schema detection to collide with tables create_all()
+    already made). Every test here patches src.cmd.cli.DatabaseManager so
+    it never touches a real (dev/CI) database if db_import regresses to
+    calling it directly again."""
 
     def test_import_cancelled_without_yes_exits_zero_and_does_not_import(self) -> None:
         with (
@@ -54,7 +57,7 @@ class TestDbImportCli:
 
         assert result.exit_code == 0
         assert "cancelled" in result.stdout.lower()
-        mock_dm.return_value.init_db.assert_called_once_with()
+        mock_dm.return_value.init_db.assert_not_called()
         mock_confirm.assert_called_once()
         mock_import.assert_not_called()
 
@@ -71,7 +74,7 @@ class TestDbImportCli:
 
         assert result.exit_code == 0
         assert "43" in result.stdout
-        mock_dm.return_value.init_db.assert_called_once_with()
+        mock_dm.return_value.init_db.assert_not_called()
         mock_confirm.assert_not_called()
         mock_import.assert_called_once_with("in.zip", force=False)
 

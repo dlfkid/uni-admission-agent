@@ -1379,13 +1379,14 @@ def db_import(
     pending migrations to head before writing any data.
     """
     _setup_logging(verbose)
-    # Skip _init_db()'s taxonomy auto-seed — it would falsify the "target is
-    # empty" check below. import_database() migrates the schema itself.
-    try:
-        DatabaseManager().init_db()
-    except Exception as e:
-        typer.echo(f"❌ Database initialization failed: {e}", err=True)
-        raise typer.Exit(code=1)
+    # Deliberately does NOT call _init_db() or DatabaseManager().init_db()
+    # here — import_database() must be the FIRST thing to touch the target
+    # database. Two reasons: (1) _init_db()'s taxonomy auto-seed would
+    # falsify the "target is empty" check import_database() runs; (2) on a
+    # genuinely fresh Postgres target, DatabaseManager.init_db()'s
+    # create_all() running before alembic migrates causes alembic's
+    # legacy-schema detection to collide with tables create_all() already
+    # made (see import_database()'s docstring for the full mechanism).
 
     if not yes:
         confirm = typer.confirm(

@@ -167,7 +167,29 @@ def import_database(file_path: str, force: bool = False) -> dict[str, int]:
     Raises DatabaseNotEmptyError if the target already has data and
     force=False. Raises src.services.migrations.MigrationError if the
     schema cannot be migrated to head.
+
+    Migration runs FIRST, before anything else touches the database or
+    DatabaseManager. This is load-bearing on Postgres, not just tidiness:
+    DatabaseManager.init_db() (triggered lazily by the first get_session()
+    call) unconditionally runs SQLModel.metadata.create_all() as a
+    "self-healing schema" step. On a genuinely fresh Postgres database, if
+    that ran BEFORE alembic got a chance to migrate, alembic's own
+    legacy-schema detection (_bootstrap_legacy_schema) sees tables that
+    exist with no alembic_version row and concludes it must be an old
+    pre-alembic database — it stamps to an early baseline revision and
+    replays every migration since, including "CREATE TABLE" migrations for
+    tables create_all() already made, which collide
+    (psycopg2.errors.DuplicateTable). Running the real migration first
+    means alembic sees a truly-empty database and bootstraps it cleanly in
+    one pass — no table exists yet for create_all() to conflict with, and
+    the later create_all() (via get_session()) becomes a harmless no-op.
+    (SQLite's "migration" is create_all() itself, so this reordering is a
+    no-op there — the bug is Postgres/alembic-specific.)
     """
+    migration_result = run_db_migrations(revision="head")
+    if migration_result["pending"]:
+        raise MigrationError("Database schema is not at head after migration.")
+
     db = DatabaseManager()
     tables = get_portable_tables()
 
@@ -178,10 +200,6 @@ def import_database(file_path: str, force: bool = False) -> dict[str, int]:
                 "Pass force=True to proceed anyway (a real conflict will "
                 "still surface as a constraint-violation error)."
             )
-
-    migration_result = run_db_migrations(revision="head")
-    if migration_result["pending"]:
-        raise MigrationError("Database schema is not at head after migration.")
 
     row_counts: dict[str, int] = {}
     with zipfile.ZipFile(file_path, "r") as zf, db.get_session() as session:
