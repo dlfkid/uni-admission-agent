@@ -1381,7 +1381,11 @@ def db_import(
     _setup_logging(verbose)
     # Skip _init_db()'s taxonomy auto-seed — it would falsify the "target is
     # empty" check below. import_database() migrates the schema itself.
-    DatabaseManager().init_db()
+    try:
+        DatabaseManager().init_db()
+    except Exception as e:
+        typer.echo(f"❌ Database initialization failed: {e}", err=True)
+        raise typer.Exit(code=1)
 
     if not yes:
         confirm = typer.confirm(
@@ -1394,6 +1398,10 @@ def db_import(
             raise typer.Exit(code=0)
 
     try:
+        typer.echo(
+            "🔧 Migrating schema and importing data — this can take a "
+            "minute, please wait."
+        )
         row_counts = import_database(file, force=force)
     except DatabaseNotEmptyError as e:
         typer.echo(f"❌ {e}", err=True)
