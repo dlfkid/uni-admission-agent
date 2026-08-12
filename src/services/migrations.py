@@ -66,6 +66,8 @@ def _sqlite_create_all(db_url: str) -> dict[str, Any]:
     import src.models.ingestion  # noqa: F401  pylint: disable=unused-import
     import src.models.requirement  # noqa: F401  pylint: disable=unused-import
     import src.models.taxonomy  # noqa: F401  pylint: disable=unused-import
+    import src.models.quarantine  # noqa: F401  pylint: disable=unused-import
+    import src.models.extraction_audit  # noqa: F401  pylint: disable=unused-import
 
     engine = create_engine(db_url)
     try:

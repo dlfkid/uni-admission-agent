@@ -77,6 +77,19 @@ class _PortabilityTestBase:
     def teardown_method(self) -> None:
         DatabaseManager._instance = None
 
+    def _fresh_target_engine(self):
+        """A second, separate in-memory engine representing the import target,
+        distinct from self.engine (the export source)."""
+        DatabaseManager._instance = None
+        target_engine = create_engine(
+            "sqlite:///:memory:", connect_args={"check_same_thread": False}
+        )
+        _attach_sqlite_pragmas(target_engine)
+        SQLModel.metadata.create_all(target_engine)
+        target_dm = DatabaseManager()
+        target_dm.engine = target_engine
+        return target_engine
+
     def _seed_multi_type_dataset(self):
         """One row touching each 'interesting' column type: DateTime
         (Program.updated_at, RequirementVersion.effective_at), Numeric
@@ -198,15 +211,7 @@ class TestImportDatabase(_PortabilityTestBase):
         output = tmp_path / "export.zip"
         export_database(str(output))
 
-        # Fresh empty target engine — separate from the source.
-        DatabaseManager._instance = None
-        target_engine = create_engine(
-            "sqlite:///:memory:", connect_args={"check_same_thread": False}
-        )
-        _attach_sqlite_pragmas(target_engine)
-        SQLModel.metadata.create_all(target_engine)
-        target_dm = DatabaseManager()
-        target_dm.engine = target_engine
+        target_engine = self._fresh_target_engine()
 
         row_counts = import_database(str(output))
 
@@ -237,14 +242,7 @@ class TestImportDatabase(_PortabilityTestBase):
         mock_migrate = self._mock_migrations(monkeypatch)
         export_database(str(tmp_path / "empty.zip"))
 
-        DatabaseManager._instance = None
-        target_engine = create_engine(
-            "sqlite:///:memory:", connect_args={"check_same_thread": False}
-        )
-        _attach_sqlite_pragmas(target_engine)
-        SQLModel.metadata.create_all(target_engine)
-        target_dm = DatabaseManager()
-        target_dm.engine = target_engine
+        self._fresh_target_engine()
 
         import_database(str(tmp_path / "empty.zip"))
 
@@ -275,15 +273,7 @@ class TestImportDatabase(_PortabilityTestBase):
         output = tmp_path / "export.zip"
         export_database(str(output))
 
-        # Fresh empty target engine — separate from the source.
-        DatabaseManager._instance = None
-        target_engine = create_engine(
-            "sqlite:///:memory:", connect_args={"check_same_thread": False}
-        )
-        _attach_sqlite_pragmas(target_engine)
-        SQLModel.metadata.create_all(target_engine)
-        target_dm = DatabaseManager()
-        target_dm.engine = target_engine
+        self._fresh_target_engine()
 
         # Monkeypatch run_db_migrations to return pending=True, simulating
         # a schema migration that didn't fully complete.

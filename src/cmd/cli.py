@@ -1379,7 +1379,9 @@ def db_import(
     pending migrations to head before writing any data.
     """
     _setup_logging(verbose)
-    _init_db(verbose)
+    # Skip _init_db()'s taxonomy auto-seed — it would falsify the "target is
+    # empty" check below. import_database() migrates the schema itself.
+    DatabaseManager().init_db()
 
     if not yes:
         confirm = typer.confirm(

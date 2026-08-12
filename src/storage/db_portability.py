@@ -5,12 +5,22 @@ from __future__ import annotations
 
 import json
 import zipfile
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from decimal import Decimal
 from enum import Enum as PyEnum
 from typing import Any
 
-from sqlalchemy import Column, Date, DateTime, Enum as SqlEnum, Numeric, Table, func, text
+from sqlalchemy import (
+    Column,
+    Date,
+    DateTime,
+    Enum as SqlEnum,
+    Integer,
+    Numeric,
+    Table,
+    func,
+    text,
+)
 from sqlmodel import Session, SQLModel, select
 
 from src.services.migrations import MigrationError, get_migration_status, run_db_migrations
@@ -112,7 +122,7 @@ def export_database(output_path: str) -> dict[str, int]:
                 row_counts[table.name] = len(serialized)
 
         manifest = {
-            "exported_at": datetime.now().isoformat(),
+            "exported_at": datetime.now(timezone.utc).isoformat(),
             "alembic_revision": get_migration_status()["current_revision"],
             "tables": row_counts,
         }
@@ -137,6 +147,8 @@ def _fix_postgres_sequences(
             continue
         pk_columns = list(table.primary_key.columns)
         if len(pk_columns) != 1:
+            continue
+        if not isinstance(pk_columns[0].type, Integer):
             continue
         pk_name = pk_columns[0].name
         session.execute(
