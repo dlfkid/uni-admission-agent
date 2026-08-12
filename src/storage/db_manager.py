@@ -35,6 +35,8 @@ from src.models.requirement import (
 )
 from src.models.ingestion import IngestionJob, IngestionTask  # noqa: F401
 from src.models.taxonomy import SubjectTaxonomy  # noqa: F401
+from src.models.quarantine import ProgramQuarantine  # noqa: F401
+from src.models.extraction_audit import ExtractionAudit, ExtractionAuditLink  # noqa: F401
 from src.models.scraper_models import ProgramContext
 from src.storage.db_helpers import (
     load_database_env,

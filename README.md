@@ -161,6 +161,8 @@ AGENT_RUNTIME=pydanticai
 | `uni-admission db-version` | Alembic revision status |
 | `uni-admission db-migrate --yes` | Apply pending migrations |
 | `uni-admission db-reinit --yes` | Drop + recreate + migrate (destructive) |
+| `uni-admission db-export --output <file.zip>` | Export the entire database (all tables) to one portable zip file |
+| `uni-admission db-import --file <file.zip> [--yes] [--force]` | Import a database snapshot produced by db-export (target must be empty unless `--force`) |
 | `uni-admission repair --auto` | Auto-repair migration failures |
 | `uni-admission ingestion-jobs [--limit N]` | List recent ingestion jobs |
 | `uni-admission ingestion-resume --job <uid> --stage <stage>` | Resume failed job |

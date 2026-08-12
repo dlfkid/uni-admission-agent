@@ -101,7 +101,7 @@ work automatically:
 |---|---|---|
 | `DateTime` / `Date` | `.isoformat()` string | `datetime.fromisoformat(...)` / `date.fromisoformat(...)` |
 | `Numeric` (`Program.tuition_amount`) | `str(value)` (preserves precision) | `Decimal(value)` |
-| `Enum`-backed columns (`StudyMode`, `RequirementCategory`, `CurrencyCode`, `IngestionJobStatus`, `IngestionStage`, etc. — all `str, Enum` subclasses) | the string value itself (already JSON-safe) | passed through as-is — SQLAlchemy's `Enum` type accepts the raw string value on bind |
+| `Enum`-backed columns (`StudyMode`, `RequirementCategory`, `CurrencyCode`, `IngestionJobStatus`, `IngestionStage`, etc. — all `str, Enum` subclasses) | detected on the VALUE (`isinstance(value, Enum)`), not the column type — a raw Core `select()` returns an actual Enum member, not its `.value`; export calls `.value` on it | reconstructed via `column.type.enum_class(value)` — passing the raw string through unreconstructed is not reliably accepted by every SQLAlchemy/driver combination, so this is explicit, not assumed |
 | `JSON` columns (`Program.deadlines`/`study_options`/`extra_metadata`, `RequirementVersion.diff_payload`, `SubjectDim.aliases`) | already JSON-compatible structures — no conversion | already JSON-compatible structures — no conversion |
 | Everything else (str, int, bool, None) | passed through | passed through |
 
@@ -141,6 +141,131 @@ work automatically:
    same kind of step for exactly the same reason.
 6. **Report.** Print per-table inserted-row counts and a final success
    message.
+
+**Three implementation discoveries — two found during final review, one
+found during manual end-to-end testing against the real, data-populated
+Postgres instance before opening the PR — recorded here so the "why"
+survives (not part of the original design):**
+
+- **SQLite's `create_all()` silently created only 14 of the 17 portable
+  tables.** `program_quarantine`, `extraction_audit`, and
+  `extraction_audit_link`'s model modules were only ever imported lazily
+  elsewhere in the codebase (inside `quarantine_repo.py`/`audit_repo.py`,
+  themselves only imported inside specific `DatabaseManager` methods), so
+  on a process that hadn't happened to trigger those imports first,
+  `SQLModel.metadata` was incomplete when `create_all()` ran, and any
+  query against the missing three raised `OperationalError: no such
+  table`. Fixed by adding both modules to the existing eager side-effect
+  import lists in `db_manager.py` and `migrations.py`'s
+  `_sqlite_create_all` — a latent gap in the schema-bootstrap path,
+  independent of this feature, that this feature's "all 17 tables"
+  requirement happened to surface.
+- **The "target database is empty" premise (§2) was unreachable in
+  practice.** Every CLI command — including `db-import` itself, via the
+  shared `_init_db()` helper — auto-seeds `subject_taxonomy` with ~700+
+  rows from a bundled seed file (`bootstrap_subject_taxonomy()`) before
+  the command's own logic runs. So by the time step 1's emptiness check
+  ran, the target was already non-empty from its own startup, and refused
+  every import — including on a genuinely fresh install, the exact
+  scenario this feature exists for. **Resolved (decided with the user):**
+  `db-import`'s CLI code does not call `_init_db()`, and — after the third
+  discovery below — does not call `DatabaseManager().init_db()` directly
+  either; it calls nothing at all before `import_database()`, which is now
+  fully self-sufficient (see next item). `db-export` is unaffected and
+  still calls `_init_db()` as before — export is read-only, so including
+  whatever taxonomy rows already exist is correct and harmless. Net
+  effect: `db-import` run as the very first command against a brand-new
+  database sees a truly empty target, as designed; if other commands
+  already ran first (so `subject_taxonomy` — or anything else — is
+  already seeded), the emptiness check still correctly refuses, requiring
+  `--force`.
+- **On a genuinely fresh Postgres target, `create_all()` running before
+  Alembic migrates causes a schema collision — found during manual
+  end-to-end testing against the real, data-populated Postgres instance
+  before opening the PR (not caught by any automated test — this repo has
+  no live Postgres test fixture; see §7).** `DatabaseManager.init_db()`
+  unconditionally runs `SQLModel.metadata.create_all()` as a "self-healing
+  schema" step (used everywhere in the app, not specific to this
+  feature), and `get_session()` triggers `init_db()` lazily on first use.
+  If anything called `get_session()` (directly, or via the emptiness
+  check, or via a `DatabaseManager().init_db()` pre-call) BEFORE Alembic
+  ran, `create_all()` created all 17 tables directly from the current
+  model definitions — with no `alembic_version` row. Alembic's own
+  legacy-schema detection (`_bootstrap_legacy_schema` in
+  `src/services/migrations.py`) then saw tables with no `alembic_version`
+  and concluded, reasonably for its own use case, that this must be an old
+  pre-Alembic database — it stamped to an early baseline revision and
+  replayed every later migration forward, including `CREATE TABLE`
+  migrations for tables `create_all()` had already made, raising
+  `psycopg2.errors.DuplicateTable`. **Resolved:** `import_database()` now
+  runs `run_db_migrations(revision="head")` as its literal first
+  statement, before anything else (including the emptiness check) touches
+  the database. On a truly empty target, Alembic then sees zero tables,
+  skips the legacy-stamp branch entirely, and replays the full migration
+  history cleanly in one pass with nothing to collide with; the later
+  `create_all()` (triggered by `get_session()`) becomes a harmless no-op
+  once the schema already matches. This also let `db_import`'s CLI code
+  drop its `DatabaseManager().init_db()` pre-call entirely — nothing needs
+  to touch the database before `import_database()` runs. Verified against
+  the real, live Postgres instance: reproduced the original
+  `DuplicateTable` failure on a fresh database, then confirmed the fix
+  replays cleanly through all 9 migrations.
+- **The real database's `program` table has rows that violate
+  `uq_program_year` (`UNIQUE(university_id, academic_year, name_en)`), a
+  constraint defined in the very first migration (`20260302_0001`) and
+  never dropped by any later one, even though the model's current
+  `__table_args__` only declares the narrower `uq_program_version_year`
+  (`UNIQUE(program_catalog_id, academic_year)`).** The live database was
+  never bootstrapped by actually running `20260302_0001`'s raw SQL (it was
+  `create_all()`-bootstrapped before Alembic tracking existed, then
+  legacy-stamped to a baseline that skipped it), so it never acquired this
+  now-obsolete constraint — but a genuinely fresh Postgres install,
+  migrated from scratch by today's history (as the previous fix now
+  correctly enables), WOULD get it, and two different programs sharing the
+  same `(university, year, name)` but different `program_catalog_id` —
+  already known, accepted tech debt (deferred cross-row duplicate
+  collapse) — legitimately exist in the real data. **Resolved (decided
+  with the user):** added migration `20260812_0010` that drops
+  `uq_program_year` and creates `uq_program_version_year` if missing,
+  defensively checking each constraint's presence first (via
+  `inspector.get_unique_constraints`) so it's a safe no-op on a database
+  that already has the new constraint (like the live one) and a real fix
+  on one that only has the old one (a from-scratch install). Both
+  directions verified against real Postgres: upgrade from a from-scratch
+  head produces exactly `uq_program_version_year`; downgrade restores
+  exactly `uq_program_year`; re-running upgrade against a database already
+  holding only the new constraint (stamped back to the prior revision,
+  mirroring the live database's actual state) is a clean no-op.
+- **26 of 28 `timestamp`-typed columns differ between the live database
+  (`TIMESTAMP WITHOUT TIME ZONE`, from the same `create_all()`-bootstrap
+  history as the constraint above) and a from-scratch migration
+  (`TIMESTAMP WITH TIME ZONE` — several migrations explicitly declare
+  `DateTime(timezone=True)`, while the models' bare `datetime` type hints
+  don't).** This is not cosmetic: verified by direct execution that
+  round-tripping a naive datetime from a without-time-zone column into a
+  with-time-zone target column (or vice versa) is reinterpreted using the
+  Postgres session's `TimeZone` setting — which defaults to the
+  server/OS's configured zone, not UTC (`Asia/Taipei`, `+08:00`, in this
+  environment) — silently shifting the stored instant by that offset.
+  **Resolved (decided with the user):** `db_portability.py` now forces
+  `SET TIME ZONE 'UTC'` on both the export and import sessions
+  (`_force_utc_session`, dialect-gated — a no-op on SQLite, which has no
+  session-timezone concept). This makes every timestamp round-trip to the
+  same UTC instant regardless of which side has which column type,
+  without touching the broader migration history (reconciling all 26
+  columns onto one type consistently is a separate, much larger effort,
+  deliberately not undertaken here). Verified against real Postgres:
+  compared `program.updated_at` and five other previously-mismatched
+  columns across different tables, converting both sides to UTC before
+  comparison — all matched exactly after the fix; before it, the same
+  comparison showed an 8-hour discrepancy matching the session's
+  `Asia/Taipei` offset.
+
+Both of the last two discoveries were found the same way: a full,
+real export of the live, data-populated Postgres database (13,445 rows
+across 17 tables) imported into a genuinely fresh Postgres database,
+with every row count checked against the export manifest and representative
+rows compared field-by-field — not just unit tests against synthetic data.
 
 ## 6. Explicit assumptions / non-goals (to prevent later "wasn't this supposed to..." confusion)
 

@@ -69,6 +69,7 @@ from src.storage.db_manager import DatabaseManager
 from src.services.crawl_strategy.orchestrator import crawl_index
 from src.services.crawl_strategy import fetch_adapters
 from src.services.crawl_strategy.types import CrawlRange
+from src.storage.db_portability import DatabaseNotEmptyError, export_database, import_database
 
 
 # ---------------------------------------------------------------------------
@@ -103,6 +104,8 @@ DATABASE & STATUS:
     crawl-summary    One-shot summary of the most recent crawl (for LLM CLI / quick scan)
     diagnostics clear One-shot wipe of quarantine + audit data for one university
     programs delete  Batch-delete program snapshots for one university (preview unless --yes)
+    db-export        Export the entire database to one portable zip file
+    db-import        Import a database snapshot produced by db-export
 
 LLM CONFIGURATION:
     llm-config Interactive wizard to configure LLM providers
@@ -1337,6 +1340,83 @@ def db_reinit(
     except Exception as e:
         typer.echo(f"❌ Database reinitialization failed: {e}", err=True)
         raise typer.Exit(code=1)
+
+
+@app.command(name="db-export")
+def db_export(
+    output: str = typer.Option(..., "--output", help="Output zip file path"),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Debug logging"),
+) -> None:
+    """Export the entire database (all tables) to one portable zip file."""
+    _setup_logging(verbose)
+    _init_db(verbose)
+
+    typer.echo(f"Exporting database → {output}")
+    try:
+        row_counts = export_database(output)
+    except Exception as e:
+        typer.echo(f"❌ Database export failed: {e}", err=True)
+        raise typer.Exit(code=1)
+
+    total = sum(row_counts.values())
+    typer.echo(f"✅ Exported {total} rows across {len(row_counts)} tables → {output}")
+
+
+@app.command(name="db-import")
+def db_import(
+    file: str = typer.Option(..., "--file", help="Zip file produced by db-export"),
+    yes: bool = typer.Option(False, "--yes", help="Skip confirmation prompt"),
+    force: bool = typer.Option(
+        False, "--force", help="Proceed even if the target database is not empty"
+    ),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Debug logging"),
+) -> None:
+    """Import a database snapshot produced by db-export.
+
+    Assumes the target database is empty — refuses otherwise unless
+    --force is passed (which skips the check, not a merge: a real
+    conflict still surfaces as a constraint-violation error). Runs
+    pending migrations to head before writing any data.
+    """
+    _setup_logging(verbose)
+    # Deliberately does NOT call _init_db() or DatabaseManager().init_db()
+    # here — import_database() must be the FIRST thing to touch the target
+    # database. Two reasons: (1) _init_db()'s taxonomy auto-seed would
+    # falsify the "target is empty" check import_database() runs; (2) on a
+    # genuinely fresh Postgres target, DatabaseManager.init_db()'s
+    # create_all() running before alembic migrates causes alembic's
+    # legacy-schema detection to collide with tables create_all() already
+    # made (see import_database()'s docstring for the full mechanism).
+
+    if not yes:
+        confirm = typer.confirm(
+            f"This will import data from {file!r} into the currently "
+            "configured database. Continue?",
+            default=False,
+        )
+        if not confirm:
+            typer.echo("ℹ️  Database import cancelled.")
+            raise typer.Exit(code=0)
+
+    try:
+        typer.echo(
+            "🔧 Migrating schema and importing data — this can take a "
+            "minute, please wait."
+        )
+        row_counts = import_database(file, force=force)
+    except DatabaseNotEmptyError as e:
+        typer.echo(f"❌ {e}", err=True)
+        typer.echo("👉 Re-run with --force to proceed anyway.", err=True)
+        raise typer.Exit(code=1)
+    except MigrationError as e:
+        typer.echo(f"❌ Database migration failed: {e}", err=True)
+        raise typer.Exit(code=1)
+    except Exception as e:
+        typer.echo(f"❌ Database import failed: {e}", err=True)
+        raise typer.Exit(code=1)
+
+    total = sum(row_counts.values())
+    typer.echo(f"✅ Imported {total} rows across {len(row_counts)} tables from {file}")
 
 
 @app.command()
