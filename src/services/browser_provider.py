@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any, Awaitable, Callable, Optional
 
@@ -73,13 +74,31 @@ async def fetch_index_and_details_via_client(
     if fetch_fn is None:
         raise RuntimeError("Client bridge fetch handler is not configured")
     import inspect
-    result = fetch_fn(
-        url=url,
-        page_type_hint=page_type_hint,
-        client_id=client_id,
-    )
-    if inspect.isawaitable(result):
-        result = await result
+
+    if inspect.iscoroutinefunction(fetch_fn):
+        result = await fetch_fn(
+            url=url,
+            page_type_hint=page_type_hint,
+            client_id=client_id,
+        )
+    else:
+        # `fetch_fn` may be a *sync* bridge (e.g. the server's
+        # ``_fetch_browser_payload_from_client_sync``) that blocks its
+        # calling thread on a ``concurrent.futures.Future`` for a coroutine
+        # it schedules onto the main event loop via
+        # ``run_coroutine_threadsafe``. Calling it in-line here would run
+        # it on this very event loop thread, self-deadlocking: the
+        # scheduled coroutine could never run because the loop thread is
+        # stuck waiting for it. Running it in a worker thread keeps the
+        # loop free to actually service that coroutine.
+        result = await asyncio.to_thread(
+            fetch_fn,
+            url=url,
+            page_type_hint=page_type_hint,
+            client_id=client_id,
+        )
+        if inspect.isawaitable(result):
+            result = await result
     return dict(result or {})
 
 
