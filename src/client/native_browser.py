@@ -29,6 +29,57 @@ class AnchorLink:
     class_name: str
 
 
+def _same_page(url: str, base: str) -> bool:
+    """True when *url* is the same page as *base*, ignoring a trailing
+    slash and any ``#fragment``.
+
+    Fragments are client-side scroll anchors ("skip to main content",
+    in-page nav) — never a different page by HTML spec, so two URLs that
+    differ only by fragment must count as the same page. A bare
+    ``rstrip("/")`` comparison misses this: a "skip to main content" link
+    on an index page whose OWN url happens to contain a keyword like
+    "/programme" (e.g. Lingnan's ``.../sgs/programmes-on-offer``) resolves
+    to ``base_url + "#main"``, which is not string-equal to ``base`` even
+    though it is the same page — so it slipped through the old check,
+    matched the keyword filter below purely because of the page's own
+    url, and got selected as the ONLY "detail candidate", pushing out the
+    real programme links entirely (confirmed live: a full crawl imported
+    one garbage record named after the index page itself instead of the
+    requested programmes).
+    """
+    def _strip(value: str) -> str:
+        return value.split("#", 1)[0].rstrip("/")
+    return _strip(url) == _strip(base)
+
+
+def _same_section(base: str, candidate: str) -> bool:
+    """True when *candidate* is nested under *base*'s own path.
+
+    A minimal, local counterpart to ``_same_section`` in
+    ``src/services/thin_page_supplement.py`` (deliberately not imported —
+    this module ships standalone in the client binary and stays
+    dependency-free from the server's service layer). Same rationale: real
+    detail links for an index page live NESTED under that page's own path
+    (Lingnan's index is ``.../sgs/programmes-on-offer``, its real
+    programme links are ``.../sgs/programmes-on-offer/<slug>``), while
+    sitewide chrome that happens to contain a matching keyword — a
+    language switcher (``/cht/sgs/programmes-on-offer``), a news item
+    (``/sgs/news-events/.../postgraduate-conference2026``), a "for current
+    students" nav link — lives elsewhere on the same host. A bare
+    keyword-in-url filter can't tell these apart; nesting can.
+    """
+    try:
+        base_parts, cand_parts = urlparse(base), urlparse(candidate)
+    except ValueError:
+        return False
+    if base_parts.netloc.lower() != cand_parts.netloc.lower():
+        return False
+    base_path = base_parts.path.rstrip("/")
+    if not base_path:
+        return True
+    return cand_parts.path == base_path or cand_parts.path.startswith(base_path + "/")
+
+
 def select_detail_links(
     *,
     index_url: str,
@@ -47,20 +98,36 @@ def select_detail_links(
         rows = [item for item in anchors if "/study/pg/tpg/" in item.url]
         return rows[:limit]
 
-    rows = []
+    nested_rows = []
+    other_rows = []
     for item in anchors:
         parsed_url = urlparse(item.url)
         if parsed_url.netloc != parsed.netloc:
             continue
-        if item.url.rstrip("/") == base.rstrip("/"):
+        if _same_page(item.url, base):
             continue
         text = item.url.lower()
-        if any(token in text for token in (
+        if not any(token in text for token in (
             "/programme", "/program", "/course", "/master", "/msc", "/ma-",
             "/degree", "/undergraduate", "/postgraduate",
         )):
-            rows.append(item)
-    return rows[:limit]
+            continue
+        # Prefer links nested under the index page's own path — sitewide
+        # chrome that merely shares a keyword (see _same_section docstring)
+        # goes to the fallback bucket instead.
+        if _same_section(base, item.url):
+            nested_rows.append(item)
+        else:
+            other_rows.append(item)
+    # Once ANY nested match exists, trust it exclusively — mixing in
+    # sitewide noise to pad out to `limit` is worse than returning fewer,
+    # all-correct candidates (missing data beats wrong data, every time).
+    # Only fall back to the keyword-only bucket when nesting found nothing
+    # at all (e.g. a layout where detail links genuinely aren't nested
+    # under the index page's own path).
+    if nested_rows:
+        return nested_rows[:limit]
+    return other_rows[:limit]
 
 
 class _BrowserProcess:
