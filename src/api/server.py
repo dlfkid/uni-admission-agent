@@ -394,14 +394,18 @@ async def _rpc_send_and_wait(
     request_id: str,
     url: str,
     page_type_hint: str,
+    detail_limit: Optional[int] = None,
 ) -> Dict[str, Any]:
     """Send RPC request and wait for response. Must run on the main event loop."""
+    payload: Dict[str, Any] = {"url": url, "page_type_hint": page_type_hint}
+    if detail_limit is not None:
+        payload["detail_limit"] = detail_limit
     await websocket.send_json(
         {
             "type": "rpc_request",
             "request_id": request_id,
             "action": "fetch_browser_payload",
-            "payload": {"url": url, "page_type_hint": page_type_hint},
+            "payload": payload,
         }
     )
     return dict(await client_rpc_broker.wait_for_response(request_id) or {})
@@ -412,6 +416,7 @@ async def _fetch_browser_payload_from_client(
     url: str,
     page_type_hint: str,
     client_id: Optional[str],
+    detail_limit: Optional[int] = None,
 ) -> Dict[str, Any]:
     """Dispatch a browser fetch RPC. Must be called on the main event loop."""
     target_client_id = client_registry.select_client_id(client_id)
@@ -427,7 +432,7 @@ async def _fetch_browser_payload_from_client(
         "[RPC] Dispatching fetch_browser_payload to client=%s request_id=%s url=%s",
         target_client_id, request_id, url,
     )
-    payload = await _rpc_send_and_wait(websocket, request_id, url, page_type_hint)
+    payload = await _rpc_send_and_wait(websocket, request_id, url, page_type_hint, detail_limit)
     logger.info(
         "[RPC] Client %s responded to request_id=%s (payload keys: %s)",
         target_client_id, request_id, list(payload.keys()),
@@ -440,12 +445,15 @@ def _fetch_browser_payload_from_client_sync(
     url: str,
     page_type_hint: str,
     client_id: Optional[str],
+    detail_limit: Optional[int] = None,
 ) -> Dict[str, Any]:
     """Thread-safe sync wrapper: schedules RPC on the main event loop and blocks."""
     if _main_loop is None:
         raise RuntimeError("Server main event loop not initialized")
     future = asyncio.run_coroutine_threadsafe(
-        _fetch_browser_payload_from_client(url=url, page_type_hint=page_type_hint, client_id=client_id),
+        _fetch_browser_payload_from_client(
+            url=url, page_type_hint=page_type_hint, client_id=client_id, detail_limit=detail_limit,
+        ),
         _main_loop,
     )
     return future.result(timeout=120)

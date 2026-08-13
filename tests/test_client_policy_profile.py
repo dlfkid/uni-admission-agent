@@ -42,8 +42,8 @@ async def test_client_runtime_embeds_policy_in_rpc_payload(monkeypatch):
     )
     runtime = ClientRuntime(config)
 
-    async def _fake_fetch_browser_payload(*, url: str, page_type_hint: str):
-        del url, page_type_hint
+    async def _fake_fetch_browser_payload(*, url: str, page_type_hint: str, detail_limit=None):
+        del url, page_type_hint, detail_limit
         return {
             "html_content": "<html></html>",
             "detail_pages_batch": [],

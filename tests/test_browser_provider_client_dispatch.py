@@ -38,7 +38,7 @@ async def test_sync_fetch_fn_does_not_block_the_event_loop(monkeypatch) -> None:
         await asyncio.sleep(0.05)
         return {"html_content": "<html>ok</html>"}
 
-    def sync_fetch_fn(*, url: str, page_type_hint: str, client_id):
+    def sync_fetch_fn(*, url: str, page_type_hint: str, client_id, detail_limit=None):
         # Mirrors `_fetch_browser_payload_from_client_sync`.
         future = asyncio.run_coroutine_threadsafe(_rpc_roundtrip(), loop)
         return future.result(timeout=2)

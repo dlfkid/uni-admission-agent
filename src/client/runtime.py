@@ -206,10 +206,19 @@ class ClientRuntime:
         try:
             fetch_url = str(payload_dict.get("url") or "").strip()
             fetch_hint = str(payload_dict.get("page_type_hint") or "auto")
-            logger.info("[Client RPC] Starting browser fetch: url=%s hint=%s", fetch_url, fetch_hint)
+            raw_detail_limit = payload_dict.get("detail_limit")
+            try:
+                fetch_detail_limit = int(raw_detail_limit) if raw_detail_limit is not None else None
+            except (TypeError, ValueError):
+                fetch_detail_limit = None
+            logger.info(
+                "[Client RPC] Starting browser fetch: url=%s hint=%s detail_limit=%s",
+                fetch_url, fetch_hint, fetch_detail_limit,
+            )
             response_payload = await self._fetch_browser_payload(
                 url=fetch_url,
                 page_type_hint=fetch_hint,
+                detail_limit=fetch_detail_limit,
             )
             response_payload = dict(response_payload or {})
             if self.config.policy_profile is not None:
@@ -248,13 +257,19 @@ class ClientRuntime:
         *,
         url: str,
         page_type_hint: str,
+        detail_limit: int | None = None,
     ) -> dict[str, Any]:
         if not self.fetch_command_template:
+            # The caller's own requested limit wins when given — falling
+            # back to this client's fixed local default regardless of what
+            # was actually asked for is exactly the bug that silently
+            # capped a "give me 5" crawl at 4 with no error at all.
+            effective_limit = detail_limit if detail_limit is not None else self.native_detail_limit
             return await asyncio.to_thread(
                 fetch_browser_payload,
                 url=url,
                 page_type_hint=page_type_hint,
-                detail_limit=max(1, int(self.native_detail_limit)),
+                detail_limit=max(1, int(effective_limit)),
             )
 
         command = render_fetch_command(
