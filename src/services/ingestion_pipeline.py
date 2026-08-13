@@ -744,6 +744,13 @@ class IngestionPipeline:
         # sibling-link discovery on every subsequent crawl — the
         # thin-page-supplement mechanism silently stops finding anything to
         # fetch even though the source markdown still has the links.
+        #
+        # Any code path that reaches the `selected_urls` branch below needs
+        # this map from SOMEWHERE — either pre-seeded here by the caller, or
+        # derived in that branch from caller-supplied index HTML. Two
+        # separate real bugs have now come from a new discovery path
+        # forgetting that (the cached-strategy fast path, and client-mode
+        # index fetches). If you add a third, wire it up too.
         selected_sibling_urls: Dict[str, List[str]] = {
             str(url): [str(u) for u in sibs]
             for url, sibs in dict(request_payload.get("selected_sibling_urls") or {}).items()
@@ -965,6 +972,48 @@ class IngestionPipeline:
 
         if selected_urls:
             crawl_urls = self._dedupe_urls(selected_urls, visited_urls)
+            # Third place a sibling map has to be built (see the comment on
+            # `selected_sibling_urls` above): a caller that supplies BOTH
+            # pre-selected detail URLs AND the index page's own HTML — which
+            # is exactly what a client-mode index fetch does
+            # (src/client/native_browser.py returns `html_content` = the
+            # index page plus its `selected_urls`) — lands here rather than
+            # in the "entry_index"/`elif html_content` branch below, so that
+            # branch's build_sibling_link_map call never runs and the
+            # thin-page-supplement mechanism gets starved of the one input
+            # it needs (confirmed live: a client-mode Lingnan crawl imported
+            # 5 correct programmes but recovered tuition for only 1, where
+            # server mode recovers 3-4 of the same 5).
+            #
+            # Deriving it from the caller's own HTML here reuses the exact
+            # same markdown-based detection the other two call sites use,
+            # rather than duplicating the carefully-tuned generic-anchor /
+            # noise vocabulary into a second (DOM-based) implementation that
+            # would immediately start drifting. Naturally a no-op when the
+            # supplied HTML isn't an index page listing these URLs: the map
+            # only registers a sibling for a line carrying BOTH a selected
+            # URL and a generic-action link, so an unrelated page yields {}.
+            if html_content and not selected_sibling_urls:
+                try:
+                    index_probe = scraper._create_result_from_browser_html(
+                        url, str(html_content)
+                    )
+                    derived_siblings = build_sibling_link_map(
+                        index_probe.markdown, crawl_urls
+                    )
+                    if derived_siblings:
+                        selected_sibling_urls.update(derived_siblings)
+                        logger.info(
+                            "Derived %d sibling-link mapping(s) from caller-supplied "
+                            "index HTML for the selected_urls path",
+                            len(derived_siblings),
+                        )
+                except Exception:  # pylint: disable=broad-except
+                    logger.warning(
+                        "Failed to derive sibling links from caller-supplied index "
+                        "HTML; thin-page supplement will run without them",
+                        exc_info=True,
+                    )
             _emit_fetch_event(
                 "fetch_candidates_identified",
                 {

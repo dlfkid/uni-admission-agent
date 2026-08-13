@@ -1252,3 +1252,161 @@ def test_pipeline_thin_supplement_one_row_failure_does_not_abort_others(monkeypa
     assert failing_candidate.get("tuition_amount") is None
     # The other row's supplement still succeeded despite the sibling's crash.
     assert result["thin_supplement_urls"] == [row_ok["url"]]
+
+
+# ── sibling map for the selected_urls path (client-mode index fetches) ──
+#
+# The sibling map has to be built for EVERY discovery path that reaches
+# `_stage_fetch_raw`'s `selected_urls` branch, because that branch skips
+# the "entry_index" branch where the map is normally built. Two real bugs
+# have come from a path forgetting this: the cached-strategy fast path
+# (fixed in PR #48 by pre-seeding `selected_sibling_urls`), and client-mode
+# index fetches (fixed by deriving the map from the index HTML the client
+# already supplies alongside its pre-selected URLs).
+
+
+class _FakeIndexHtmlScraper:
+    """AdmissionScraper stand-in that converts supplied HTML to markdown.
+
+    Mirrors the real `_create_result_from_browser_html` contract closely
+    enough for sibling-map derivation: the returned object just needs a
+    `.markdown` carrying the index page's link structure.
+    """
+
+    def __init__(self) -> None:
+        self.router = MagicMock()
+        self._export_md = False
+        self._export_path = None
+        self.crawled: list = []
+
+    def _reset_session_state(self) -> None:
+        return
+
+    def _create_result_from_browser_html(self, url: str, html_content: str):
+        from src.models.scraper_models import CrawlPageResult
+
+        # The real implementation runs an HTML→markdown conversion; the
+        # fixture below is already markdown-shaped, so pass it through.
+        return CrawlPageResult(
+            url=url, markdown=html_content, char_count=len(html_content),
+            links=[], status_code=200, html=html_content,
+        )
+
+    async def _crawl_urls(self, urls):
+        from src.models.scraper_models import CrawlPageResult
+
+        self.crawled.extend(urls)
+        return [
+            CrawlPageResult(
+                url=u, markdown="# stub", char_count=6, links=[],
+                status_code=200, html=None,
+            )
+            for u in urls
+        ]
+
+
+def test_fetch_raw_derives_siblings_from_caller_supplied_index_html(monkeypatch) -> None:
+    """Client-mode index fetch: the caller hands us pre-selected detail URLs
+    AND the index page's own HTML. The sibling map must be derived from that
+    HTML — otherwise thin-page supplement has nothing to expand and tuition
+    recovery silently drops (confirmed live: 1-of-5 vs server mode's 3-4)."""
+    from src.services.ingestion_pipeline import IngestionPipeline
+
+    monkeypatch.setattr(
+        "src.services.ingestion_pipeline.AdmissionScraper", _FakeIndexHtmlScraper
+    )
+
+    pipeline = IngestionPipeline(db_manager=MagicMock())
+    result = asyncio.run(
+        pipeline._stage_fetch_raw(
+            {
+                "url": "https://www.ln.edu.hk/sgs/programmes-on-offer",
+                "page_type_hint": "index",
+                "selected_urls": [_LN_STUB_URL],
+                # The real client sends the index page's HTML here.
+                "html_content": _LN_ROW,
+            }
+        )
+    )
+
+    row = next(r for r in result["raw_pages"] if r["url"] == _LN_STUB_URL)
+    assert row["sibling_urls"] == [_DEPT_HOME]
+
+
+def test_fetch_raw_prefers_caller_seeded_siblings_over_derivation(monkeypatch) -> None:
+    """A caller that already computed its own map (the strategy-discovery
+    fast path, PR #48) keeps it — derivation is a fallback for callers that
+    only have raw HTML, never an override of a better-informed map."""
+    from src.services.ingestion_pipeline import IngestionPipeline
+
+    monkeypatch.setattr(
+        "src.services.ingestion_pipeline.AdmissionScraper", _FakeIndexHtmlScraper
+    )
+    pre_seeded = "https://www.ln.edu.hk/preseeded/department"
+
+    pipeline = IngestionPipeline(db_manager=MagicMock())
+    result = asyncio.run(
+        pipeline._stage_fetch_raw(
+            {
+                "url": "https://www.ln.edu.hk/sgs/programmes-on-offer",
+                "page_type_hint": "index",
+                "selected_urls": [_LN_STUB_URL],
+                "html_content": _LN_ROW,
+                "selected_sibling_urls": {_LN_STUB_URL: [pre_seeded]},
+            }
+        )
+    )
+
+    row = next(r for r in result["raw_pages"] if r["url"] == _LN_STUB_URL)
+    assert row["sibling_urls"] == [pre_seeded]
+
+
+def test_fetch_raw_selected_urls_without_html_is_unaffected(monkeypatch) -> None:
+    """No index HTML supplied (e.g. a plain `--selected-urls` CLI crawl) →
+    no siblings, no crash, fetch behavior otherwise identical."""
+    from src.services.ingestion_pipeline import IngestionPipeline
+
+    monkeypatch.setattr(
+        "src.services.ingestion_pipeline.AdmissionScraper", _FakeIndexHtmlScraper
+    )
+
+    pipeline = IngestionPipeline(db_manager=MagicMock())
+    result = asyncio.run(
+        pipeline._stage_fetch_raw(
+            {
+                "url": "https://www.ln.edu.hk/sgs/programmes-on-offer",
+                "page_type_hint": "index",
+                "selected_urls": [_LN_STUB_URL],
+            }
+        )
+    )
+
+    row = next(r for r in result["raw_pages"] if r["url"] == _LN_STUB_URL)
+    assert row["sibling_urls"] == []
+    assert result["raw_page_count"] == 1
+
+
+def test_fetch_raw_derivation_tolerates_unrelated_html(monkeypatch) -> None:
+    """Supplied HTML that isn't an index page listing these URLs yields an
+    empty map rather than bogus siblings — the natural no-op that makes this
+    derivation safe to run unconditionally on the selected_urls path."""
+    from src.services.ingestion_pipeline import IngestionPipeline
+
+    monkeypatch.setattr(
+        "src.services.ingestion_pipeline.AdmissionScraper", _FakeIndexHtmlScraper
+    )
+
+    pipeline = IngestionPipeline(db_manager=MagicMock())
+    result = asyncio.run(
+        pipeline._stage_fetch_raw(
+            {
+                "url": "https://www.ln.edu.hk/sgs/programmes-on-offer",
+                "page_type_hint": "index",
+                "selected_urls": [_LN_STUB_URL],
+                "html_content": "# Some unrelated page\n\nNo relevant links here.\n",
+            }
+        )
+    )
+
+    row = next(r for r in result["raw_pages"] if r["url"] == _LN_STUB_URL)
+    assert row["sibling_urls"] == []
