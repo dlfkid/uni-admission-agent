@@ -68,11 +68,12 @@ adm-agent crawl ... --browser-provider client --strict-client
 Before using `--browser-provider client`, confirm one is actually
 connected — `curl -sS http://127.0.0.1:8910/clients` should return a
 non-empty array. If empty, route to [[uni-admission-install]] §5 to set
-one up first (or tell the user to). **Known issue**: client mode
-currently fails reproducibly with a WebSocket keepalive-timeout bug
-shortly after dispatch — see [[uni-admission-install]] §5.5. Don't retry
-more than once or twice; fall back to `browser_provider=server` (the
-default) if it doesn't work.
+one up first (or tell the user to). **Known issue**: for `--page-type
+index` specifically, the client's link-picker can mistake the index
+page's own anchors for real programme links, silently under-importing —
+see [[uni-admission-install]] §5.5. Check `imported_count` against what
+was asked before reporting success. `--page-type detail` fetches aren't
+affected by this bug.
 
 ### 3.2 Full index mode (`/agent/run`)
 

@@ -434,19 +434,33 @@ completed yet (wait a couple seconds and retry) or failed outright — check
 `~/.adm-agent/client.log` for `Client websocket connected` vs repeated
 `Client websocket loop error`.
 
-### 5.5 Known reliability issue — set expectations honestly
+### 5.5 Known reliability issues — set expectations honestly
 
-As of this writing, client-mode has a reproducible bug: shortly after a
-crawl actually dispatches a fetch request to the client, the WebSocket
-connection can drop (`keepalive ping timeout` in `client.log`) and cycle
-through repeated reconnect failures for a minute or more — the client
-never even gets to launching its browser. The crawl then fails with
-`RuntimeError: Client browser automation failed`, even though the client
-registered successfully beforehand. If this happens: tell the user
-plainly that client-mode crawling is currently unreliable, don't retry
-more than once or twice hoping it clears up, and fall back to
-`browser_provider=server` (the default) — every real battle-test crawl so
-far has succeeded on server mode alone.
+**The WebSocket transport bug is fixed** (server-side self-deadlock in the
+RPC dispatcher — see git history around "resolve client-mode browser RPC
+self-deadlock"). Verified with a real client + a real ~15-minute crawl:
+zero disconnects, one clean RPC round-trip, `resolved_browser_provider`
+correctly reported `"client"` throughout. If you see `keepalive ping
+timeout` / repeated `timed out during opening handshake` in
+`client.log` again, that regressed — say so plainly, don't just assume
+it's expected.
+
+**A separate, still-open bug affects INDEX pages specifically**: the
+client's own candidate-link picker (`select_detail_links` in
+`native_browser.py`) can mistake a same-page anchor (e.g. a "skip to main
+content" `#main` link) for a real programme link, because it matches on
+a naive `/programme`/`/course`/`/degree` substring in the URL — and an
+index page's OWN url often contains one of those words. Symptom: the
+crawl "succeeds" (no error) but `imported_count` is far below what was
+asked for, and the one record that DID import has a nonsense name (e.g.
+the page's own title) with a `source_url` ending in a `#fragment` that's
+just the index page again. **This only affects `page_type_hint=index`**
+— a **detail**-page client fetch never calls this link-picker at all, so
+if the user just wants ONE specific programme page, client mode should
+still work fine even with this bug open. For index pages, until this is
+fixed: warn the user client-mode index crawls may silently under-import,
+and prefer verifying the imported count roughly matches what was asked
+before reporting success.
 
 ### 5.6 Stop it
 
@@ -465,4 +479,4 @@ far has succeeded on server mode alone.
 - **Never delete data on upgrade**. `~/.uni-agent/admission.db` (and the `.env` next to it) are sacred. Only the `bin/` subdir gets overwritten. If you're tempted to `rm -rf ~/.uni-agent/`, stop and re-read this skill.
 - **Never install on platforms not in §1.1 table** (e.g., Linux ARM). Refuse and direct user to source build.
 - `adm-agent-client start-install` (§5.3) is the one deliberate exception to the "never auto-start in background" rule above — the client is a low-risk, disposable process (no DB connection, safe to lose) that specifically needs to survive across a long crawl, unlike the server. Still tell the user you're starting it; don't do it silently.
-- **Don't loop retrying client-mode** past 1-2 attempts if it fails — §5.5 is a known, currently-unfixed issue, not a transient blip worth hammering on.
+- **For client-mode INDEX crawls, verify `imported_count` roughly matches what was asked** before reporting success — §5.5's link-picker bug makes it possible to "succeed" while actually importing one garbage record instead of the real programmes. Detail-page client fetches aren't affected by this specific bug.

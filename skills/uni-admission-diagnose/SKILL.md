@@ -97,13 +97,17 @@ one is even connected:
    falls back to server mode and you get the exact same `raw=0` failure
    with no new information.)
 
-3. **Set expectations honestly, don't loop.** Client mode currently has a
-   known, reproducible reliability issue (WebSocket disconnects shortly
-   after dispatch — see [[uni-admission-install]] §5.5). If the retry in
-   step 2 also fails, say so plainly — "client 模式目前不稳定，这个站点可能
-   暂时爬不了" — don't retry a third time hoping it clears up, and don't
-   imply the tool will definitely fix it once client mode is set up. This
-   is a real, open limitation, not something you did wrong.
+3. **Check the result actually matches what you asked for — don't just
+   check for an error.** The WebSocket transport is fixed (client mode
+   connects and dispatches reliably now), but `--page-type index` has a
+   separate, still-open bug: it can "succeed" with no error while
+   silently importing the index page itself as one garbage record
+   instead of the real programmes — see [[uni-admission-install]] §5.5.
+   Compare `imported_count` against what was asked; if it's far lower
+   (e.g. 1 when 5 were requested), that's this bug, not a real anti-crawl
+   win. `--page-type detail` retries aren't affected. If the retry
+   genuinely fails outright (connection error, not just a low count), say
+   so plainly rather than looping indefinitely.
 
 ---
 
@@ -153,4 +157,4 @@ user before ever adding `--yes`.
 - Don't recommend `db-reinit` as a "fix" — it's a developer reset, not a recovery tool.
 - Don't run `programs delete --yes` straight off — always run it unconfirmed first (it previews the affected count and does nothing) and get explicit confirmation on the actual number before adding `--yes`.
 - Don't reach for `db-reinit` (wipes every university) when the user only wants one university's data gone — that's `programs delete --university <SLUG>`.
-- Don't retry client-mode more than once after a failure — it's a known, currently-unfixed reliability issue (see **Anti-crawl remediation**), not a transient blip.
+- Don't declare a client-mode index crawl successful just because it returned without an error — check `imported_count` against the request first (see **Anti-crawl remediation** step 3).
