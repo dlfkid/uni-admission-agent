@@ -41,4 +41,11 @@ uv run bump-my-version bump minor --dry-run --verbose
   own two entries equal the project version (dependencies carry their own), so
   the `"version"` match is safe. If a dependency ever coincides, npm will reject
   the mismatch on the next install — a loud, catchable failure.
+- `uv.lock` is bumped as well, but its matcher is anchored on
+  `name = "uni-admission-agent"` because a bare version match there is **not**
+  safe — dependencies live in the same file and one can coincidentally share our
+  version number (`tabulate` was itself at `0.9.0`). Keeping it in lock-step
+  matters beyond tidiness: `uv run` re-syncs `uv.lock` on the fly, so a stale
+  lock silently dirties the working tree and blocks the next `bump`
+  (`allow_dirty = false`).
 - Adding a new version location? Add a `[[tool.bumpversion.files]]` block for it.

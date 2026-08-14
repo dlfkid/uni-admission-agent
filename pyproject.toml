@@ -153,6 +153,18 @@ filename = "frontend/package-lock.json"
 search = "\"version\": \"{current_version}\""
 replace = "\"version\": \"{new_version}\""
 
+# uv.lock records this project's own version in its [[package]] entry. Unlike
+# the files above, a bare version match here is NOT safe: dependencies live in
+# the same file and one can coincidentally share our version number (at 0.9.0,
+# `tabulate` did exactly that). Anchor on the package name so only our own
+# entry can ever match. Without this block uv.lock drifts stale, and since
+# `uv run` re-syncs it on the fly, every later invocation dirties the working
+# tree — which then blocks the next `bump` (allow_dirty = false).
+[[tool.bumpversion.files]]
+filename = "uv.lock"
+search = "name = \"uni-admission-agent\"\nversion = \"{current_version}\""
+replace = "name = \"uni-admission-agent\"\nversion = \"{new_version}\""
+
 [tool.pylint.messages_control]
 disable = [
     "C0302", # Too many lines in module
