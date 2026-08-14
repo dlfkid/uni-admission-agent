@@ -529,6 +529,7 @@ async def crawl_url(
         browser_provider=browser_provider,
         client_id=client_id,
         strict_client=strict_client,
+        limit=limit,
     )
     resolved_browser_provider = str(
         resolved_browser_inputs.get("resolved_browser_provider") or "server"

@@ -68,8 +68,17 @@ async def fetch_index_and_details_via_client(
     url: str,
     page_type_hint: str,
     client_id: Optional[str],
+    detail_limit: Optional[int] = None,
 ) -> dict[str, Any]:
-    """Fetch browser-rendered payload from connected client."""
+    """Fetch browser-rendered payload from connected client.
+
+    ``detail_limit`` (when given) tells the client how many detail-link
+    candidates to return for an index page — without it, the client falls
+    back to its own locally-configured default regardless of what the
+    caller actually asked for (confirmed live: a crawl requesting 5
+    programmes via client mode silently got at most 4, the client's own
+    default, with no error or warning).
+    """
     fetch_fn = _dispatchers.get("fetch_fn")
     if fetch_fn is None:
         raise RuntimeError("Client bridge fetch handler is not configured")
@@ -80,6 +89,7 @@ async def fetch_index_and_details_via_client(
             url=url,
             page_type_hint=page_type_hint,
             client_id=client_id,
+            detail_limit=detail_limit,
         )
     else:
         # `fetch_fn` may be a *sync* bridge (e.g. the server's
@@ -96,6 +106,7 @@ async def fetch_index_and_details_via_client(
             url=url,
             page_type_hint=page_type_hint,
             client_id=client_id,
+            detail_limit=detail_limit,
         )
         if inspect.isawaitable(result):
             result = await result
@@ -151,8 +162,15 @@ async def resolve_browser_inputs(
     browser_provider: str = "auto",
     client_id: Optional[str] = None,
     strict_client: bool = False,
+    limit: Optional[int] = None,
 ) -> dict[str, Any]:
-    """Resolve optional browser-rendered inputs before ingestion."""
+    """Resolve optional browser-rendered inputs before ingestion.
+
+    ``limit`` (the caller's own "first N programmes" request) is passed
+    through to the client as its detail-link candidate cap — without
+    this, client mode always used its own fixed local default regardless
+    of what was actually asked for.
+    """
     if html_content or detail_pages_batch:
         return {
             "resolved_browser_provider": "server",
@@ -172,6 +190,7 @@ async def resolve_browser_inputs(
             url=url,
             page_type_hint=page_type_hint,
             client_id=metadata["client_id_used"],
+            detail_limit=limit,
         )
     except Exception as exc:
         provider = str(browser_provider or "auto").strip().lower() or "auto"
