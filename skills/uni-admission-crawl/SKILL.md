@@ -51,6 +51,30 @@ adm-agent crawl \
 
 Runs synchronously. Final line will say `N programs imported` or `0 programs imported`.
 
+**Browser provider** (only add this if [[uni-admission-diagnose]] routed you
+here to retry with a client, or the user explicitly asked for it —
+otherwise leave it at the default):
+
+```bash
+adm-agent crawl ... --browser-provider client --strict-client
+```
+
+| Flag | Values | Default | Meaning |
+|---|---|---|---|
+| `--browser-provider` | `auto` \| `server` \| `client` | `auto` | `auto` uses a connected client if one exists, else falls back to server-side headless Playwright silently. `server` forces server-side. `client` forces the connected browser client. |
+| `--client-id` | a client id from `runtime_status.client_ids` | none | Only needed with multiple connected clients; omit with just one. |
+| `--strict-client` | flag, no value | off | With `--browser-provider client`, fail loudly instead of silently falling back to server if no client is connected or the fetch fails. Use this when you specifically need to know whether client mode worked — otherwise a silent fallback can mask the exact problem you're trying to diagnose. |
+
+Before using `--browser-provider client`, confirm one is actually
+connected — `curl -sS http://127.0.0.1:8910/clients` should return a
+non-empty array. If empty, route to [[uni-admission-install]] §5 to set
+one up first (or tell the user to). **Known issue**: for `--page-type
+index` specifically, the client's link-picker can mistake the index
+page's own anchors for real programme links, silently under-importing —
+see [[uni-admission-install]] §5.5. Check `imported_count` against what
+was asked before reporting success. `--page-type detail` fetches aren't
+affected by this bug.
+
 ### 3.2 Full index mode (`/agent/run`)
 
 ```bash
@@ -65,6 +89,15 @@ curl -sS -X POST http://127.0.0.1:8910/agent/run \
     "limit": <N>
   }'
 ```
+
+**`/agent/run` has no `browser_provider` field at all** — it can never use
+the browser client, only server-side fetching. If the user specifically
+needs client mode for a full-catalogue crawl (site blocking server-side
+fetch), use §3.1's `adm-agent crawl --page-type index --limit <N>
+--browser-provider client` instead — it supports the same
+`index`/`limit`/`crawl_all` shape, just through the older LLM-based
+candidate-discovery path (no strategy-cache speedup, so it costs a bit
+more, but it does support the client flags).
 
 (`"autonomous": true` is required for the deterministic strategy-direct path —
 it persists results immediately. Omit it only when the user wants a review

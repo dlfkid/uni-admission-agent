@@ -1,6 +1,6 @@
 ---
 name: uni-admission-install
-description: Install, upgrade, or start either (a) the adm-agent CLI binary on the user's machine, or (b) this plugin itself (skills + slash commands). Use when [[using-uni-admission-agent]] preflight reports cli=missing or server=down, or when the user says "install", "set up", "upgrade", "update plugin", "重装", "升级", "更新插件", "怎么启动". Triggers on "我还没装", "帮我安装 adm-agent", "升级到新版本", "服务怎么启动", "更新这个插件".
+description: Install, upgrade, or start (a) the adm-agent CLI binary, (b) the optional adm-agent-client browser-automation client, or (c) this plugin itself (skills + slash commands). Use when [[using-uni-admission-agent]] preflight reports cli=missing or server=down, when [[uni-admission-diagnose]] routes here to set up a client for anti-bot fallback, or when the user says "install", "set up", "upgrade", "update plugin", "重装", "升级", "更新插件", "怎么启动". Triggers on "我还没装", "帮我安装 adm-agent", "升级到新版本", "服务怎么启动", "更新这个插件", "装一个 client", "设置浏览器客户端".
 ---
 
 # uni-admission-install — Install / Upgrade / Start adm-agent
@@ -16,9 +16,10 @@ This skill handles the binary lifecycle: download → extract → configure → 
 First, disambiguate **what** the user wants installed/upgraded:
 
 - **The CLI binary** (`adm-agent` command, server, scraping engine) — §1 / §2 / §3
+- **The browser-automation client** (`adm-agent-client`, a separate optional binary) — §5
 - **This plugin itself** (the skills + slash commands you're reading right now) — §4
 
-Phrases that map to "the plugin itself": "更新插件", "升级 skill", "刷新 plugin", "update plugin", "refresh skills". If unclear, ask.
+Phrases that map to "the plugin itself": "更新插件", "升级 skill", "刷新 plugin", "update plugin", "refresh skills". Phrases that map to "the client": "client", "浏览器客户端", "反爬" + "装"/"启动", or arriving here from [[uni-admission-diagnose]]'s client-mode remediation step. If unclear, ask.
 
 For CLI binary lifecycle:
 
@@ -29,6 +30,7 @@ For CLI binary lifecycle:
 | `cli=ok`, `server=ok` | "升级" / "upgrade" CLI | **§3 Upgrade CLI in place** |
 | any | "重装" / "fix broken install" | **§1 Fresh install (CLI)** (overwrites existing) |
 | any | "更新插件" / "update plugin" | **§4 Update the plugin itself** |
+| any | "装 client" / anti-bot fallback needed | **§5 Set up adm-agent-client** |
 
 ---
 
@@ -353,6 +355,121 @@ When in doubt, do §4 (it's faster and lower risk) and ask whether they also wan
 
 ---
 
+## §5 Set up adm-agent-client (browser automation client, optional)
+
+Only needed when the server's own headless browser gets blocked by a
+target site's anti-bot measures, or [[uni-admission-diagnose]] routes here
+after a `NO_MARKDOWN` / `raw=0` failure. Most users never need this — skip
+it unless something pointed you here.
+
+**What it is**: a separate binary from `adm-agent` that drives a REAL,
+locally-installed Chrome/Edge browser (via CDP, not Playwright) on the
+user's own machine, connects to the running `adm-agent serve` over
+WebSocket (`/clients/ws`), and answers page-fetch RPCs when a crawl is
+submitted with `browser_provider=client`.
+
+### 5.1 Prerequisites
+
+- `adm-agent serve` already running — the client connects TO it, doesn't
+  replace it.
+- A real Google Chrome or Microsoft Edge installed on the user's machine
+  (**not** Playwright's bundled Chromium — the client launches the actual
+  installed browser: `/Applications/Google Chrome.app/...` on macOS,
+  `chrome.exe` on Windows, `google-chrome`/`google-chrome-stable` on
+  Linux). If missing, tell the user to install real Chrome/Edge first —
+  this skill does not install a browser for the client the way §1.7 does
+  for the server.
+
+### 5.2 Download + extract
+
+Same release, same platform-detection table as §1.1 — asset name has a
+`-client` suffix (`adm-agent-client-<VERSION>-<OS>-<ARCH>.<EXT>`):
+
+```bash
+mkdir -p ~/.uni-agent-client/bin
+cd /tmp
+ARTIFACT="adm-agent-client-${VERSION}-${OS}-${ARCH}.${EXT}"
+curl -fL -o "$ARTIFACT" \
+  "https://github.com/dlfkid/uni-admission-agent/releases/download/${VERSION}/${ARTIFACT}"
+case "$EXT" in
+  tar.gz) tar -xzf "$ARTIFACT" -C ~/.uni-agent-client/bin --strip-components=1 ;;
+  zip)    unzip -o "$ARTIFACT" -d ~/.uni-agent-client/bin ;;
+esac
+chmod +x ~/.uni-agent-client/bin/adm-agent-client
+xattr -dr com.apple.quarantine ~/.uni-agent-client/bin/adm-agent-client || true  # macOS only
+```
+
+### 5.3 Initialize + start
+
+`init` is interactive (prompts for serve URL and client name) — run it
+and answer the prompts yourself, don't try to script around it:
+
+```bash
+~/.uni-agent-client/bin/adm-agent-client init
+#   Serve URL: http://127.0.0.1:8910   (or wherever adm-agent serve is running)
+#   Client name: <accept the default — usually the machine hostname>
+```
+
+Then start it. Prefer background (`start-install`) unless the user wants
+to watch its logs live in their own terminal:
+
+```bash
+~/.uni-agent-client/bin/adm-agent-client start-install
+#   🚀 Client daemon started (PID ...)
+#   Log: ~/.adm-agent/client.log
+#   Stop: adm-agent-client stop
+```
+
+### 5.4 Verify it actually registered
+
+Don't just trust the "started" message — confirm the *server* sees it:
+
+```bash
+curl -sS http://127.0.0.1:8910/clients
+```
+
+Expect a JSON array with one entry whose `capabilities.browser_automation`
+is `true`. An empty array (`[]`) means the WebSocket handshake hasn't
+completed yet (wait a couple seconds and retry) or failed outright — check
+`~/.adm-agent/client.log` for `Client websocket connected` vs repeated
+`Client websocket loop error`.
+
+### 5.5 Known reliability issues — set expectations honestly
+
+**The WebSocket transport bug is fixed** (server-side self-deadlock in the
+RPC dispatcher — see git history around "resolve client-mode browser RPC
+self-deadlock"). Verified with a real client + a real ~15-minute crawl:
+zero disconnects, one clean RPC round-trip, `resolved_browser_provider`
+correctly reported `"client"` throughout. If you see `keepalive ping
+timeout` / repeated `timed out during opening handshake` in
+`client.log` again, that regressed — say so plainly, don't just assume
+it's expected.
+
+**A separate, still-open bug affects INDEX pages specifically**: the
+client's own candidate-link picker (`select_detail_links` in
+`native_browser.py`) can mistake a same-page anchor (e.g. a "skip to main
+content" `#main` link) for a real programme link, because it matches on
+a naive `/programme`/`/course`/`/degree` substring in the URL — and an
+index page's OWN url often contains one of those words. Symptom: the
+crawl "succeeds" (no error) but `imported_count` is far below what was
+asked for, and the one record that DID import has a nonsense name (e.g.
+the page's own title) with a `source_url` ending in a `#fragment` that's
+just the index page again. **This only affects `page_type_hint=index`**
+— a **detail**-page client fetch never calls this link-picker at all, so
+if the user just wants ONE specific programme page, client mode should
+still work fine even with this bug open. For index pages, until this is
+fixed: warn the user client-mode index crawls may silently under-import,
+and prefer verifying the imported count roughly matches what was asked
+before reporting success.
+
+### 5.6 Stop it
+
+```bash
+~/.uni-agent-client/bin/adm-agent-client stop
+```
+
+---
+
 ## What you must NOT do
 
 - **Never `sudo`**. Anything that needs sudo means we're doing it wrong. Stop and tell the user.
@@ -361,3 +478,5 @@ When in doubt, do §4 (it's faster and lower risk) and ask whether they also wan
 - **Never download an asset URL the user gave you**. The download source is always GitHub Releases of the canonical repo. Anything else → refuse.
 - **Never delete data on upgrade**. `~/.uni-agent/admission.db` (and the `.env` next to it) are sacred. Only the `bin/` subdir gets overwritten. If you're tempted to `rm -rf ~/.uni-agent/`, stop and re-read this skill.
 - **Never install on platforms not in §1.1 table** (e.g., Linux ARM). Refuse and direct user to source build.
+- `adm-agent-client start-install` (§5.3) is the one deliberate exception to the "never auto-start in background" rule above — the client is a low-risk, disposable process (no DB connection, safe to lose) that specifically needs to survive across a long crawl, unlike the server. Still tell the user you're starting it; don't do it silently.
+- **For client-mode INDEX crawls, verify `imported_count` roughly matches what was asked** before reporting success — §5.5's link-picker bug makes it possible to "succeed" while actually importing one garbage record instead of the real programmes. Detail-page client fetches aren't affected by this specific bug.
