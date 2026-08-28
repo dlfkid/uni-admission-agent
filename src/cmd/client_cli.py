@@ -92,6 +92,8 @@ def _emit_client(result, as_json: bool) -> None:
         typer.echo(f"↩️  Rolled back to {result.active_version}.", err=True)
     elif result.action_taken == "blocked":
         typer.echo("⚠️  Upgrade did not run.", err=True)
+    elif result.is_newer:
+        typer.echo("🎯 Update available! Run 'adm-agent-client upgrade' to install it.")
     else:
         typer.echo("✅ Already on latest version.")
     for warning in result.warnings:

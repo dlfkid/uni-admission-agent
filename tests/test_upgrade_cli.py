@@ -137,6 +137,28 @@ def test_upgrade_rollback_invokes_rollback_only() -> None:
     assert not perform.called
 
 
+def test_upgrade_check_reports_update_available_when_newer() -> None:
+    """A --check that finds a newer version must say so, not "already latest"."""
+    with patch(
+        "src.cmd.cli.check_for_updates",
+        return_value=_result(is_newer=True),
+    ):
+        result = runner.invoke(app, ["upgrade", "--check"])
+    assert result.exit_code == 0
+    assert "Update available" in result.stdout
+    assert "Already on latest version" not in result.stdout
+
+
+def test_upgrade_check_reports_already_latest_when_not_newer() -> None:
+    with patch(
+        "src.cmd.cli.check_for_updates",
+        return_value=_result(is_newer=False),
+    ):
+        result = runner.invoke(app, ["upgrade", "--check"])
+    assert result.exit_code == 0
+    assert "Already on latest version" in result.stdout
+
+
 # ── client CLI parity (spec §3.6) ─────────────────────────────────────
 
 
@@ -169,6 +191,36 @@ def test_client_upgrade_blocked_propagates_the_exit_code() -> None:
     ), patch("src.cmd.client_cli.default_client_layout"):
         result = CliRunner().invoke(client_app, ["upgrade"])
     assert result.exit_code == 15
+
+
+def test_client_upgrade_check_reports_update_available_when_newer() -> None:
+    """Regression guard: the client's prose path must not resurrect the
+
+    string-comparison defect that told every 0.8.x/0.9.x user they were
+    current when a newer version existed.
+    """
+    from src.cmd.client_cli import app as client_app
+
+    with patch(
+        "src.cmd.client_cli.check_for_updates",
+        return_value=_result(is_newer=True),
+    ):
+        result = CliRunner().invoke(client_app, ["upgrade", "--check"])
+    assert result.exit_code == 0
+    assert "Update available" in result.stdout
+    assert "Already on latest version" not in result.stdout
+
+
+def test_client_upgrade_check_reports_already_latest_when_not_newer() -> None:
+    from src.cmd.client_cli import app as client_app
+
+    with patch(
+        "src.cmd.client_cli.check_for_updates",
+        return_value=_result(is_newer=False),
+    ):
+        result = CliRunner().invoke(client_app, ["upgrade", "--check"])
+    assert result.exit_code == 0
+    assert "Already on latest version" in result.stdout
 
 
 def test_client_version_json() -> None:
