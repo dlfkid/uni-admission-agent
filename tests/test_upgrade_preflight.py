@@ -184,6 +184,28 @@ def test_windows_api_probe_treats_unusable_api_as_inconclusive(exc: Exception) -
         assert _windows_process_alive_via_api(4321) is None
 
 
+def test_windows_api_probe_declares_pointer_sized_handle_types() -> None:
+    """Every kernel32 call that carries a HANDLE must declare its types.
+
+    A Win32 HANDLE is pointer-sized; ctypes marshals an undeclared argument
+    as ``c_int``, truncating it on 64-bit. ``GetExitCodeProcess`` would then
+    fail — which the probe reports as "alive" — and ``CloseHandle`` would
+    leak the handle.
+    """
+    fake_kernel32 = Mock()
+    fake_kernel32.OpenProcess.return_value = 0x7FF800000000
+    fake_kernel32.GetExitCodeProcess.return_value = 1
+    with patch("ctypes.WinDLL", return_value=fake_kernel32, create=True):
+        _windows_process_alive_via_api(4321)
+
+    assert fake_kernel32.OpenProcess.restype is ctypes.c_void_p
+    assert fake_kernel32.OpenProcess.argtypes[0] is ctypes.c_uint32
+    assert fake_kernel32.GetExitCodeProcess.argtypes[0] is ctypes.c_void_p
+    assert fake_kernel32.CloseHandle.argtypes == [ctypes.c_void_p]
+    # The handle survives the round trip untruncated.
+    assert fake_kernel32.CloseHandle.call_args.args[0] == 0x7FF800000000
+
+
 @pytest.mark.parametrize("windows", [True])
 def test_oversized_pid_is_not_alive_on_the_windows_path(windows: bool) -> None:
     """A corrupt ``server.pid`` containing a value too large for ``ctypes``

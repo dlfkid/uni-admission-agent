@@ -51,7 +51,20 @@ def _windows_process_alive_via_api(pid: int) -> bool | None:
 
     try:
         kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)  # type: ignore[attr-defined]
+        # A Win32 HANDLE is pointer-sized. Declared restype alone is not
+        # enough: without argtypes ctypes marshals the handle *argument* as
+        # c_int, truncating it on 64-bit. GetExitCodeProcess would then fail
+        # — reported as "alive" by the branch below — and CloseHandle would
+        # leak the handle.
+        kernel32.OpenProcess.argtypes = [ctypes.c_uint32, ctypes.c_int, ctypes.c_uint32]
         kernel32.OpenProcess.restype = ctypes.c_void_p
+        kernel32.GetExitCodeProcess.argtypes = [
+            ctypes.c_void_p,
+            ctypes.POINTER(ctypes.c_ulong),
+        ]
+        kernel32.GetExitCodeProcess.restype = ctypes.c_int
+        kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
+        kernel32.CloseHandle.restype = ctypes.c_int
         handle = kernel32.OpenProcess(
             _SYNCHRONIZE | _PROCESS_QUERY_LIMITED_INFORMATION, False, pid
         )
