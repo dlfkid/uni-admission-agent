@@ -1,14 +1,16 @@
 """Tests for upgrade preflight gates — spec §9."""
 
+import ctypes
 import os
 import subprocess
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import pytest
 
 from src.services.upgrade.layout import InstallLayout
 from src.services.upgrade.preflight import (
+    _windows_process_alive_via_api,
     _windows_process_alive_via_tasklist,
     is_process_alive,
     is_server_running,
@@ -165,6 +167,34 @@ def test_tasklist_fallback_reports_absent_pid_as_dead() -> None:
 def test_tasklist_fallback_survives_a_missing_tasklist_binary() -> None:
     with patch("src.services.upgrade.preflight.subprocess.run", side_effect=OSError("gone")):
         assert _windows_process_alive_via_tasklist(4321) is False
+
+
+@pytest.mark.parametrize(
+    "exc",
+    [AttributeError(), OSError(), ValueError(), ctypes.ArgumentError("int too long")],
+)
+def test_windows_api_probe_treats_unusable_api_as_inconclusive(exc: Exception) -> None:
+    """``ctypes`` wraps an out-of-range PID's conversion ``OverflowError`` in
+    ``ctypes.ArgumentError`` — a plain ``Exception`` subclass, not an
+    ``OverflowError`` — so it must be caught alongside the other
+    "API unusable" errors instead of propagating out of the probe."""
+    fake_kernel32 = Mock()
+    fake_kernel32.OpenProcess.side_effect = exc
+    with patch("ctypes.WinDLL", return_value=fake_kernel32, create=True):
+        assert _windows_process_alive_via_api(4321) is None
+
+
+@pytest.mark.parametrize("windows", [True])
+def test_oversized_pid_is_not_alive_on_the_windows_path(windows: bool) -> None:
+    """A corrupt ``server.pid`` containing a value too large for ``ctypes``
+    to convert must resolve to not-alive on Windows too, mirroring the
+    POSIX ``OverflowError`` parity in ``test_posix_probe_error_mapping_is_preserved``."""
+    with patch(
+        "ctypes.WinDLL", side_effect=ctypes.ArgumentError("int too long"), create=True
+    ), patch(
+        "src.services.upgrade.preflight._windows_process_alive_via_tasklist", return_value=False
+    ):
+        assert is_process_alive(99999999999999999999999999, windows=windows) is False
 
 
 # ── gate ordering ─────────────────────────────────────────────────────

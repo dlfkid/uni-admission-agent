@@ -51,6 +51,7 @@ def _windows_process_alive_via_api(pid: int) -> bool | None:
 
     try:
         kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)  # type: ignore[attr-defined]
+        kernel32.OpenProcess.restype = ctypes.c_void_p
         handle = kernel32.OpenProcess(
             _SYNCHRONIZE | _PROCESS_QUERY_LIMITED_INFORMATION, False, pid
         )
@@ -65,7 +66,7 @@ def _windows_process_alive_via_api(pid: int) -> bool | None:
             return code.value == _STILL_ACTIVE
         finally:
             kernel32.CloseHandle(handle)
-    except (AttributeError, OSError, ValueError):
+    except (AttributeError, OSError, ValueError, ctypes.ArgumentError):
         return None
 
 
