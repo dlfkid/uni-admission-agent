@@ -223,10 +223,6 @@ def perform_upgrade(
         result.action_taken = "none"
         return result
 
-    previous = layout.active_version()
-    if result.latest_version and result.latest_version == previous:
-        return _refuse_same_version_reinstall(result, previous)
-
     os_name, arch = get_platform_info()
     asset = find_release_asset(release, os_name, arch, artifact_name)
     if asset is None:
@@ -241,6 +237,16 @@ def perform_upgrade(
 
     def _run_locked() -> UpgradeResult:
         """The mutating half of the transaction, run under the lock."""
+        # Read the active version *inside* the lock. Resolving it earlier
+        # would let a concurrent upgrade finish between the read and the
+        # acquire, leaving this run carrying a stale `previous`: the
+        # same-version refusal would be bypassed, `_place_new_version` would
+        # displace a version that is now active, and a post-check failure
+        # would roll back somebody else's successful upgrade.
+        previous = layout.active_version()
+        if result.latest_version and result.latest_version == previous:
+            return _refuse_same_version_reinstall(result, previous)
+
         new_version = result.latest_version
         layout.staging_dir.mkdir(parents=True, exist_ok=True)
         result.warnings.extend(sweep_stale_staging(layout))
@@ -399,6 +405,26 @@ def sweep_stale_staging(layout: InstallLayout) -> list[str]:
     return warnings
 
 
+def _select_rollback_target(layout: InstallLayout, active: str | None) -> str | None:
+    """Newest installed version strictly older than *active*, or ``None``.
+
+    Deliberately not "any other installed version": after a manual rollback a
+    *newer* version is typically still retained so the user can move forward
+    again, and a second rollback must not roll onto it. When either side's tag
+    is unparseable the ordering cannot be proven, so the candidate is skipped
+    rather than guessed at.
+    """
+    active_parsed = parse_tag(active) if active else None
+    for version in layout.installed_versions():
+        if version == active:
+            continue
+        version_parsed = parse_tag(version)
+        if active_parsed is not None and version_parsed is not None:
+            if version_parsed < active_parsed:
+                return version
+    return None
+
+
 def _refuse_same_version_reinstall(result: UpgradeResult, active: str) -> UpgradeResult:
     """Refuse to re-install the version that is currently active.
 
@@ -474,42 +500,69 @@ def _activation_failed(
     ends up exactly as it started.
     """
     shutil.rmtree(staging, ignore_errors=True)
-    restored = True
-    if switched:
-        try:
-            if previous:
-                layout.activate(previous)
-                layout.ensure_entrypoint()
-            else:
-                # Nothing was installed before, so "unchanged" means no
-                # pointer at all rather than one aimed at a version we are
-                # about to delete.
-                pointer = layout.pointer_path
-                if pointer.exists() or pointer.is_symlink():
-                    pointer.unlink()
-        except Exception as restore_exc:  # pylint: disable=broad-except
-            restored = False
-            result.warnings.append(
-                f"Could not restore the previous version after a failed "
-                f"activation: {restore_exc}. Run 'adm-agent upgrade --rollback'."
-            )
 
-    if target is not None and restored:
-        try:
-            shutil.rmtree(target, ignore_errors=True)
-        except Exception:  # pragma: no cover - ignore_errors already swallows
-            pass
+    # Track the pointer and the entry point separately. The entry point is
+    # written atomically and always resolves *through* the pointer, so a
+    # failure rewriting it after the pointer is already back does not mean
+    # the rollback failed — reporting both as one flag turned a recovered
+    # install into a scary "could not restore" message.
+    pointer_restored = not switched
+    entrypoint_rewritten = True
+    if switched:
+        pointer_restored, entrypoint_rewritten = _restore_pointer(
+            layout, previous, result
+        )
+
+    if target is not None and pointer_restored:
+        shutil.rmtree(target, ignore_errors=True)
 
     result.active_version = layout.active_version() or ""
-    result.next_action = (
-        "retry_upgrade" if restored else "rollback_then_inspect"
-    )
-    return _blocked(
-        result,
-        BlockedReason.UNEXPECTED,
-        ExitCode.UNEXPECTED,
-        f"Activation failed and the install was left unchanged: {exc}",
-    )
+    if pointer_restored:
+        result.next_action = "retry_upgrade"
+        message = f"Activation failed and the install was left unchanged: {exc}"
+    else:
+        result.next_action = "rollback_then_inspect"
+        message = (
+            f"Activation failed and could not be undone: {exc}. The install is "
+            f"in a mixed state — {result.active_version or 'no version'} is "
+            "active and the new version directory was kept. Inspect it before "
+            "retrying."
+        )
+    if pointer_restored and not entrypoint_rewritten:
+        result.warnings.append(
+            "The previous version is active again, but rewriting the stable "
+            "entry point failed. It still resolves through the restored "
+            "pointer; re-run the upgrade to have it rewritten."
+        )
+    return _blocked(result, BlockedReason.UNEXPECTED, ExitCode.UNEXPECTED, message)
+
+
+def _restore_pointer(
+    layout: InstallLayout, previous: str | None, result: UpgradeResult
+) -> tuple[bool, bool]:
+    """Put the pointer back. Returns ``(pointer_restored, entrypoint_rewritten)``."""
+    try:
+        if previous:
+            layout.activate(previous)
+        else:
+            # Nothing was installed before, so "unchanged" means no pointer at
+            # all rather than one aimed at a version we are about to delete.
+            pointer = layout.pointer_path
+            if pointer.exists() or pointer.is_symlink():
+                pointer.unlink()
+    except Exception as exc:  # pylint: disable=broad-except
+        result.warnings.append(
+            f"Could not restore the previous version after a failed "
+            f"activation: {exc}. Run 'adm-agent upgrade --rollback'."
+        )
+        return False, False
+
+    try:
+        layout.ensure_entrypoint()
+    except Exception as exc:  # pylint: disable=broad-except
+        result.warnings.append(f"Entry point rewrite failed after restore: {exc}")
+        return True, False
+    return True, True
 
 
 def _stage_failed(
@@ -552,28 +605,18 @@ def rollback(
     failures are surfaced as warnings on the result instead.
     """
     post_check = post_check or default_post_check
-    active = layout.active_version()
-    active_parsed = parse_tag(active) if active else None
-
-    older = None
-    for version in layout.installed_versions():
-        if version == active:
-            continue
-        version_parsed = parse_tag(version)
-        if active_parsed is not None and version_parsed is not None:
-            if version_parsed < active_parsed:
-                older = version
-                break
-        # Either side is unparseable: ordering can't be proven, so don't
-        # guess — skip rather than risk rolling forward.
-
-    if older is None:
-        raise UpgradeError("Cannot roll back: no previous version is installed")
 
     # A rollback moves the pointer, so it takes the same install-root lock an
     # upgrade does — otherwise it can repoint out from under a concurrent
-    # upgrade that is mid-activation.
+    # upgrade that is mid-activation. The target is chosen *inside* the lock
+    # for the same reason: choosing it first would let a concurrent upgrade
+    # change what "active" and "newest older" mean before the repoint lands.
     with install_lock(layout.root):
+        active = layout.active_version()
+        older = _select_rollback_target(layout, active)
+        if older is None:
+            raise UpgradeError("Cannot roll back: no previous version is installed")
+
         layout.activate(older)
         layout.ensure_entrypoint()
         result = UpgradeResult(

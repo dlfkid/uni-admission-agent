@@ -1,5 +1,6 @@
 """Tests for the upgrade transaction — spec §5, §6.3."""
 
+import contextlib
 import json
 import subprocess
 import tarfile
@@ -282,6 +283,40 @@ def test_a_concurrent_upgrade_is_refused_before_anything_is_swept(
     _assert_user_data_intact(tmp_path)
 
 
+def test_state_is_re_read_inside_the_lock_not_before_it(tmp_path: Path) -> None:
+    """Resolving the active version before acquiring the lock leaves this run
+    carrying a stale ``previous``: another upgrade can finish in between, and
+    this one would then displace a version that is now active and roll back
+    somebody else's success on a post-check failure."""
+    layout = _install(tmp_path)
+    # The version a concurrent upgrade is about to activate.
+    other = layout.version_dir("v0.11.0")
+    (other / "_internal").mkdir(parents=True)
+    (other / "adm-agent").write_text("new")
+
+    real_lock = install_lock
+
+    @contextlib.contextmanager
+    def lock_then_someone_else_finishes(root):
+        with real_lock(root) as handle:
+            # Exactly the interleaving the lock is supposed to serialise: the
+            # other upgrade completed while this one waited to acquire.
+            layout.activate("v0.11.0")
+            yield handle
+
+    with patch(
+        "src.services.upgrade.transaction.install_lock",
+        lock_then_someone_else_finishes,
+    ):
+        result = _run(layout, tmp_path)
+
+    # Seen from inside the lock, the requested version is already active.
+    assert result.action_taken == "none"
+    assert result.next_action == "reinstall_to_replace_active_version"
+    assert layout.active_version() == "v0.11.0"
+    _assert_user_data_intact(tmp_path)
+
+
 def test_the_lock_is_released_after_a_successful_upgrade(tmp_path: Path) -> None:
     layout = _install(tmp_path)
     assert _run(layout, tmp_path).action_taken == "upgraded"
@@ -345,9 +380,13 @@ def test_placement_failure_before_the_switch_changes_nothing(tmp_path: Path) -> 
     _assert_user_data_intact(tmp_path)
 
 
-def test_a_failed_restore_is_reported_and_points_at_rollback(tmp_path: Path) -> None:
-    """If putting the pointer back also fails, say so — the agent must not
-    be told a plain retry is safe."""
+def test_an_entrypoint_rewrite_failure_during_restore_is_not_a_failed_restore(
+    tmp_path: Path,
+) -> None:
+    """The entry point resolves *through* the pointer and is written
+    atomically, so failing to rewrite it after the pointer is already back
+    does not mean the rollback failed. Reporting both as one flag turned a
+    recovered install into a "could not restore" scare."""
     layout = _install(tmp_path)
 
     def always_fails(self):
@@ -357,8 +396,38 @@ def test_a_failed_restore_is_reported_and_points_at_rollback(tmp_path: Path) -> 
         result = _run(layout, tmp_path)
 
     assert result.exit_code == ExitCode.UNEXPECTED
+    assert result.next_action == "retry_upgrade"
+    assert layout.active_version() == "v0.10.0"
+    assert not layout.version_dir("v0.11.0").exists()
+    assert any("Entry point rewrite failed" in w for w in result.warnings)
+    assert not any("left unchanged" not in w and "mixed state" in w for w in result.warnings)
+    _assert_user_data_intact(tmp_path)
+
+
+def test_a_failed_pointer_restore_is_reported_honestly(tmp_path: Path) -> None:
+    """If the pointer itself cannot be put back the install really is mixed;
+    the message must say so rather than claiming nothing changed, and the
+    new version directory must be kept for inspection."""
+    layout = _install(tmp_path)
+    calls = {"n": 0}
+    real_activate = InstallLayout.activate
+
+    def flaky_activate(self, version):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return real_activate(self, version)  # the forward switch succeeds
+        raise OSError("disk full")  # the restore does not
+
+    with patch.object(InstallLayout, "ensure_entrypoint", side_effect=OSError("boom")), \
+         patch.object(InstallLayout, "activate", flaky_activate):
+        result = _run(layout, tmp_path)
+
+    assert result.exit_code == ExitCode.UNEXPECTED
     assert result.next_action == "rollback_then_inspect"
     assert any("--rollback" in w for w in result.warnings)
+    assert any("mixed state" in w for w in result.warnings)
+    # Kept, not deleted: the user needs it to recover from.
+    assert layout.version_dir("v0.11.0").exists()
     _assert_user_data_intact(tmp_path)
 
 
