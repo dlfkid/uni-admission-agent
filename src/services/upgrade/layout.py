@@ -153,19 +153,29 @@ class InstallLayout:
         which is how today's ``~/.local/bin/adm-agent`` symlink already works).
         Windows uses a ``.cmd`` shim so no privilege is needed and no
         executable ever sits inside ``bin/`` where it could be file-locked.
+
+        Both writes land through a temporary file and a single ``os.replace``.
+        An unlink-then-create would leave a window with no stable command at
+        all, and a failure inside that window would strand the user without
+        the very entry point they invoke to recover.
         """
         self.bin_dir.mkdir(parents=True, exist_ok=True)
         entry = self.entrypoint_path
-        if self.windows:
-            entry.write_text(
-                _CMD_SHIM.format(pointer=_WINDOWS_POINTER, exe=self.executable_name),
-                encoding="utf-8",
-            )
-            return
-
-        if entry.exists() or entry.is_symlink():
-            entry.unlink()
-        os.symlink(Path("..") / _POSIX_POINTER / self.executable_name, entry)
+        tmp = self.bin_dir / f".{entry.name}.{os.getpid()}.tmp"
+        if tmp.exists() or tmp.is_symlink():
+            tmp.unlink()
+        try:
+            if self.windows:
+                tmp.write_text(
+                    _CMD_SHIM.format(pointer=_WINDOWS_POINTER, exe=self.executable_name),
+                    encoding="utf-8",
+                )
+            else:
+                os.symlink(Path("..") / _POSIX_POINTER / self.executable_name, tmp)
+            os.replace(tmp, entry)
+        finally:
+            if tmp.exists() or tmp.is_symlink():
+                tmp.unlink()
 
     # ── inventory and retention ──────────────────────────────────────
 

@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Callable
 
 from src.services.upgrade.layout import InstallLayout
+from src.services.upgrade.locking import UpgradeInProgressError, install_lock
 from src.services.upgrade.preflight import run_preflight
 from src.services.upgrade.release import (
     fetch_latest_release,
@@ -238,97 +239,137 @@ def perform_upgrade(
         )
     result.asset_available = True
 
-    new_version = result.latest_version
-    layout.staging_dir.mkdir(parents=True, exist_ok=True)
-    result.warnings.extend(sweep_stale_staging(layout))
-    staging = Path(tempfile.mkdtemp(dir=layout.staging_dir))
+    def _run_locked() -> UpgradeResult:
+        """The mutating half of the transaction, run under the lock."""
+        new_version = result.latest_version
+        layout.staging_dir.mkdir(parents=True, exist_ok=True)
+        result.warnings.extend(sweep_stale_staging(layout))
+        staging = Path(tempfile.mkdtemp(dir=layout.staging_dir))
 
-    # 3. stage
-    try:
-        archive = downloader(asset, staging)
-    except UpgradeError as exc:
-        return _stage_failed(result, staging, BlockedReason.UNEXPECTED, ExitCode.UNEXPECTED, exc)
+        # 3. stage
+        try:
+            archive = downloader(asset, staging)
+        except UpgradeError as exc:
+            return _stage_failed(result, staging, BlockedReason.UNEXPECTED, ExitCode.UNEXPECTED, exc)
 
-    # 4. verify artifact
-    try:
-        digest = resolve_expected_digest(release, asset["name"])
-        outcome = verify_artifact(archive, digest, asset.get("size"))
-    except ChecksumMismatchError as exc:
-        return _stage_failed(
-            result, staging, BlockedReason.CHECKSUM_MISMATCH, ExitCode.VERIFICATION_FAILED, exc
-        )
-    except UpgradeError as exc:
-        return _stage_failed(result, staging, BlockedReason.UNEXPECTED, ExitCode.UNEXPECTED, exc)
-    result.checksum_verified = outcome.verified
-    result.warnings.extend(outcome.warnings)
-
-    try:
-        payload = safe_extract(archive, staging / "extracted")
-    except UpgradeError as exc:
-        return _stage_failed(result, staging, BlockedReason.UNEXPECTED, ExitCode.UNEXPECTED, exc)
-
-    # 5. verify binary
-    try:
-        verify_staged_binary(payload, new_version, layout.executable_name)
-    except StagedBinaryError as exc:
-        return _stage_failed(
-            result, staging, BlockedReason.STAGED_BINARY_FAILED, ExitCode.VERIFICATION_FAILED, exc
-        )
-    except UpgradeError as exc:
-        return _stage_failed(result, staging, BlockedReason.UNEXPECTED, ExitCode.UNEXPECTED, exc)
-
-    # 6. activate — never delete an existing target in place: it may be the
-    # currently active, currently running version (e.g. a same-version
-    # `--force` re-install). Swap it into position with atomic renames so a
-    # valid directory always occupies `target`.
-    target = _place_new_version(layout, new_version, payload)
-    shutil.rmtree(staging, ignore_errors=True)
-    layout.activate(new_version)
-    layout.ensure_entrypoint()
-
-    # 7. post-check
-    try:
-        result.warnings.extend(post_check(layout, migrate))
-    except Exception as exc:  # pylint: disable=broad-except
-        # post_check is caller-injected (the default shells out via
-        # subprocess); any failure here — typed or not — must still route
-        # through the spec §6.3 rollback decision, never propagate raw.
-        # `previous != new_version` is guaranteed by the same-version refusal
-        # above; only "no previous version at all" (a first-ever install)
-        # reaches the else branch.
-        if previous:
-            layout.activate(previous)
-            layout.ensure_entrypoint()
-            shutil.rmtree(target, ignore_errors=True)
-            result.action_taken = "rolled_back"
-            result.previous_version = new_version
-        else:
-            # A first-ever install has nothing to roll back to. Leave it
-            # active and warn plainly rather than falsely claiming a rollback.
-            result.action_taken = "blocked"
-            result.previous_version = ""
-            result.warnings.append(
-                "Post-check failed but there is no previous version to "
-                "roll back to; the new version remains active."
+        # 4. verify artifact
+        try:
+            digest = resolve_expected_digest(release, asset["name"])
+            outcome = verify_artifact(archive, digest, asset.get("size"))
+        except ChecksumMismatchError as exc:
+            return _stage_failed(
+                result, staging, BlockedReason.CHECKSUM_MISMATCH, ExitCode.VERIFICATION_FAILED, exc
             )
-        result.blocked_reason = BlockedReason.POST_CHECK_FAILED
-        result.next_action = "inspect_logs_then_retry"
-        result.exit_code = int(ExitCode.POST_CHECK_FAILED)
-        result.active_version = layout.active_version() or ""
-        result.warnings.append(str(exc))
+        except UpgradeError as exc:
+            return _stage_failed(result, staging, BlockedReason.UNEXPECTED, ExitCode.UNEXPECTED, exc)
+        result.checksum_verified = outcome.verified
+        result.warnings.extend(outcome.warnings)
+
+        try:
+            payload = safe_extract(archive, staging / "extracted")
+        except UpgradeError as exc:
+            return _stage_failed(result, staging, BlockedReason.UNEXPECTED, ExitCode.UNEXPECTED, exc)
+
+        # 5. verify binary
+        try:
+            verify_staged_binary(payload, new_version, layout.executable_name)
+        except StagedBinaryError as exc:
+            return _stage_failed(
+                result, staging, BlockedReason.STAGED_BINARY_FAILED, ExitCode.VERIFICATION_FAILED, exc
+            )
+        except UpgradeError as exc:
+            return _stage_failed(result, staging, BlockedReason.UNEXPECTED, ExitCode.UNEXPECTED, exc)
+
+        # 6. activate — never delete an existing target in place: it may be the
+        # currently active, currently running version (e.g. a same-version
+        # `--force` re-install). Swap it into position with atomic renames so a
+        # valid directory always occupies `target`.
+        # Any failure in this phase — a permission error, a full disk, an AV
+        # scanner holding a file — must still leave the install as it was and
+        # return a structured result, never propagate raw to the CLI.
+        target: Path | None = None
+        switched = False
+        try:
+            target = _place_new_version(layout, new_version, payload)
+            shutil.rmtree(staging, ignore_errors=True)
+            layout.activate(new_version)
+            switched = True
+            layout.ensure_entrypoint()
+        except Exception as exc:  # pylint: disable=broad-except
+            return _activation_failed(
+                layout, result, staging, target, previous, switched=switched, exc=exc
+            )
+
+        # 7. post-check
+        try:
+            result.warnings.extend(post_check(layout, migrate))
+        except Exception as exc:  # pylint: disable=broad-except
+            # post_check is caller-injected (the default shells out via
+            # subprocess); any failure here — typed or not — must still route
+            # through the spec §6.3 rollback decision, never propagate raw.
+            # `previous != new_version` is guaranteed by the same-version refusal
+            # above; only "no previous version at all" (a first-ever install)
+            # reaches the else branch.
+            if previous:
+                layout.activate(previous)
+                layout.ensure_entrypoint()
+                shutil.rmtree(target, ignore_errors=True)
+                result.action_taken = "rolled_back"
+                result.previous_version = new_version
+            else:
+                # A first-ever install has nothing to roll back to. Leave it
+                # active and warn plainly rather than falsely claiming a rollback.
+                result.action_taken = "blocked"
+                result.previous_version = ""
+                result.warnings.append(
+                    "Post-check failed but there is no previous version to "
+                    "roll back to; the new version remains active."
+                )
+            result.blocked_reason = BlockedReason.POST_CHECK_FAILED
+            result.next_action = "inspect_logs_then_retry"
+            result.exit_code = int(ExitCode.POST_CHECK_FAILED)
+            result.active_version = layout.active_version() or ""
+            result.warnings.append(str(exc))
+            return result
+
+        # 8. settle — keep active + one previous. If the former pointer was
+        # missing or corrupt, fall back to the newest other installed version
+        # rather than pruning everything down to just the new one.
+        keep_previous = previous or _newest_other_installed(layout, exclude=new_version)
+        keep = [v for v in (new_version, keep_previous) if v][:RETAIN_VERSIONS]
+        try:
+            layout.prune(keep=keep)
+        except Exception as exc:  # pylint: disable=broad-except
+            # Spec §5 step 8: "log a warning only". The pointer has already moved
+            # and the post-check has already passed, so the upgrade succeeded —
+            # a Windows file lock or an AV scanner blocking rmtree must not be
+            # reported as failure, or the agent retries an upgrade that already
+            # happened. The stale directory is swept on the next run.
+            result.warnings.append(
+                f"Upgraded successfully, but could not prune old versions: {exc}. "
+                "They will be cleaned up on the next upgrade."
+            )
+
+        result.action_taken = "upgraded"
+        result.active_version = new_version
+        result.previous_version = previous or ""
         return result
 
-    # 8. settle — keep active + one previous. If the former pointer was
-    # missing or corrupt, fall back to the newest other installed version
-    # rather than pruning everything down to just the new one.
-    keep_previous = previous or _newest_other_installed(layout, exclude=new_version)
-    keep = [v for v in (new_version, keep_previous) if v][:RETAIN_VERSIONS]
-    layout.prune(keep=keep)
-
-    result.action_taken = "upgraded"
-    result.active_version = new_version
-    result.previous_version = previous or ""
-    return result
+    # The lock spans the sweep through settle/rollback. Without it a
+    # concurrent run's sweep would delete this one's in-flight staging
+    # tree, and a later interleaving would let one process prune the very
+    # version the other just activated.
+    try:
+        with install_lock(layout.root):
+            return _run_locked()
+    except UpgradeInProgressError as exc:
+        result.next_action = "wait_for_other_upgrade_then_retry"
+        return _blocked(
+            result,
+            BlockedReason.UPGRADE_IN_PROGRESS,
+            ExitCode.UPGRADE_IN_PROGRESS,
+            str(exc),
+        )
 
 
 def sweep_stale_staging(layout: InstallLayout) -> list[str]:
@@ -415,6 +456,62 @@ def _newest_other_installed(layout: InstallLayout, *, exclude: str) -> str | Non
     return None
 
 
+def _activation_failed(
+    layout: InstallLayout,
+    result: UpgradeResult,
+    staging: Path,
+    target: Path | None,
+    previous: str | None,
+    *,
+    switched: bool,
+    exc: Exception,
+) -> UpgradeResult:
+    """Undo a partially-completed activation (spec §5 step 6).
+
+    The pointer switch is atomic, but placing the payload and rewriting the
+    entry point are not free of failure. If the switch already happened we
+    put it back; either way the new version directory goes, so the install
+    ends up exactly as it started.
+    """
+    shutil.rmtree(staging, ignore_errors=True)
+    restored = True
+    if switched:
+        try:
+            if previous:
+                layout.activate(previous)
+                layout.ensure_entrypoint()
+            else:
+                # Nothing was installed before, so "unchanged" means no
+                # pointer at all rather than one aimed at a version we are
+                # about to delete.
+                pointer = layout.pointer_path
+                if pointer.exists() or pointer.is_symlink():
+                    pointer.unlink()
+        except Exception as restore_exc:  # pylint: disable=broad-except
+            restored = False
+            result.warnings.append(
+                f"Could not restore the previous version after a failed "
+                f"activation: {restore_exc}. Run 'adm-agent upgrade --rollback'."
+            )
+
+    if target is not None and restored:
+        try:
+            shutil.rmtree(target, ignore_errors=True)
+        except Exception:  # pragma: no cover - ignore_errors already swallows
+            pass
+
+    result.active_version = layout.active_version() or ""
+    result.next_action = (
+        "retry_upgrade" if restored else "rollback_then_inspect"
+    )
+    return _blocked(
+        result,
+        BlockedReason.UNEXPECTED,
+        ExitCode.UNEXPECTED,
+        f"Activation failed and the install was left unchanged: {exc}",
+    )
+
+
 def _stage_failed(
     result: UpgradeResult,
     staging: Path,
@@ -473,22 +570,26 @@ def rollback(
     if older is None:
         raise UpgradeError("Cannot roll back: no previous version is installed")
 
-    layout.activate(older)
-    layout.ensure_entrypoint()
-    result = UpgradeResult(
-        current_version=active or "",
-        action_taken="rolled_back",
-        active_version=older,
-        previous_version=active or "",
-    )
-
-    try:
-        result.warnings.extend(post_check(layout, migrate))
-    except Exception as exc:  # pylint: disable=broad-except
-        result.warnings.append(
-            "Post-rollback check failed. The rollback itself stands — "
-            f"{older} is active — but verify the database before continuing: {exc}"
+    # A rollback moves the pointer, so it takes the same install-root lock an
+    # upgrade does — otherwise it can repoint out from under a concurrent
+    # upgrade that is mid-activation.
+    with install_lock(layout.root):
+        layout.activate(older)
+        layout.ensure_entrypoint()
+        result = UpgradeResult(
+            current_version=active or "",
+            action_taken="rolled_back",
+            active_version=older,
+            previous_version=active or "",
         )
+
+        try:
+            result.warnings.extend(post_check(layout, migrate))
+        except Exception as exc:  # pylint: disable=broad-except
+            result.warnings.append(
+                "Post-rollback check failed. The rollback itself stands — "
+                f"{older} is active — but verify the database before continuing: {exc}"
+            )
     return result
 
 
