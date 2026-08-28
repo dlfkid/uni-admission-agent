@@ -49,6 +49,7 @@ class ExitCode(IntEnum):
     POST_CHECK_FAILED = 13
     NOT_FROZEN = 14
     LEGACY_LAYOUT = 15
+    UPGRADE_IN_PROGRESS = 16
 
 
 class BlockedReason(str):
@@ -62,6 +63,7 @@ class BlockedReason(str):
     POST_CHECK_FAILED = "post_check_failed"
     NOT_FROZEN = "not_frozen"
     LEGACY_LAYOUT = "legacy_layout"
+    UPGRADE_IN_PROGRESS = "upgrade_in_progress"
     UNEXPECTED = "unexpected"
 
 

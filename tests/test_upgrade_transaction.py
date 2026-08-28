@@ -9,6 +9,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from src.services.upgrade.layout import InstallLayout
+from src.services.upgrade.locking import LOCK_NAME, install_lock
 from src.services.upgrade.transaction import (
     check_for_updates,
     default_post_check,
@@ -96,14 +97,14 @@ def _run(
     ``verify_staged_binary`` specifically, since this helper always stubs it
     to succeed (the fake downloader's payload is not a real executable).
     """
-    defaults = dict(
-        artifact_name="adm-agent",
-        frozen=True,
-        pid_file=tmp_path / "server.pid",
-        health_url=_HEALTH,
-        downloader=_fake_downloader(tmp_path),
-        post_check=lambda layout, migrate: [],
-    )
+    defaults = {
+        "artifact_name": "adm-agent",
+        "frozen": True,
+        "pid_file": tmp_path / "server.pid",
+        "health_url": _HEALTH,
+        "downloader": _fake_downloader(tmp_path),
+        "post_check": lambda layout, migrate: [],
+    }
     defaults.update(kwargs)
     with patch(
         "src.services.upgrade.transaction.fetch_latest_release",
@@ -255,6 +256,130 @@ def test_unparseable_version_blocks_with_12(tmp_path: Path) -> None:
     assert result.exit_code == ExitCode.VERIFICATION_FAILED
     assert result.blocked_reason == BlockedReason.UNPARSEABLE_VERSION
     assert layout.active_version() == "v0.10.0"
+
+
+# ── install-root mutual exclusion ─────────────────────────────────────
+
+
+def test_a_concurrent_upgrade_is_refused_before_anything_is_swept(
+    tmp_path: Path,
+) -> None:
+    """The sweep deletes every staging tree it finds, so a second upgrade
+    must be turned away before it reaches that point rather than deleting
+    the first one's in-flight download."""
+    layout = _install(tmp_path)
+    inflight = layout.staging_dir / "tmp-inflight"
+    inflight.mkdir(parents=True)
+
+    with install_lock(layout.root):
+        result = _run(layout, tmp_path)
+
+    assert result.exit_code == ExitCode.UPGRADE_IN_PROGRESS
+    assert result.blocked_reason == BlockedReason.UPGRADE_IN_PROGRESS
+    assert result.next_action == "wait_for_other_upgrade_then_retry"
+    assert inflight.exists(), "the other run's staging tree was swept"
+    assert layout.active_version() == "v0.10.0"
+    _assert_user_data_intact(tmp_path)
+
+
+def test_the_lock_is_released_after_a_successful_upgrade(tmp_path: Path) -> None:
+    layout = _install(tmp_path)
+    assert _run(layout, tmp_path).action_taken == "upgraded"
+    assert not (layout.root / LOCK_NAME).exists()
+
+
+def test_the_lock_is_released_after_a_failed_upgrade(tmp_path: Path) -> None:
+    layout = _install(tmp_path)
+    with patch(
+        "src.services.upgrade.transaction._place_new_version",
+        side_effect=OSError("permission denied"),
+    ):
+        _run(layout, tmp_path)
+    assert not (layout.root / LOCK_NAME).exists()
+
+
+# ── activation-phase compensation (spec §5 step 6) ────────────────────
+
+
+def test_entrypoint_failure_after_the_switch_restores_the_previous_pointer(
+    tmp_path: Path,
+) -> None:
+    """The pointer switch is atomic, but the entry-point rewrite that follows
+    it can still fail on permissions, a full disk or an AV lock. When it does,
+    the install must end up exactly as it started rather than stranded on a
+    version whose command was never wired up."""
+    layout = _install(tmp_path)
+    calls = {"n": 0}
+    real_ensure = InstallLayout.ensure_entrypoint
+
+    def flaky_ensure(self):
+        calls["n"] += 1
+        if calls["n"] == 1:  # the post-activation write
+            raise OSError("disk full")
+        return real_ensure(self)
+
+    with patch.object(InstallLayout, "ensure_entrypoint", flaky_ensure):
+        result = _run(layout, tmp_path)
+
+    assert result.exit_code == ExitCode.UNEXPECTED
+    assert result.action_taken == "blocked"
+    assert result.next_action == "retry_upgrade"
+    assert layout.active_version() == "v0.10.0"
+    assert not layout.version_dir("v0.11.0").exists()
+    assert layout.entrypoint_path.exists()
+    _assert_user_data_intact(tmp_path)
+
+
+def test_placement_failure_before_the_switch_changes_nothing(tmp_path: Path) -> None:
+    layout = _install(tmp_path)
+    with patch(
+        "src.services.upgrade.transaction._place_new_version",
+        side_effect=OSError("permission denied"),
+    ):
+        result = _run(layout, tmp_path)
+
+    assert result.exit_code == ExitCode.UNEXPECTED
+    assert layout.active_version() == "v0.10.0"
+    assert not layout.version_dir("v0.11.0").exists()
+    assert not any(layout.staging_dir.iterdir())
+    _assert_user_data_intact(tmp_path)
+
+
+def test_a_failed_restore_is_reported_and_points_at_rollback(tmp_path: Path) -> None:
+    """If putting the pointer back also fails, say so — the agent must not
+    be told a plain retry is safe."""
+    layout = _install(tmp_path)
+
+    def always_fails(self):
+        raise OSError("disk full")
+
+    with patch.object(InstallLayout, "ensure_entrypoint", always_fails):
+        result = _run(layout, tmp_path)
+
+    assert result.exit_code == ExitCode.UNEXPECTED
+    assert result.next_action == "rollback_then_inspect"
+    assert any("--rollback" in w for w in result.warnings)
+    _assert_user_data_intact(tmp_path)
+
+
+# ── settle failures are warnings, not failures (spec §5 step 8) ───────
+
+
+def test_prune_failure_after_a_successful_upgrade_only_warns(tmp_path: Path) -> None:
+    """The pointer has moved and the post-check passed, so the upgrade
+    succeeded. A locked directory must not be reported as failure, or the
+    agent retries an upgrade that already happened."""
+    layout = _install(tmp_path)
+    with patch.object(
+        InstallLayout, "prune", side_effect=OSError("directory in use")
+    ):
+        result = _run(layout, tmp_path)
+
+    assert result.exit_code == ExitCode.OK
+    assert result.action_taken == "upgraded"
+    assert result.active_version == "v0.11.0"
+    assert any("could not prune" in w for w in result.warnings)
+    _assert_user_data_intact(tmp_path)
 
 
 # ── post-activation asymmetry (spec §6.3) ─────────────────────────────

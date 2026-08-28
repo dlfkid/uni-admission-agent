@@ -8,6 +8,7 @@ from pathlib import Path
 
 from src.core.paths import get_data_dir, is_frozen
 from src.services.upgrade.layout import InstallLayout
+from src.services.upgrade.locking import UpgradeInProgressError, install_lock
 from src.services.upgrade.preflight import PreflightBlock, is_process_alive, run_preflight
 from src.services.upgrade.release import get_platform_info
 from src.services.upgrade.transaction import (
@@ -68,6 +69,7 @@ __all__ = [
     "StagedBinaryError",
     "UnparseableVersionError",
     "UpgradeError",
+    "UpgradeInProgressError",
     "UpgradeResult",
     "check_for_updates",
     "default_client_layout",
@@ -77,6 +79,7 @@ __all__ = [
     "default_pid_file",
     "get_current_version",
     "get_platform_info",
+    "install_lock",
     "is_frozen",
     "is_process_alive",
     "perform_upgrade",
