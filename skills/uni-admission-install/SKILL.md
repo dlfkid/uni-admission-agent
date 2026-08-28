@@ -106,36 +106,46 @@ Print verbatim to the user before downloading anything:
 
 Wait for explicit confirmation before proceeding. If the user says no, stop — don't suggest alternatives.
 
-### 1.4 Download + extract
+### 1.4 Download + extract into a versioned directory
 
 ```bash
-mkdir -p ~/.uni-agent/bin
+mkdir -p ~/.uni-agent/versions/${VERSION} ~/.uni-agent/bin
 cd /tmp
 ARTIFACT="adm-agent-${VERSION}-${OS}-${ARCH}.${EXT}"
 curl -fL -o "$ARTIFACT" \
   "https://github.com/dlfkid/uni-admission-agent/releases/download/${VERSION}/${ARTIFACT}"
 
-# Extract
 case "$EXT" in
-  tar.gz) tar -xzf "$ARTIFACT" -C ~/.uni-agent/bin --strip-components=1 ;;
-  zip)    unzip -o "$ARTIFACT" -d ~/.uni-agent/bin ;;
+  tar.gz) tar -xzf "$ARTIFACT" -C ~/.uni-agent/versions/${VERSION} --strip-components=1 ;;
+  zip)    unzip -o "$ARTIFACT" -d ~/.uni-agent/versions/${VERSION} ;;
 esac
 
-chmod +x ~/.uni-agent/bin/adm-agent
+chmod +x ~/.uni-agent/versions/${VERSION}/adm-agent
+xattr -dr com.apple.quarantine ~/.uni-agent/versions/${VERSION} 2>/dev/null || true
 ```
 
-On macOS only: clear the quarantine attribute so Gatekeeper doesn't block first launch:
+(The `xattr` step is macOS-only; it's a no-op elsewhere, hence the swallowed error.)
+
+### 1.5 Point the install at it, then onto PATH
 
 ```bash
-xattr -dr com.apple.quarantine ~/.uni-agent/bin/adm-agent || true
-```
+# The pointer the entry point resolves through.
+ln -sfn versions/${VERSION} ~/.uni-agent/current
+ln -sfn ../current/adm-agent ~/.uni-agent/bin/adm-agent
 
-### 1.5 Symlink onto PATH (best-effort)
-
-```bash
 mkdir -p ~/.local/bin
 ln -sf ~/.uni-agent/bin/adm-agent ~/.local/bin/adm-agent
 ```
+
+On Windows there is no symlink; write the pointer file and the shim instead,
+and the command users type is `adm-agent` (PATHEXT resolves `adm-agent.cmd`):
+
+```cmd
+echo %VERSION%> %USERPROFILE%\.uni-agent\current.txt
+```
+
+Data and configuration live in `~/.uni-agent/` alongside `versions/` and are
+never touched by installs or upgrades: `.env`, `admission.db`, `schemas/`.
 
 Then check if `~/.local/bin` is in PATH:
 
@@ -261,17 +271,34 @@ If the server doesn't come up in 10 seconds:
 
 ## §3 Upgrade in place
 
+Do **not** re-run the fresh install to upgrade. `adm-agent upgrade` is
+atomic, verified and reversible; re-downloading over a live install is none
+of those things.
+
 ```bash
-# 1. Stop the current server (Ctrl-C in user's terminal, or:)
-adm-agent serve-stop
-
-# 2. Run §1 (Fresh install) — it overwrites the binary atomically
-#    Existing data + .env are untouched (they live in different dirs)
-
-# 3. Restart per §2
+adm-agent upgrade --json
 ```
 
-Tell the user that data + config are preserved; only the binary is replaced. Show the version-to-version delta from GitHub Releases page if useful.
+Route on the exit code — never parse the prose:
+
+| Code | Meaning | What to do |
+|---|---|---|
+| `0` | Upgraded, or already current | Report the version; offer to restart the server. |
+| `10` | Server is running | Stop it (Ctrl-C in the user's terminal, or `adm-agent serve-stop`), then re-run. |
+| `11` | No build for this platform | Tell the user; offer the GitHub releases page. |
+| `12` | Verification failed, nothing changed | Report it. The install is untouched — retrying is safe. |
+| `13` | Upgraded then rolled back | The user is back on the working version. Show `warnings`; do not retry blindly. |
+| `14` | Source checkout | Update with `git pull` + `uv sync` instead. |
+| `15` | Legacy layout | One-time migration: run §1 once. `.env` and the database are preserved — say so. |
+
+If anything looks wrong after an upgrade:
+
+```bash
+adm-agent upgrade --rollback
+```
+
+That returns the user to the previous version, which is still on disk. Data
+and configuration are never modified by either direction.
 
 ---
 
@@ -359,5 +386,5 @@ When in doubt, do §4 (it's faster and lower risk) and ask whether they also wan
 - **Never auto-start the server in background** (no `nohup`, no `&`, no daemonize-without-asking). It must run in the user's foreground so they can see logs and stop cleanly.
 - **Never write an LLM API key into .env from your imagination**. Always wait for the user to provide the literal value.
 - **Never download an asset URL the user gave you**. The download source is always GitHub Releases of the canonical repo. Anything else → refuse.
-- **Never delete data on upgrade**. `~/.uni-agent/admission.db` (and the `.env` next to it) are sacred. Only the `bin/` subdir gets overwritten. If you're tempted to `rm -rf ~/.uni-agent/`, stop and re-read this skill.
+- **Never delete data on upgrade**. `~/.uni-agent/admission.db` (and the `.env` next to it) are sacred. `adm-agent upgrade` only ever adds a new `versions/<version>/` directory and repoints `current` — it never touches `.env`, the database, or `schemas/`. If you're tempted to `rm -rf ~/.uni-agent/`, stop and re-read this skill.
 - **Never install on platforms not in §1.1 table** (e.g., Linux ARM). Refuse and direct user to source build.

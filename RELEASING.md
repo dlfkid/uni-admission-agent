@@ -49,3 +49,7 @@ uv run bump-my-version bump minor --dry-run --verbose
   lock silently dirties the working tree and blocks the next `bump`
   (`allow_dirty = false`).
 - Adding a new version location? Add a `[[tool.bumpversion.files]]` block for it.
+- Publishing is gated on the upgrade verification job (`upgrade-verify` in
+  `release.yml`). If it fails, no GitHub Release is created and no artifacts
+  are uploaded — the tag exists but nothing is downloadable. Fix and cut the
+  next patch tag.

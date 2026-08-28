@@ -105,9 +105,9 @@ bash .githooks/install-hooks.sh
 | Context | Command |
 |---|---|
 | Development / source checkout | `uni-admission <cmd>` (installed by `uv sync` via `pyproject.toml`) or `uv run python -m src.cmd.cli <cmd>` |
-| Packaged binary (releases) | `./adm-agent <cmd>` (macOS/Linux) · `adm-agent.exe <cmd>` (Windows) |
+| Packaged binary (releases) | `./adm-agent <cmd>` (macOS/Linux) · `adm-agent <cmd>` (Windows — the installer's `adm-agent.cmd` launcher resolves via `PATHEXT`) |
 
-All examples below use `uni-admission` (dev). For the packaged binary, substitute `./adm-agent` (or `adm-agent.exe` on Windows — append `.exe` to the binary name).
+All examples below use `uni-admission` (dev). For the packaged binary, substitute `./adm-agent` (or `adm-agent` on Windows — no `.exe` needed).
 
 ### `.env` minimum
 
@@ -176,7 +176,7 @@ AGENT_RUNTIME=pydanticai
 | `uni-admission audit drill <id>` | Drill into one audit row |
 | `uni-admission crawl-summary --university <slug> [--year Y]` | Post-crawl summary (LLM-CLI friendly) |
 | `uni-admission diagnostics clear --university <slug> [--year Y]` | Wipe quarantine + audit records |
-| `uni-admission upgrade [--check \| --force]` | Update backend to latest version |
+| `uni-admission upgrade [--check \| --force \| --rollback \| --json]` | Update the backend, or return to the previous version. Atomic: a failed upgrade leaves the install unchanged. |
 | `uni-admission version [--verbose]` | Show version |
 | `uni-admission help [--verbose]` | Show help |
 
@@ -347,7 +347,9 @@ Output in `release/`:
 
 **Platform notes for the packaged binary:**
 - **macOS:** run `xattr -cr /path/to/adm-agent` after extracting; if "System cannot verify the developer" appears go to **Settings → Privacy & Security → Allow Anyway**.
-- **Windows:** first run may trigger SmartScreen; choose **More info → Run anyway**. Use `adm-agent.exe` (note the `.exe` suffix).
+- **Windows:** first run may trigger SmartScreen; choose **More info → Run
+  anyway**. The command is `adm-agent` (the installer writes a
+  `adm-agent.cmd` launcher that resolves the active version).
 - **Linux:** ensure the executable bit (`chmod +x adm-agent`).
 
 Release note template: `docs/release_notes_template.md`.
