@@ -8,7 +8,6 @@ with size-based rotation (10 MB) and retention (10 most recent files).
 from __future__ import annotations
 
 import logging
-import sys
 from datetime import datetime
 from pathlib import Path
 
@@ -20,12 +19,17 @@ from src.core.paths import get_data_dir
 def resolve_log_dir() -> Path:
     """Return the directory where log files should be written.
 
-    * **Debug / dev mode** — ``<project>/data/logs/`` (kept out of the repo via
-      ``.gitignore``, so smoke-run logs no longer land in the working tree).
-    * **Production / frozen** — same directory as the executable.
+    Always ``<data dir>/logs/`` — ``<project>/data/logs/`` in dev mode,
+    ``~/.uni-agent/logs/`` when frozen.
+
+    Frozen mode deliberately does **not** use ``Path(sys.executable).parent``.
+    Under the versioned install layout that is ``versions/<v>/``, which
+    ``InstallLayout.prune()`` deletes after a successful upgrade and which
+    the upgrade transaction ``rmtree``s outright when a post-check fails —
+    destroying exactly the logs whose ``next_action="inspect_logs_then_retry"``
+    tells the agent to read them. Logs are user data, not install payload
+    (spec §3.2's install/data separation).
     """
-    if getattr(sys, "frozen", False):
-        return Path(sys.executable).parent
     return get_data_dir() / "logs"
 
 

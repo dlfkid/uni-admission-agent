@@ -1,11 +1,14 @@
 """Tests for the upgrade/version CLI contract — spec §7."""
 
 import json
+from pathlib import Path
 from unittest.mock import patch
 
+import pytest
 from typer.testing import CliRunner
 
-from src.cmd.cli import app
+from src.cmd.cli import _find_client_argv, app
+from src.services.upgrade.layout import InstallLayout
 from src.services.upgrade import default_client_pid_file
 from src.services.upgrade.types import BlockedReason, ExitCode, UpgradeResult
 
@@ -294,3 +297,93 @@ def test_client_version_json() -> None:
     ):
         result = CliRunner().invoke(client_app, ["version", "--json"])
     assert json.loads(result.stdout)["version"] == "v0.11.0"
+
+
+# ── `up` locates the client under its own layout (spec §3.6) ──────────
+
+
+def _frozen_at(monkeypatch, exe: Path) -> None:
+    """Pretend this process is the frozen backend running from *exe*."""
+    monkeypatch.setattr("src.cmd.cli.sys.frozen", True, raising=False)
+    monkeypatch.setattr("src.cmd.cli.sys.executable", str(exe), raising=False)
+
+
+def test_up_finds_the_client_via_its_own_install_layout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Under the versioned layout ``sys.executable``'s parent is
+    ``versions/<v>/``, which never contains the client — it lives at
+    ``~/.adm-agent-client/bin/`` (spec §3.6)."""
+    backend_version_dir = tmp_path / ".uni-agent" / "versions" / "v0.11.0"
+    backend_version_dir.mkdir(parents=True)
+    _frozen_at(monkeypatch, backend_version_dir / "adm-agent")
+
+    layout = InstallLayout(
+        root=tmp_path / ".adm-agent-client",
+        artifact_name="adm-agent-client",
+        windows=False,
+    )
+    layout.bin_dir.mkdir(parents=True)
+    layout.entrypoint_path.write_text("#!/bin/sh\n")
+    monkeypatch.setattr("src.cmd.cli.default_client_layout", lambda: layout)
+
+    assert _find_client_argv() == [str(layout.entrypoint_path)]
+
+
+def test_up_falls_back_to_the_client_current_pointer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An install whose ``bin/`` shim has not been written yet is still found
+    through ``current/``."""
+    backend_version_dir = tmp_path / ".uni-agent" / "versions" / "v0.11.0"
+    backend_version_dir.mkdir(parents=True)
+    _frozen_at(monkeypatch, backend_version_dir / "adm-agent")
+
+    root = tmp_path / ".adm-agent-client"
+    layout = InstallLayout(root=root, artifact_name="adm-agent-client", windows=False)
+    version_dir = layout.version_dir("v0.11.0")
+    version_dir.mkdir(parents=True)
+    (version_dir / "adm-agent-client").write_text("#!/bin/sh\n")
+    layout.activate("v0.11.0")
+    monkeypatch.setattr("src.cmd.cli.default_client_layout", lambda: layout)
+
+    assert _find_client_argv() == [str(root / "current" / "adm-agent-client")]
+
+
+def test_up_reports_every_location_it_looked_at_when_the_client_is_absent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    backend_version_dir = tmp_path / ".uni-agent" / "versions" / "v0.11.0"
+    backend_version_dir.mkdir(parents=True)
+    _frozen_at(monkeypatch, backend_version_dir / "adm-agent")
+
+    layout = InstallLayout(
+        root=tmp_path / ".adm-agent-client",
+        artifact_name="adm-agent-client",
+        windows=False,
+    )
+    monkeypatch.setattr("src.cmd.cli.default_client_layout", lambda: layout)
+
+    with pytest.raises(FileNotFoundError) as excinfo:
+        _find_client_argv()
+    assert ".adm-agent-client" in str(excinfo.value)
+
+
+def test_up_wraps_the_windows_cmd_shim_in_the_command_processor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A ``.cmd`` is not a PE image; ``CreateProcess`` cannot exec it."""
+    backend_version_dir = tmp_path / ".uni-agent" / "versions" / "v0.11.0"
+    backend_version_dir.mkdir(parents=True)
+    _frozen_at(monkeypatch, backend_version_dir / "adm-agent.exe")
+
+    layout = InstallLayout(
+        root=tmp_path / ".adm-agent-client",
+        artifact_name="adm-agent-client",
+        windows=True,
+    )
+    layout.bin_dir.mkdir(parents=True)
+    layout.entrypoint_path.write_text("@echo off\n")
+    monkeypatch.setattr("src.cmd.cli.default_client_layout", lambda: layout)
+
+    assert _find_client_argv() == ["cmd.exe", "/c", str(layout.entrypoint_path)]

@@ -57,6 +57,7 @@ from src.services.quality_scoring import score_manifest
 from src.services.upgrade import (
     ExitCode,
     check_for_updates,
+    default_client_layout,
     default_health_url,
     default_install_layout,
     default_pid_file,
@@ -1017,13 +1018,29 @@ def serve_stop(
 def _find_client_argv() -> list[str]:
     """Return argv prefix to invoke the client CLI.
 
-    Handles PyInstaller frozen builds (sibling binary) and dev mode
-    (re-invoke Python on client_cli.py).
+    Handles PyInstaller frozen builds and dev mode (re-invoke Python on
+    client_cli.py).
+
+    Under the versioned layout ``Path(sys.executable).parent`` is
+    ``~/.uni-agent/versions/<v>/``, which never contains the client — the
+    client has its own install root at ``~/.adm-agent-client/`` (spec §3.6).
+    Those paths are searched first; the sibling-directory candidates are
+    kept for pre-versioning and side-by-side unpacked builds.
     """
     if getattr(sys, "frozen", False):
-        exe_name = "adm-agent-client.exe" if os.name == "nt" else "adm-agent-client"
+        client_layout = default_client_layout()
+        exe_name = client_layout.executable_name
         exe_dir = Path(sys.executable).parent
+
+        # The client's own entry point is a `.cmd` shim on Windows, which
+        # CreateProcess cannot exec as a PE image — spawn_argv routes it
+        # through cmd.exe, exactly as the upgrade post-check does.
+        entry = client_layout.entrypoint_path
+        if entry.exists():
+            return client_layout.spawn_argv()
+
         candidates = [
+            client_layout.root / "current" / exe_name,
             exe_dir / exe_name,
             exe_dir.parent / "adm-agent-client" / exe_name,
         ]
@@ -1032,7 +1049,7 @@ def _find_client_argv() -> list[str]:
                 return [str(candidate)]
         raise FileNotFoundError(
             "Could not locate adm-agent-client binary. Looked at: "
-            + ", ".join(str(c) for c in candidates)
+            + ", ".join(str(c) for c in [entry, *candidates])
         )
     client_script = Path(__file__).parent / "client_cli.py"
     return [sys.executable, str(client_script)]
