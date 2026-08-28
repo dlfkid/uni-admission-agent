@@ -179,11 +179,22 @@ def _data_intact(root: Path) -> str | None:
     return None
 
 
+def _migrate_flag(layout: InstallLayout) -> list[str]:
+    """``--no-migrate`` where it exists, nothing where it does not.
+
+    Only the backend has a database, so only its CLI declares the flag.
+    Passing it to ``adm-agent-client upgrade`` makes Typer exit 2 with
+    "No such option", which would fail the gate — and therefore block
+    every release — before a single assertion ran.
+    """
+    return ["--no-migrate"] if layout.artifact_name == "adm-agent" else []
+
+
 def _step_upgrade(
     layout: InstallLayout, args: argparse.Namespace, base: str, home: Path
 ) -> str | None:
     """Run ``upgrade --force`` and confirm it activated the new version."""
-    upgraded = _run(layout, ["upgrade", "--force", "--no-migrate", "--json"], base, home)
+    upgraded = _run(layout, ["upgrade", "--force", *_migrate_flag(layout), "--json"], base, home)
     print(upgraded.stdout, upgraded.stderr)
     if upgraded.returncode != 0:
         return f"upgrade exited {upgraded.returncode}"
@@ -212,7 +223,7 @@ def _step_rollback(
     layout: InstallLayout, args: argparse.Namespace, base: str, home: Path
 ) -> str | None:
     """Run ``upgrade --rollback`` and confirm it returned to the old version."""
-    back = _run(layout, ["upgrade", "--rollback", "--no-migrate", "--json"], base, home)
+    back = _run(layout, ["upgrade", "--rollback", *_migrate_flag(layout), "--json"], base, home)
     if back.returncode != 0:
         return f"rollback exited {back.returncode}: {back.stdout} {back.stderr}"
     payload, err = _load_json(back.stdout)
@@ -290,10 +301,16 @@ def _verify_legacy_refusal(
     return _data_intact(root)
 
 
-def _unpack_runnable(artifact: Path, dest: Path) -> Path:
-    """Extract *artifact* to *dest* and return its executable, made runnable."""
+def _unpack_runnable(artifact: Path, dest: Path, artifact_name: str) -> Path:
+    """Extract *artifact* to *dest* and return its executable, made runnable.
+
+    The executable name follows the artifact: the client archive ships
+    ``adm-agent-client``, and looking for ``adm-agent`` inside it fails with
+    FileNotFoundError before any assertion runs.
+    """
     _extract_flat(artifact, dest)
-    exe = dest / ("adm-agent.exe" if sys.platform == "win32" else "adm-agent")
+    suffix = ".exe" if sys.platform == "win32" else ""
+    exe = dest / f"{artifact_name}{suffix}"
     if sys.platform != "win32":
         exe.chmod(0o755)
     if sys.platform == "darwin":
@@ -339,7 +356,9 @@ def _step_previous_release(args: argparse.Namespace, base: str) -> str | None:
     )
     _seed_user_data(root)
 
-    prev_exe = _unpack_runnable(args.previous_artifact, args.workdir / "prevbin")
+    prev_exe = _unpack_runnable(
+        args.previous_artifact, args.workdir / "prevbin", args.artifact_name
+    )
     versioned = _previous_ships_the_versioned_layout(prev_exe)
 
     if versioned:
@@ -365,7 +384,9 @@ def _step_previous_release(args: argparse.Namespace, base: str) -> str | None:
     # (`bin/adm-agent` + `bin/_internal`, spec §3.1) and assert §3.5 detection.
     print(f"Previous release {args.previous_version} has the flat legacy layout")
     _extract_flat(args.previous_artifact, root / "bin")
-    new_exe = _unpack_runnable(args.artifact, args.workdir / "newbin")
+    new_exe = _unpack_runnable(
+        args.artifact, args.workdir / "newbin", args.artifact_name
+    )
     return _verify_legacy_refusal(new_exe, root, home, base)
 
 

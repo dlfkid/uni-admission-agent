@@ -207,3 +207,45 @@ def test_extract_flat_strips_the_single_wrapper_directory(tmp_path: Path) -> Non
     assert (dest / "adm-agent").read_text() == "binary"
     assert (dest / "_internal").is_dir()
     assert not (dest / payload.name).exists()
+
+
+# ── the argv the gate builds must parse on the CLI it targets ─────────
+
+
+@pytest.mark.parametrize(
+    "artifact_name,app_module,expect_flag",
+    [
+        ("adm-agent", "src.cmd.cli", True),
+        ("adm-agent-client", "src.cmd.client_cli", False),
+    ],
+)
+def test_the_gate_argv_is_accepted_by_the_cli_it_targets(
+    artifact_name: str, app_module: str, expect_flag: bool
+) -> None:
+    """Not a mock: the flags the gate builds go through the real Typer parser.
+
+    ``adm-agent-client upgrade`` has no ``--migrate/--no-migrate`` — it has no
+    database — so passing it unconditionally made Typer exit 2 with "No such
+    option", failing the gate and blocking every release before a single
+    assertion ran.
+    """
+    import importlib
+
+    from typer.testing import CliRunner
+
+    from src.services.upgrade.layout import InstallLayout
+
+    layout = InstallLayout(root=Path("/nonexistent"), artifact_name=artifact_name)
+    flags = gate._migrate_flag(layout)  # pylint: disable=protected-access
+    assert flags == (["--no-migrate"] if expect_flag else [])
+
+    app = importlib.import_module(app_module).app
+    for argv in (
+        ["upgrade", "--force", *flags, "--json"],
+        ["upgrade", "--rollback", *flags, "--json"],
+    ):
+        result = CliRunner().invoke(app, argv)
+        # Exit 2 is click's usage error; anything else means the parser
+        # accepted the argv and the command actually ran.
+        assert result.exit_code != 2, f"{artifact_name}: {argv} -> {result.output}"
+        assert "No such option" not in result.output
