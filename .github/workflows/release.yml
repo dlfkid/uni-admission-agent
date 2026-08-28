@@ -113,9 +113,57 @@ jobs:
             dist/release/adm-agent-client-*-macos-*.tar.gz
             dist/release/adm-agent-client-*-linux-*.tar.gz
 
+  upgrade-verify:
+    name: Verify upgrade on ${{ matrix.os }}
+    needs: [build-backend]
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest, ubuntu-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install uv
+        run: pip install uv
+
+      - name: Install dependencies
+        # verify_upgrade.py imports src.services.upgrade.layout so the gate
+        # exercises the same _CMD_SHIM / InstallLayout code the CLI ships —
+        # that needs the project's own editable install, hence uv sync
+        # rather than a bare interpreter.
+        run: uv sync --frozen
+
+      - name: Download the backend artifact built for this platform
+        uses: actions/download-artifact@v4
+        with:
+          name: backend-${{ matrix.os }}
+          path: artifacts/
+
+      - name: Verify upgrade and rollback end to end
+        shell: bash
+        run: |
+          ARTIFACT=$(ls artifacts/adm-agent-v* | head -1)
+          # The version MUST come from the artifact filename, not GITHUB_REF_NAME:
+          # find_release_asset builds the expected filename from the release tag,
+          # so a mismatch makes the asset lookup fail rather than testing anything.
+          BASENAME=$(basename "$ARTIFACT")
+          NEW_VERSION=$(echo "$BASENAME" | sed -E 's/^adm-agent-(v[^-]+)-.*/\1/')
+          echo "Verifying $BASENAME as $NEW_VERSION"
+          uv run python scripts/verify_upgrade.py \
+            --artifact "$ARTIFACT" \
+            --new-version "$NEW_VERSION" \
+            --workdir "${RUNNER_TEMP}/upgrade-verify"
+
   release:
     name: Create GitHub Release
-    needs: [build-extension, build-backend, build-client]
+    needs: [build-extension, build-backend, build-client, upgrade-verify]
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/')
 
@@ -139,6 +187,12 @@ jobs:
           pattern: client-*
           path: artifacts/
           merge-multiple: true
+
+      - name: Generate SHA256SUMS
+        run: |
+          cd artifacts
+          sha256sum * > SHA256SUMS
+          cat SHA256SUMS
 
       - name: Create Release
         uses: softprops/action-gh-release@v1
