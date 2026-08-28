@@ -30,6 +30,21 @@ def _default_windows() -> bool:
     return sys.platform == "win32"
 
 
+def _validate_version_name(version: str) -> None:
+    """Reject anything that is not a plain, single-component directory name.
+
+    This is filesystem-safety at the boundary of every path-building call,
+    not semantic versioning — deliberately independent of ``parse_tag()``
+    so a stray, unparseable-but-safe directory already on disk stays
+    removable by ``prune()`` (spec §3.2's data-safety invariant).
+    """
+    has_separator = "/" in version or "\\" in version
+    if not version or version in (".", "..") or has_separator:
+        raise UpgradeError(f"Unsafe version name: {version!r}")
+    if Path(version).is_absolute() or Path(version).name != version:
+        raise UpgradeError(f"Unsafe version name: {version!r}")
+
+
 @dataclass(frozen=True)
 class InstallLayout:
     """Filesystem layout of a packaged install.
@@ -72,6 +87,7 @@ class InstallLayout:
         return self.bin_dir / name
 
     def version_dir(self, version: str) -> Path:
+        _validate_version_name(version)
         return self.versions_dir / version
 
     # ── pointer ──────────────────────────────────────────────────────

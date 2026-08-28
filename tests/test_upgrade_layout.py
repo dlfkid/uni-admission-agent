@@ -61,6 +61,47 @@ def test_activate_leaves_no_temp_files(tmp_path: Path) -> None:
     assert not list(tmp_path.glob(".current.*"))
 
 
+# ── path safety (spec §3.2 data-safety invariant) ───────────────────────
+
+
+def test_activate_rejects_a_traversal_version(tmp_path: Path) -> None:
+    """A traversal-shaped version must never reach the pointer or the disk."""
+    layout = InstallLayout(root=tmp_path, windows=False)
+    _make_version(layout, "v0.11.0")
+    layout.activate("v0.11.0")
+    with pytest.raises(UpgradeError):
+        layout.activate("../../etc")
+    assert layout.active_version() == "v0.11.0"
+    assert not list(tmp_path.glob(".current.*"))
+
+
+@pytest.mark.parametrize(
+    "bad_version",
+    ["", "../x", "a/b", ".", "..", "/etc/passwd"],
+)
+def test_version_dir_rejects_unsafe_names(tmp_path: Path, bad_version: str) -> None:
+    layout = InstallLayout(root=tmp_path, windows=False)
+    with pytest.raises(UpgradeError):
+        layout.version_dir(bad_version)
+
+
+def test_version_dir_still_allows_a_normal_version(tmp_path: Path) -> None:
+    """The guard must not reject the ordinary case it exists to let through."""
+    layout = InstallLayout(root=tmp_path, windows=False)
+    assert layout.version_dir("v0.11.0") == layout.versions_dir / "v0.11.0"
+
+
+def test_installed_versions_still_tolerates_a_stray_non_semver_directory(
+    tmp_path: Path,
+) -> None:
+    """The safety guard lives in version_dir(), not in the enumeration path —
+    a stray directory already on disk must stay visible and prunable."""
+    layout = InstallLayout(root=tmp_path, windows=False)
+    _make_version(layout, "v0.11.0")
+    (layout.versions_dir / "not-a-version").mkdir()
+    assert "not-a-version" in layout.installed_versions()
+
+
 # ── entrypoint ────────────────────────────────────────────────────────
 
 
