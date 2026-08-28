@@ -84,6 +84,15 @@ Rework `adm-agent upgrade` into an atomic, verified, reversible,
 agent-drivable operation; converge the two upgrade paths onto it; give it
 test coverage and CI proof.
 
+**Both packaged artifacts, not just the backend (confirmed with user).**
+`src/cmd/client_cli.py` has its own `upgrade` command built on the same
+`check_for_updates_for_artifact`, so `adm-agent-client` users are pinned by
+the §1.1 defect identically. `adm-agent-client` therefore gets full parity —
+the same versioned layout, verification, activation and rollback, differing
+only in install root and artifact name (§3.6). Leaving it on a separate,
+in-place mechanism would recreate exactly the problem §1.2 describes: two
+upgrade paths with different guarantees.
+
 **Upgrade semantics (confirmed with user): file-level only.** `upgrade`
 atomically replaces files, self-verifies, and rolls back on failure. It does
 **not** orchestrate the server lifecycle: if the server is running, it
@@ -237,6 +246,36 @@ the old binary.** For the transition release:
   the agent to run the re-install path.
 
 After one re-install, `upgrade` is self-sufficient forever.
+
+### 3.6 The client artifact
+
+`adm-agent-client` uses the same layout, rooted at `~/.adm-agent-client/` —
+the directory that already holds `client.pid` and `client.log` (README
+§adm-agent-client), so no new location is introduced:
+
+```
+~/.adm-agent-client/
+├── versions/v0.11.0/adm-agent-client
+├── current -> versions/v0.11.0        (current.txt on Windows)
+├── bin/adm-agent-client               (.cmd shim on Windows)
+├── client.pid, client.log             ← never touched by upgrade
+└── config                             ← never touched by upgrade
+```
+
+Two consequences:
+
+- `InstallLayout` is parameterised by artifact name; the executable name and
+  entry point derive from it. Nothing else differs.
+- **Legacy detection must be artifact-agnostic.** The backend's legacy shape
+  is a flat `bin/` containing `_internal`; the client's is a flat directory
+  wherever the user extracted it. So "legacy" is defined as *no `versions/`
+  directory beside a payload that looks installed* — specifically
+  `versions/` absent and either `bin/_internal` or `_internal` present at the
+  root.
+
+The client is not installed by `uni-admission-install` (that skill installs
+the backend only), so its one-time migration is a manual re-extract rather
+than a skill-driven step; exit code `15` says so in its message.
 
 ## 4. Version comparison
 
