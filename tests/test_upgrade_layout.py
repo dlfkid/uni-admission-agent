@@ -228,3 +228,30 @@ def test_layout_operations_never_touch_user_data(tmp_path: Path) -> None:
     layout.prune(keep=["v0.11.0"])
     assert env.read_text() == "DEEPSEEK_API_KEY=secret\n"
     assert db.read_bytes() == b"SQLite format 3\x00"
+
+
+# ── spawn_argv (Important 2 — a .cmd shim is not a PE image) ───────────
+
+
+def test_spawn_argv_posix_invokes_entry_point_directly(tmp_path: Path) -> None:
+    layout = InstallLayout(root=tmp_path, windows=False)
+    assert layout.spawn_argv("check") == [str(layout.entrypoint_path), "check"]
+
+
+def test_spawn_argv_windows_routes_through_cmd_exe(tmp_path: Path) -> None:
+    """A .cmd shim is not a PE image: CreateProcess (subprocess.run with
+    shell=False) cannot exec it directly and raises WinError 193. It must
+    be routed through the command processor — this must hold even when the
+    test itself runs on a POSIX host, since InstallLayout.windows is
+    injectable exactly so this is provable without a Windows machine."""
+    layout = InstallLayout(root=tmp_path, windows=True)
+    assert layout.spawn_argv("check") == [
+        "cmd.exe", "/c", str(layout.entrypoint_path), "check",
+    ]
+
+
+def test_spawn_argv_forwards_multiple_arguments(tmp_path: Path) -> None:
+    layout = InstallLayout(root=tmp_path, windows=True)
+    assert layout.spawn_argv("db-migrate", "--yes") == [
+        "cmd.exe", "/c", str(layout.entrypoint_path), "db-migrate", "--yes",
+    ]

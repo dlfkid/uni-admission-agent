@@ -82,7 +82,7 @@ def default_downloader(asset: dict, dest_dir: Path) -> Path:
 
 
 def _run_post_check_step(
-    entry: Path, *args: str, timeout: int
+    layout: InstallLayout, *args: str, timeout: int
 ) -> subprocess.CompletedProcess:
     """Run one post-check subprocess, converting infra failures to
     :class:`UpgradeError` (mirrors ``staging.verify_staged_binary``).
@@ -91,14 +91,20 @@ def _run_post_check_step(
     point (``OSError``) is exactly the kind of "unrecoverable migration"
     situation spec §6.3 wants rolled back — it must never propagate as a
     bare, untyped exception out of ``perform_upgrade``.
+
+    Invokes via :meth:`InstallLayout.spawn_argv` rather than
+    ``[str(layout.entrypoint_path), *args]`` directly: on Windows the entry
+    point is a ``.cmd`` shim, which ``CreateProcess`` cannot exec as a PE
+    image, so it must be routed through ``cmd.exe /c``.
     """
     try:
         return subprocess.run(
-            [str(entry), *args], capture_output=True, text=True, check=False, timeout=timeout
+            layout.spawn_argv(*args), capture_output=True, text=True,
+            check=False, timeout=timeout,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise UpgradeError(
-            f"Could not run '{entry.name} {' '.join(args)}': {exc}"
+            f"Could not run '{layout.entrypoint_path.name} {' '.join(args)}': {exc}"
         ) from exc
 
 
@@ -112,9 +118,8 @@ def default_post_check(layout: InstallLayout, migrate: bool) -> list[str]:
         return []
 
     warnings: list[str] = []
-    entry = layout.entrypoint_path
 
-    check = _run_post_check_step(entry, "check", timeout=600)
+    check = _run_post_check_step(layout, "check", timeout=600)
     if check.returncode != 0:
         warnings.append(
             "Post-upgrade environment check reported problems (not caused by "
@@ -124,11 +129,11 @@ def default_post_check(layout: InstallLayout, migrate: bool) -> list[str]:
     if not migrate:
         return warnings
 
-    migration = _run_post_check_step(entry, "db-migrate", "--yes", timeout=1800)
+    migration = _run_post_check_step(layout, "db-migrate", "--yes", timeout=1800)
     if migration.returncode == 0:
         return warnings
 
-    repair = _run_post_check_step(entry, "repair", "--auto", timeout=1800)
+    repair = _run_post_check_step(layout, "repair", "--auto", timeout=1800)
     if repair.returncode == 0:
         warnings.append("Database migration failed but auto-repair recovered it.")
         return warnings

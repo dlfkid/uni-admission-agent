@@ -86,6 +86,26 @@ class InstallLayout:
         name = f"{self.artifact_name}.cmd" if self.windows else self.artifact_name
         return self.bin_dir / name
 
+    def spawn_argv(self, *args: str) -> list[str]:
+        """Argv to invoke :attr:`entrypoint_path` as a subprocess.
+
+        On Windows the entry point is a ``.cmd`` shim, and a batch file is
+        not a PE image — ``CreateProcess`` (what ``subprocess.run`` with
+        ``shell=False`` calls) cannot launch it directly and raises
+        ``OSError: [WinError 193] %1 is not a valid Win32 application``.
+        It must be routed through the command processor instead. POSIX's
+        entry point is a real (symlinked) executable and needs no such
+        wrapping.
+
+        Centralised here — rather than duplicated at every call site — so
+        every caller proves the *shim* is runnable, instead of reaching
+        past it to invoke the versioned executable directly.
+        """
+        entry = self.entrypoint_path
+        if self.windows:
+            return ["cmd.exe", "/c", str(entry), *args]
+        return [str(entry), *args]
+
     def version_dir(self, version: str) -> Path:
         _validate_version_name(version)
         return self.versions_dir / version
