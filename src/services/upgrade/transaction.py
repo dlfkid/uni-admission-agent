@@ -222,6 +222,10 @@ def perform_upgrade(
         result.action_taken = "none"
         return result
 
+    previous = layout.active_version()
+    if result.latest_version and result.latest_version == previous:
+        return _refuse_same_version_reinstall(result, previous)
+
     os_name, arch = get_platform_info()
     asset = find_release_asset(release, os_name, arch, artifact_name)
     if asset is None:
@@ -234,9 +238,9 @@ def perform_upgrade(
         )
     result.asset_available = True
 
-    previous = layout.active_version()
     new_version = result.latest_version
     layout.staging_dir.mkdir(parents=True, exist_ok=True)
+    result.warnings.extend(sweep_stale_staging(layout))
     staging = Path(tempfile.mkdtemp(dir=layout.staging_dir))
 
     # 3. stage
@@ -289,32 +293,24 @@ def perform_upgrade(
         # post_check is caller-injected (the default shells out via
         # subprocess); any failure here — typed or not — must still route
         # through the spec §6.3 rollback decision, never propagate raw.
-        genuinely_rollable = bool(previous) and previous != new_version
-        if genuinely_rollable:
+        # `previous != new_version` is guaranteed by the same-version refusal
+        # above; only "no previous version at all" (a first-ever install)
+        # reaches the else branch.
+        if previous:
             layout.activate(previous)
             layout.ensure_entrypoint()
             shutil.rmtree(target, ignore_errors=True)
             result.action_taken = "rolled_back"
             result.previous_version = new_version
         else:
-            # Nothing distinct to roll back to — either a first-ever install
-            # (no previous) or a same-version `--force` re-install (previous
-            # is literally the version we just activated). Leave it active
-            # and warn plainly rather than falsely claiming a rollback.
+            # A first-ever install has nothing to roll back to. Leave it
+            # active and warn plainly rather than falsely claiming a rollback.
             result.action_taken = "blocked"
             result.previous_version = ""
-            if previous == new_version:
-                message = (
-                    "Post-check failed but the previous version is the same "
-                    "release just (re)installed; there is nothing distinct "
-                    "to roll back to. The new version remains active."
-                )
-            else:
-                message = (
-                    "Post-check failed but there is no previous version to "
-                    "roll back to; the new version remains active."
-                )
-            result.warnings.append(message)
+            result.warnings.append(
+                "Post-check failed but there is no previous version to "
+                "roll back to; the new version remains active."
+            )
         result.blocked_reason = BlockedReason.POST_CHECK_FAILED
         result.next_action = "inspect_logs_then_retry"
         result.exit_code = int(ExitCode.POST_CHECK_FAILED)
@@ -335,14 +331,68 @@ def perform_upgrade(
     return result
 
 
+def sweep_stale_staging(layout: InstallLayout) -> list[str]:
+    """Delete scratch trees left behind by hard-killed earlier runs.
+
+    Every step of the transaction cleans up its own ``staging/<tmp>``, but a
+    process killed mid-download cannot — and each stranded tree is a full
+    copy of a several-hundred-MB artifact that nothing else ever removes.
+    Safe by construction: ``staging/`` holds only this function's own
+    scratch directories, and spec §3.2 lists it among the four paths
+    ``upgrade`` is permitted to write.
+
+    Best effort — a sweep failure is reported as a warning and never blocks
+    the upgrade.
+    """
+    warnings: list[str] = []
+    if not layout.staging_dir.is_dir():
+        return warnings
+    for entry in layout.staging_dir.iterdir():
+        try:
+            if entry.is_dir() and not entry.is_symlink():
+                shutil.rmtree(entry)
+            else:
+                entry.unlink()
+        except OSError as exc:
+            warnings.append(f"Could not remove stale staging entry {entry.name}: {exc}")
+    return warnings
+
+
+def _refuse_same_version_reinstall(result: UpgradeResult, active: str) -> UpgradeResult:
+    """Refuse to re-install the version that is currently active.
+
+    Spec §3.3 rejected the shadow-directory approach precisely because
+    renaming or replacing a directory that contains a running (or
+    memory-mapped) executable fails on Windows. ``versions/<active>`` is
+    exactly such a directory — the upgrading process is executing from it —
+    so ``--force`` onto the active tag must not try to swap it into place.
+
+    Reported as "nothing to do" rather than a failure: exit ``0`` is
+    documented in spec §7 as "upgraded, **or already current**", and the
+    requested end state (this version active) already holds. Nothing on
+    disk is touched. ``next_action`` points at the re-install path, which
+    is the documented recovery for a damaged install.
+    """
+    result.action_taken = "none"
+    result.active_version = active
+    result.next_action = "reinstall_to_replace_active_version"
+    result.warnings.append(
+        f"{active} is already the active version. Re-installing it in place "
+        "would mean replacing the directory this process is running from, "
+        "which is not safe on every platform — so nothing was changed. If "
+        "the install is damaged, re-run the installer: it adds a new "
+        "versions/ entry and repoints, leaving .env and the database alone."
+    )
+    return result
+
+
 def _place_new_version(layout: InstallLayout, new_version: str, payload: Path) -> Path:
     """Move the verified *payload* into ``versions/<new_version>`` atomically.
 
-    Never removes an existing directory at the target path before the
-    replacement is ready to take its place — that directory may be the
-    currently active, currently running version (spec §5's atomicity claim
-    depends on this: a same-version ``--force`` re-install must not leave a
-    window where the active version's directory does not exist on disk).
+    The target is never the active version — ``perform_upgrade`` refuses
+    that case up front (see :func:`_refuse_same_version_reinstall`) — so a
+    stale directory left by an earlier interrupted run can simply be
+    removed before the rename.
     """
     target = layout.version_dir(new_version)
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -352,14 +402,8 @@ def _place_new_version(layout: InstallLayout, new_version: str, payload: Path) -
     shutil.move(str(payload), str(incoming))
 
     if target.exists():
-        displaced = layout.versions_dir / f".{new_version}.replaced-{os.getpid()}"
-        if displaced.exists():
-            shutil.rmtree(displaced)
-        os.replace(target, displaced)
-        os.replace(incoming, target)
-        shutil.rmtree(displaced, ignore_errors=True)
-    else:
-        os.replace(incoming, target)
+        shutil.rmtree(target)
+    os.replace(incoming, target)
     return target
 
 

@@ -414,6 +414,14 @@ Route on the exit code — never parse the prose:
 | `14` | Source checkout | Update with `git pull` + `uv sync` instead. |
 | `15` | Legacy layout | One-time migration: run §1 once. `.env` and the database are preserved — say so. |
 
+One more shape of `0` to recognise: `action_taken="none"` together with
+`next_action="reinstall_to_replace_active_version"`. That is `--force` aimed
+at the tag that is *already* active — re-installing it in place would mean
+replacing the directory the running process is executing from, which is not
+safe on Windows, so nothing was changed. If the user forced because the
+install looks damaged, run §1 once (it adds a new `versions/` entry and
+repoints; `.env` and the database are untouched).
+
 A `0` exit whose stdout is **not** parseable JSON is also the old binary
 (it printed `✅ Already on latest version.` from the string-compare bug).
 Treat it exactly like `2` above: run §1 once, do not believe the "already

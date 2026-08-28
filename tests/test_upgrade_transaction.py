@@ -14,6 +14,7 @@ from src.services.upgrade.transaction import (
     default_post_check,
     perform_upgrade,
     rollback,
+    sweep_stale_staging,
 )
 from src.services.upgrade.types import (
     BlockedReason,
@@ -330,59 +331,63 @@ def test_post_check_failure_reports_empty_previous_version_when_none_existed(
     assert result.previous_version == ""
 
 
-# ── force-reinstalling the active version (Critical 1) ─────────────────
+# ── force onto the already-active version (Important 8) ────────────────
 
 
-def test_force_reinstall_of_active_version_survives_post_check_failure(
+def test_force_onto_the_active_version_refuses_and_changes_nothing(
     tmp_path: Path,
 ) -> None:
-    """`--force` onto the already-active tag must never delete it in place.
-
-    Reproduces the scenario the reviewer flagged live: force=True with
-    current == latest means previous == new_version == target. A naive
-    rmtree-then-move, followed by an unconditional rollback delete, wiped
-    the version directory out from under the still-active pointer.
-    """
+    """Spec §3.3 rejected renaming a directory containing a running
+    executable because it fails on Windows. ``versions/<active>`` is exactly
+    that directory, so a same-version ``--force`` must refuse rather than
+    swap it into place."""
     layout = _install(tmp_path, version="v0.11.0")
-    before = (layout.version_dir("v0.11.0") / "adm-agent").read_text()
+    version_dir = layout.version_dir("v0.11.0")
+    before = (version_dir / "adm-agent").read_text()
 
-    def failing_post_check(layout, migrate):
-        raise UpgradeError("boom")
+    result = _run(layout, tmp_path, current_version="v0.11.0", force=True)
+
+    # Exit 0: spec §7 documents it as "upgraded, or already current", and
+    # the requested end state already holds.
+    assert result.exit_code == ExitCode.OK
+    assert result.action_taken == "none"
+    assert result.active_version == "v0.11.0"
+    assert result.next_action == "reinstall_to_replace_active_version"
+    assert any("already the active version" in w for w in result.warnings)
+
+    # Nothing on disk moved: same pointer, same bytes, no scratch dirs.
+    assert layout.active_version() == "v0.11.0"
+    assert (version_dir / "adm-agent").read_text() == before == "old"
+    assert not list(layout.versions_dir.glob(".v0.11.0.*"))
+    _assert_user_data_intact(tmp_path)
+
+
+def test_force_onto_the_active_version_downloads_nothing(tmp_path: Path) -> None:
+    """The refusal happens before staging, so the install is untouched and
+    no several-hundred-MB artifact is fetched."""
+    layout = _install(tmp_path, version="v0.11.0")
+
+    def exploding_downloader(_asset: dict, _dest: Path) -> Path:
+        raise AssertionError("must not download when refusing")
 
     result = _run(
         layout,
         tmp_path,
         current_version="v0.11.0",
         force=True,
-        post_check=failing_post_check,
+        downloader=exploding_downloader,
     )
-    assert result.exit_code == ExitCode.POST_CHECK_FAILED
-    # There is nothing distinct to roll back to — the same tag was already
-    # active — so this must not be misreported as a successful rollback.
-    assert result.action_taken == "blocked"
-    assert result.previous_version == ""
-    assert layout.active_version() == "v0.11.0"
-    # The version directory must still exist, on disk, with real content —
-    # not deleted out from under the pointer that still names it.
-    version_dir = layout.version_dir("v0.11.0")
-    assert version_dir.is_dir()
-    assert (version_dir / "adm-agent").exists()
-    _assert_user_data_intact(tmp_path)
-    assert before == "old"  # sanity: this was the pre-upgrade content
+    assert result.action_taken == "none"
+    assert not layout.staging_dir.exists()
 
 
-def test_force_reinstall_of_active_version_succeeds_and_replaces_content(
-    tmp_path: Path,
-) -> None:
-    """A successful same-version --force reinstall still swaps the bits in."""
-    layout = _install(tmp_path, version="v0.11.0")
+def test_force_onto_a_different_version_still_upgrades(tmp_path: Path) -> None:
+    """The refusal is narrow: only the *active* tag is protected."""
+    layout = _install(tmp_path, version="v0.10.0")
     result = _run(layout, tmp_path, current_version="v0.11.0", force=True)
     assert result.exit_code == ExitCode.OK
     assert result.action_taken == "upgraded"
     assert layout.active_version() == "v0.11.0"
-    # Content actually replaced (the fake downloader writes the tag as the
-    # binary's content), proving the swap — not a no-op — took place.
-    assert (layout.version_dir("v0.11.0") / "adm-agent").read_text() == "v0.11.0"
     _assert_user_data_intact(tmp_path)
 
 
@@ -748,3 +753,45 @@ def test_perform_upgrade_blocks_with_10_when_server_running(tmp_path: Path) -> N
     assert result.exit_code == ExitCode.SERVER_RUNNING
     assert result.blocked_reason == BlockedReason.SERVER_RUNNING
     assert layout.active_version() == "v0.10.0"
+
+
+# ── stale staging sweep (Minor 2) ──────────────────────────────────────
+
+
+def test_stale_staging_trees_are_swept_before_a_new_run(tmp_path: Path) -> None:
+    """A hard-killed run strands a full artifact copy that nothing removes."""
+    layout = _install(tmp_path)
+    stranded = layout.staging_dir / "tmpabc123"
+    (stranded / "extracted" / "adm-agent").mkdir(parents=True)
+    (stranded / "adm-agent-v0.10.0-linux-x86_64.tar.gz").write_bytes(b"x" * 4096)
+    orphan_file = layout.staging_dir / "leftover.part"
+    orphan_file.write_bytes(b"y")
+
+    result = _run(layout, tmp_path)
+
+    assert result.exit_code == ExitCode.OK
+    assert not stranded.exists()
+    assert not orphan_file.exists()
+    # The sweep does not reach outside staging/.
+    _assert_user_data_intact(tmp_path)
+    assert layout.version_dir("v0.10.0").is_dir()
+
+
+def test_sweep_is_a_no_op_when_staging_is_absent(tmp_path: Path) -> None:
+    layout = InstallLayout(root=tmp_path, windows=False)
+    assert sweep_stale_staging(layout) == []
+
+
+def test_sweep_reports_a_failure_as_a_warning_and_continues(tmp_path: Path) -> None:
+    """A sweep failure must never block the upgrade it precedes."""
+    layout = InstallLayout(root=tmp_path, windows=False)
+    (layout.staging_dir / "tmpabc123").mkdir(parents=True)
+
+    with patch(
+        "src.services.upgrade.transaction.shutil.rmtree",
+        side_effect=OSError("permission denied"),
+    ):
+        warnings = sweep_stale_staging(layout)
+
+    assert len(warnings) == 1
+    assert "tmpabc123" in warnings[0]
