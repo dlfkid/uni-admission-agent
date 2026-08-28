@@ -132,8 +132,7 @@ case "$EXT" in
     rm -rf /tmp/adm-agent-unzip && mkdir -p /tmp/adm-agent-unzip
     unzip -q -o "$ARTIFACT" -d /tmp/adm-agent-unzip
     INNER=$(find /tmp/adm-agent-unzip -mindepth 1 -maxdepth 1 -type d | head -1)
-    mv "$INNER"/* "$INNER"/.[!.]* ~/.uni-agent/versions/${VERSION}/ 2>/dev/null || \
-      mv "$INNER"/* ~/.uni-agent/versions/${VERSION}/
+    (shopt -s dotglob; mv "$INNER"/* ~/.uni-agent/versions/${VERSION}/)
     rm -rf /tmp/adm-agent-unzip
     ;;
 esac
@@ -237,8 +236,8 @@ same policy as the bash branch:
 > `%USERPROFILE%\.uni-agent\bin` 不在 PATH。在 PowerShell 里跑一次（只需一次，
 > 之后新开的终端都生效）：
 > ```powershell
-> [Environment]::SetEnvironmentVariable(
->   "PATH", "$env:PATH;$env:USERPROFILE\.uni-agent\bin", "User")
+> $u = [Environment]::GetEnvironmentVariable("PATH","User")
+> [Environment]::SetEnvironmentVariable("PATH", "$u;$env:USERPROFILE\.uni-agent\bin", "User")
 > ```
 > 然后重开终端。或者直接用全路径调用：`%USERPROFILE%\.uni-agent\bin\adm-agent.cmd`。
 >
