@@ -6,6 +6,7 @@ from unittest.mock import patch
 from typer.testing import CliRunner
 
 from src.cmd.cli import app
+from src.services.upgrade import default_client_pid_file
 from src.services.upgrade.types import BlockedReason, ExitCode, UpgradeResult
 
 runner = CliRunner()
@@ -159,11 +160,29 @@ def test_upgrade_check_reports_already_latest_when_not_newer() -> None:
     assert "Already on latest version" in result.stdout
 
 
+def test_upgrade_unexpected_error_emits_json() -> None:
+    """The agent is the primary caller; an unexpected failure must stay parseable."""
+    with patch("src.cmd.cli.perform_upgrade", side_effect=RuntimeError("boom")):
+        result = runner.invoke(app, ["upgrade", "--json"])
+    assert result.exit_code == int(ExitCode.UNEXPECTED)
+    payload = json.loads(result.stdout)
+    assert payload["blocked_reason"] == "unexpected"
+    assert payload["action_taken"] == "blocked"
+    assert "boom" in payload["warnings"][0]
+
+
 # ── client CLI parity (spec §3.6) ─────────────────────────────────────
 
 
 def test_client_upgrade_uses_the_client_layout_and_artifact() -> None:
-    """The client must not upgrade itself using the backend's root."""
+    """The client must not upgrade itself using the backend's root.
+
+    Also pins the client-specific pid_file/health_url pairing (spec §3.6): a
+    running *server* must not block a client upgrade, and the client has no
+    health endpoint. A future edit that swapped in the backend's
+    default_pid_file()/default_health_url() would cross-block silently
+    without this guard.
+    """
     from src.cmd.client_cli import app as client_app
 
     with patch(
@@ -176,6 +195,37 @@ def test_client_upgrade_uses_the_client_layout_and_artifact() -> None:
     assert layout.called
     assert perform.call_args.kwargs["artifact_name"] == "adm-agent-client"
     assert perform.call_args.kwargs["migrate"] is False
+    assert perform.call_args.kwargs["pid_file"] == default_client_pid_file()
+    assert perform.call_args.kwargs["health_url"] == ""
+
+
+def test_client_upgrade_verbose_enables_logging() -> None:
+    """--verbose is the only debugging lever an agent has for a failed client upgrade."""
+    from src.cmd.client_cli import app as client_app
+
+    with patch(
+        "src.cmd.client_cli.perform_upgrade",
+        return_value=_result(action_taken="upgraded", active_version="v0.11.0"),
+    ), patch("src.cmd.client_cli.default_client_layout"), patch(
+        "src.cmd.client_cli._configure_client_logging"
+    ) as configure_logging:
+        result = CliRunner().invoke(client_app, ["upgrade", "--verbose"])
+    assert result.exit_code == 0
+    assert configure_logging.called
+
+
+def test_client_upgrade_without_verbose_leaves_logging_untouched() -> None:
+    from src.cmd.client_cli import app as client_app
+
+    with patch(
+        "src.cmd.client_cli.perform_upgrade",
+        return_value=_result(action_taken="upgraded", active_version="v0.11.0"),
+    ), patch("src.cmd.client_cli.default_client_layout"), patch(
+        "src.cmd.client_cli._configure_client_logging"
+    ) as configure_logging:
+        result = CliRunner().invoke(client_app, ["upgrade"])
+    assert result.exit_code == 0
+    assert not configure_logging.called
 
 
 def test_client_upgrade_blocked_propagates_the_exit_code() -> None:
@@ -191,6 +241,19 @@ def test_client_upgrade_blocked_propagates_the_exit_code() -> None:
     ), patch("src.cmd.client_cli.default_client_layout"):
         result = CliRunner().invoke(client_app, ["upgrade"])
     assert result.exit_code == 15
+
+
+def test_client_upgrade_unexpected_error_emits_json() -> None:
+    """Same contract as the backend: an agent driving --json must never get prose."""
+    from src.cmd.client_cli import app as client_app
+
+    with patch("src.cmd.client_cli.perform_upgrade", side_effect=RuntimeError("boom")):
+        result = CliRunner().invoke(client_app, ["upgrade", "--json"])
+    assert result.exit_code == int(ExitCode.UNEXPECTED)
+    payload = json.loads(result.stdout)
+    assert payload["blocked_reason"] == "unexpected"
+    assert payload["action_taken"] == "blocked"
+    assert "boom" in payload["warnings"][0]
 
 
 def test_client_upgrade_check_reports_update_available_when_newer() -> None:

@@ -322,6 +322,9 @@ def upgrade(
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Debug logging"),
 ) -> None:
     """Check for, install, or undo client updates."""
+    if verbose:
+        _configure_client_logging()
+
     try:
         if rollback_to_previous:
             result = rollback(default_client_layout())
@@ -340,7 +343,13 @@ def upgrade(
                 health_url="",  # no health endpoint; PID liveness is the signal
             )
     except Exception as exc:  # noqa: BLE001 - surfaced as exit code 1
-        typer.echo(f"❌ Upgrade failed: {exc}", err=True)
+        if as_json:
+            typer.echo(
+                json.dumps({"action_taken": "blocked", "blocked_reason": "unexpected",
+                            "warnings": [str(exc)]}, ensure_ascii=False)
+            )
+        else:
+            typer.echo(f"❌ Upgrade failed: {exc}", err=True)
         raise typer.Exit(code=int(ExitCode.UNEXPECTED))
 
     _emit_client(result, as_json)
