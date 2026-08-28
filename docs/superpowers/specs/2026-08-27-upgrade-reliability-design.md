@@ -394,6 +394,26 @@ Human-readable output stays exactly as friendly as it is now (emoji and
 Chinese-facing phrasing are the frontend of a CLI aimed at non-developers);
 `--json` is additive.
 
+### 7.1 Overridable release endpoint
+
+`GITHUB_RELEASE_API` is currently a module constant
+([`upgrade.py:42`](../../../src/services/upgrade.py)). It becomes
+overridable via an environment variable (`ADM_AGENT_RELEASE_API_BASE`),
+defaulting to the real GitHub API.
+
+This is a requirement, not a testing convenience — two things depend on it:
+
+- The §11 release gate must verify an upgrade *into a version that is not
+  published yet* (the whole point of gating publication on it), so it has to
+  point `upgrade` at a locally served fake release.
+- The §10 unit suite is hermetic by design; without the override it would
+  have to monkeypatch a module constant, which tests the patch rather than
+  the resolution path.
+
+The variable is undocumented in user-facing docs and carries no promise of
+stability — it is a build/test seam, and pointing it at an untrusted host
+would bypass the origin the checksums are meant to anchor to.
+
 ## 8. Skill convergence
 
 - `uni-admission-install` §3 ("Upgrade in place") stops re-downloading. It
@@ -426,8 +446,9 @@ liveness before refusing.
 ## 10. Testing
 
 TDD applies: each behaviour below gets a failing test before implementation.
-All unit tests are hermetic — a local HTTP fixture serves fake releases,
-`tmp_path` holds fake install layouts, no network, no real GitHub.
+All unit tests are hermetic — a local HTTP fixture serves fake releases via
+the §7.1 endpoint override, `tmp_path` holds fake install layouts, no
+network, no real GitHub.
 
 **Version comparison**
 - Truth table across all historical tag shapes, **including `v0.9.0` →
@@ -469,26 +490,79 @@ renaming artifacts in `release.yml`.
 
 ## 11. CI
 
-New job, matrix over `ubuntu-latest` / `macos-latest` / `windows-latest`:
+**Trigger and placement (confirmed with user): a release gate in
+`release.yml`, never on day-to-day pushes or merges.** The verification runs
+on tag pushes only, and it sits *between* the existing build jobs and the
+existing publish job:
 
-1. Build artifact "vA" and artifact "vB" from the current tree (version
-   injected, not tagged).
-2. Serve them from a local directory as a fake release (`file://` or a
-   throwaway local HTTP server) with a generated `SHA256SUMS`.
-3. Install vA using the §3.2 layout.
-4. Run `upgrade --json` against the fake release; assert exit 0,
-   `active_version == vB`, and that the binary invoked through
-   `bin/adm-agent` reports vB.
-5. Run `upgrade --rollback`; assert the active version is vA again.
-6. Assert `.env` and a seeded `admission.db` survived both operations
-   unchanged.
+```
+build-extension ─┐
+build-backend   ─┼→ upgrade-verify ─→ release   (softprops/action-gh-release)
+build-client    ─┘
+```
+
+`release.yml`'s `release` job adds `upgrade-verify` to its `needs:`. This is
+the point of the placement: **a tag existing and a release being published
+are two different events.** If verification fails, the `release` job never
+runs, no GitHub Release is created, and no artifacts are uploaded — so a
+version whose upgrade path is unproven is not merely flagged, it is
+undownloadable. The tag remains but is inert.
+
+Consequently `RELEASING.md`'s documented flow is unchanged: still
+`bump-my-version bump <part>` then `git push --follow-tags`. No manual
+pre-flight step, no `workflow_dispatch` choreography. When the gate fails,
+fix and cut the next patch tag (tags are cheap) or delete and re-push the
+tag.
+
+Job definition — matrix over `ubuntu-latest` / `macos-latest` /
+`windows-latest`:
+
+1. **Reuse the built artifacts.** `download-artifact` pulls the
+   `backend-<os>` archive the build job just produced — the verification
+   runs against the exact binary that would ship, not a rebuilt copy. No
+   second build, which is what keeps this affordable.
+2. **"vA" is the previous real release.** Download the current published
+   `latest` backend artifact from GitHub. The test is then the upgrade a
+   real user will actually perform — published version → this version —
+   rather than a synthetic pair.
+   - For the transition release, the previous version has the legacy flat
+     layout, so this leg asserts the §3.5 detection path: exit `15`,
+     `blocked_reason="legacy_layout"`, install untouched.
+   - For every release after it, the previous version already has the §3.2
+     layout, so this leg asserts the real happy path end to end.
+   - If no previous release exists (first ever), skip this leg with an
+     explicit log line rather than silently passing.
+3. **Same-version `--force` upgrade** against a local fake release built
+   from the artifact in step 1, with a generated `SHA256SUMS`. This
+   exercises the full happy path — stage → verify → activate → post-check —
+   even on the transition release where step 2 lands on the legacy branch.
+4. Assert `active_version` is the new version and that the binary invoked
+   through `bin/adm-agent` (symlink on POSIX, `.cmd` shim on Windows)
+   reports it.
+5. Run `upgrade --rollback`; assert the previous version is active again.
+6. Assert `.env` and a seeded `admission.db` survived every operation above
+   byte-identically (§3.2 invariant).
 
 This is the evidence that "one command upgrades and the user keeps working"
 actually holds on every platform we ship — the thing that cannot be
 established by unit tests alone, and the reason §1.4's zero-coverage state
 is unacceptable for a v1.0.
 
-`release.yml` gains the `SHA256SUMS` generation-and-upload step (§6.1).
+Because this gate does not run on merges, the §10 unit suite carries the
+day-to-day regression burden alone. It must therefore cover the upgrade
+*logic* (pointer switching, verification gates, rollback, retention) against
+fake install layouts on `tmp_path`, leaving only genuinely
+platform-dependent behaviour — real PyInstaller payloads, real symlink and
+`.cmd` shim resolution, Gatekeeper — to the release gate. A logic regression
+that only the three-platform gate would catch indicates the unit suite has a
+gap worth closing.
+
+A failing gate blocks publication, so gate flakiness blocks releases. Every
+step above must be deterministic: no reliance on network resources other
+than the GitHub release API, and the fake release in step 3 served from a
+local process with fixed content.
+
+`release.yml` also gains the `SHA256SUMS` generation-and-upload step (§6.1).
 
 ## 12. Risks and open items
 
