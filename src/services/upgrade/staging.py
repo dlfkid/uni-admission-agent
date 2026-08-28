@@ -17,7 +17,7 @@ import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from src.services.upgrade.types import UpgradeError
+from src.services.upgrade.types import ChecksumMismatchError, StagedBinaryError, UpgradeError
 
 logger = logging.getLogger(__name__)
 
@@ -54,7 +54,7 @@ def verify_artifact(
     """
     actual_size = path.stat().st_size
     if expected_size is not None and actual_size != expected_size:
-        raise UpgradeError(
+        raise ChecksumMismatchError(
             f"Downloaded artifact size {actual_size} does not match the "
             f"published size {expected_size} — download was truncated"
         )
@@ -70,7 +70,7 @@ def verify_artifact(
 
     actual = sha256_of(path)
     if actual.lower() != expected_digest.lower():
-        raise UpgradeError(
+        raise ChecksumMismatchError(
             f"Artifact checksum mismatch: expected {expected_digest}, got {actual}"
         )
     return ChecksumOutcome(verified=True)
@@ -140,7 +140,7 @@ def verify_staged_binary(
     """
     executable = staged_dir / executable_name
     if not executable.is_file():
-        raise UpgradeError(f"Staged executable {executable_name} not found")
+        raise StagedBinaryError(f"Staged executable {executable_name} not found")
     executable.chmod(0o755)
     clear_quarantine(staged_dir)
 
@@ -153,10 +153,10 @@ def verify_staged_binary(
             check=False,
         )
     except Exception as exc:
-        raise UpgradeError(f"Staged binary could not be executed: {exc}") from exc
+        raise StagedBinaryError(f"Staged binary could not be executed: {exc}") from exc
 
     if proc.returncode != 0:
-        raise UpgradeError(
+        raise StagedBinaryError(
             f"Staged binary self-check failed (exit {proc.returncode}): "
             f"{proc.stderr.strip() or proc.stdout.strip()}"
         )
@@ -164,11 +164,11 @@ def verify_staged_binary(
     try:
         reported = json.loads(proc.stdout)["version"]
     except Exception as exc:
-        raise UpgradeError(
+        raise StagedBinaryError(
             f"Staged binary produced unparseable version output: {proc.stdout!r}"
         ) from exc
 
     if reported != expected_version:
-        raise UpgradeError(
+        raise StagedBinaryError(
             f"Staged binary reports {reported}, expected {expected_version}"
         )

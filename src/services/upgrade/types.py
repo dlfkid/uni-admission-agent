@@ -20,6 +20,24 @@ class UnparseableVersionError(UpgradeError):
         self.latest = latest
 
 
+class ChecksumMismatchError(UpgradeError):
+    """Raised when a downloaded artifact fails size or digest verification.
+
+    A distinct type (not a string pattern on the message) so the transaction
+    can map a failure to ``blocked_reason=checksum_mismatch`` without risking
+    a false match on unrelated text — e.g. a staged binary's own stdout.
+    """
+
+
+class StagedBinaryError(UpgradeError):
+    """Raised when the staged candidate binary fails its self-check.
+
+    A distinct type for the same reason as :class:`ChecksumMismatchError`:
+    the binary's own captured stdout/stderr is interpolated into the message,
+    so dispatching on message content could be fooled by the binary's output.
+    """
+
+
 class ExitCode(IntEnum):
     """Stable CLI exit codes — the agent routes on these (spec §7)."""
 
