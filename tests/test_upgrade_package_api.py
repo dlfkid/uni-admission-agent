@@ -7,7 +7,7 @@ import pytest
 
 def test_public_names_are_importable() -> None:
     """Names exported from the upgrade package are importable."""
-    import src.services.upgrade as upgrade
+    from src.services import upgrade
 
     for name in (
         "UpgradeError",
@@ -34,5 +34,5 @@ def test_default_layout_uses_the_frozen_data_dir(tmp_path: Path, monkeypatch) ->
 
 def test_packaging_is_declared_for_pyinstaller() -> None:
     """packaging drives version comparison; a missing bundle breaks upgrade."""
-    spec = Path("adm-agent.spec").read_text()
+    spec = Path("adm-agent.spec").read_text(encoding="utf-8")
     assert '"packaging"' in spec
