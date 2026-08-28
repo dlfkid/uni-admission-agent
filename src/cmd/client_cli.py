@@ -34,6 +34,7 @@ from src.services.upgrade import (
     get_current_version,
     get_platform_info,
     is_frozen,
+    is_process_alive,
     perform_upgrade,
     rollback,
 )
@@ -215,15 +216,15 @@ def start_install() -> None:
 
     existing_pid = _read_client_pid_file()
     if existing_pid is not None:
-        try:
-            os.kill(existing_pid, 0)
+        # `is_process_alive`, never `os.kill(pid, 0)`: on Windows os.kill
+        # terminates the target rather than probing it.
+        if is_process_alive(existing_pid):
             typer.echo(
                 f"⚠️  Client already running (PID {existing_pid}). "
                 "Stop it first with: adm-agent-client stop"
             )
             raise typer.Exit(code=1)
-        except (ProcessLookupError, OSError):
-            _remove_client_pid_file()
+        _remove_client_pid_file()
 
     cmd = _build_client_base_cmd() + ["start", "--continuous"]
 
@@ -258,9 +259,9 @@ def stop(
         typer.echo(f"   Checked: {pid_file} (not present)")
         raise typer.Exit(code=0)
 
-    try:
-        os.kill(pid, 0)
-    except (ProcessLookupError, OSError):
+    # Probing must never terminate the target, which `os.kill(pid, 0)` would
+    # do on Windows.
+    if not is_process_alive(pid):
         typer.echo(f"ℹ️  Client process (PID {pid}) is not running. Removing stale PID file.")
         _remove_client_pid_file()
         raise typer.Exit(code=0)

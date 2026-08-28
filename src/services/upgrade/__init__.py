@@ -8,7 +8,7 @@ from pathlib import Path
 
 from src.core.paths import get_data_dir, is_frozen
 from src.services.upgrade.layout import InstallLayout
-from src.services.upgrade.preflight import PreflightBlock, run_preflight
+from src.services.upgrade.preflight import PreflightBlock, is_process_alive, run_preflight
 from src.services.upgrade.release import get_platform_info
 from src.services.upgrade.transaction import (
     check_for_updates,
@@ -78,6 +78,7 @@ __all__ = [
     "get_current_version",
     "get_platform_info",
     "is_frozen",
+    "is_process_alive",
     "perform_upgrade",
     "rollback",
     "run_preflight",

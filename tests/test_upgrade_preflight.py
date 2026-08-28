@@ -1,13 +1,19 @@
 """Tests for upgrade preflight gates — spec §9."""
 
 import os
+import subprocess
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 
 from src.services.upgrade.layout import InstallLayout
-from src.services.upgrade.preflight import is_server_running, run_preflight
+from src.services.upgrade.preflight import (
+    _windows_process_alive_via_tasklist,
+    is_process_alive,
+    is_server_running,
+    run_preflight,
+)
 from src.services.upgrade.types import BlockedReason, ExitCode
 
 _HEALTH = "http://127.0.0.1:8910/health"
@@ -77,6 +83,88 @@ def test_negative_pid_is_not_alive(tmp_path: Path) -> None:
     pid_file.write_text("-1")
     with patch("src.services.upgrade.preflight._probe_health", return_value=False):
         assert is_server_running(pid_file, _HEALTH) is False
+
+
+# ── platform split: probing must never signal on Windows ──────────────
+
+
+def test_windows_liveness_probe_never_calls_os_kill() -> None:
+    """On Windows ``os.kill(pid, 0)`` calls ``TerminateProcess`` — it would
+    hard-kill the very server it is asked to probe (spec §9)."""
+    with patch("src.services.upgrade.preflight.os.kill") as killer, patch(
+        "src.services.upgrade.preflight._windows_process_alive", return_value=True
+    ):
+        assert is_process_alive(4321, windows=True) is True
+    killer.assert_not_called()
+
+
+def test_posix_liveness_probe_still_signals_zero() -> None:
+    """POSIX behaviour is unchanged: a signal-0 probe is the correct idiom."""
+    with patch("src.services.upgrade.preflight.os.kill") as killer:
+        assert is_process_alive(4321, windows=False) is True
+    killer.assert_called_once_with(4321, 0)
+
+
+@pytest.mark.parametrize("windows", [False, True])
+def test_invalid_pids_are_rejected_before_any_probe(windows: bool) -> None:
+    """Non-positive PIDs are rejected on both platforms without touching
+    ``os.kill`` or any Win32 call."""
+    with patch("src.services.upgrade.preflight.os.kill") as killer, patch(
+        "src.services.upgrade.preflight._windows_process_alive"
+    ) as win_probe:
+        assert is_process_alive(0, windows=windows) is False
+        assert is_process_alive(-1, windows=windows) is False
+    killer.assert_not_called()
+    win_probe.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("exc", "expected"),
+    [
+        (ProcessLookupError(), False),
+        (PermissionError(), True),
+        (OSError(), False),
+        (OverflowError(), False),
+    ],
+)
+def test_posix_probe_error_mapping_is_preserved(exc: Exception, expected: bool) -> None:
+    """ProcessLookupError → dead, PermissionError → alive, others → dead."""
+    with patch("src.services.upgrade.preflight.os.kill", side_effect=exc):
+        assert is_process_alive(4321, windows=False) is expected
+
+
+def test_windows_probe_falls_back_to_tasklist_when_api_unavailable() -> None:
+    """The Win32 branch degrades to ``tasklist``, still without signalling."""
+    with patch(
+        "src.services.upgrade.preflight._windows_process_alive_via_api", return_value=None
+    ), patch(
+        "src.services.upgrade.preflight._windows_process_alive_via_tasklist", return_value=True
+    ), patch(
+        "src.services.upgrade.preflight.os.kill"
+    ) as killer:
+        assert is_process_alive(4321, windows=True) is True
+    killer.assert_not_called()
+
+
+def test_tasklist_fallback_reads_the_pid_out_of_the_listing() -> None:
+    completed = subprocess.CompletedProcess(
+        args=[], returncode=0, stdout="adm-agent.exe   4321 Console   1   90,000 K\n", stderr=""
+    )
+    with patch("src.services.upgrade.preflight.subprocess.run", return_value=completed):
+        assert _windows_process_alive_via_tasklist(4321) is True
+
+
+def test_tasklist_fallback_reports_absent_pid_as_dead() -> None:
+    completed = subprocess.CompletedProcess(
+        args=[], returncode=0, stdout="INFO: No tasks are running.\n", stderr=""
+    )
+    with patch("src.services.upgrade.preflight.subprocess.run", return_value=completed):
+        assert _windows_process_alive_via_tasklist(4321) is False
+
+
+def test_tasklist_fallback_survives_a_missing_tasklist_binary() -> None:
+    with patch("src.services.upgrade.preflight.subprocess.run", side_effect=OSError("gone")):
+        assert _windows_process_alive_via_tasklist(4321) is False
 
 
 # ── gate ordering ─────────────────────────────────────────────────────
