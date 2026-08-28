@@ -176,7 +176,7 @@ AGENT_RUNTIME=pydanticai
 | `uni-admission audit drill <id>` | Drill into one audit row |
 | `uni-admission crawl-summary --university <slug> [--year Y]` | Post-crawl summary (LLM-CLI friendly) |
 | `uni-admission diagnostics clear --university <slug> [--year Y]` | Wipe quarantine + audit records |
-| `uni-admission upgrade [--check \| --force \| --rollback \| --json]` | Update the backend, or return to the previous version. Atomic: a failed upgrade leaves the install unchanged. |
+| `uni-admission upgrade [--check \| --force \| --rollback \| --json] [--migrate/--no-migrate]` | Update the backend, or return to the previous version. Atomic: a failed upgrade leaves the install unchanged. `--migrate` (default) runs the post-upgrade DB migration; `--no-migrate` skips it. |
 | `uni-admission version [--verbose]` | Show version |
 | `uni-admission help [--verbose]` | Show help |
 

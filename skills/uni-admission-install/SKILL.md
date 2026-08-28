@@ -27,7 +27,7 @@ For CLI binary lifecycle:
 | `cli=missing` | anything | **§1 Fresh install (CLI)** |
 | `cli=ok`, `server=down` | crawl / preview / export | **§2 Start an existing install** |
 | `cli=ok`, `server=ok` | "升级" / "upgrade" CLI | **§3 Upgrade CLI in place** |
-| any | "重装" / "fix broken install" | **§1 Fresh install (CLI)** (overwrites existing) |
+| any | "重装" / "fix broken install" | **§1 Fresh install (CLI)** (adds a new `versions/` entry and repoints `current` — does not overwrite a live install) |
 | any | "更新插件" / "update plugin" | **§4 Update the plugin itself** |
 
 ---
@@ -137,11 +137,27 @@ mkdir -p ~/.local/bin
 ln -sf ~/.uni-agent/bin/adm-agent ~/.local/bin/adm-agent
 ```
 
-On Windows there is no symlink; write the pointer file and the shim instead,
-and the command users type is `adm-agent` (PATHEXT resolves `adm-agent.cmd`):
+On Windows there is no symlink; write the pointer file **and** the shim, and
+the command users type is `adm-agent` (PATHEXT resolves `adm-agent.cmd`).
+Nothing else writes this shim during a fresh install — `ensure_entrypoint()`
+in `src/services/upgrade/layout.py` only runs from `adm-agent upgrade` /
+`--rollback`, never from this shell-only install path — so skipping this
+step leaves the user with no `adm-agent` command at all:
 
-```cmd
-echo %VERSION%> %USERPROFILE%\.uni-agent\current.txt
+```powershell
+New-Item -ItemType Directory -Force -Path "$env:USERPROFILE\.uni-agent\bin" | Out-Null
+Set-Content -Path "$env:USERPROFILE\.uni-agent\current.txt" -Value $env:VERSION
+
+# Must stay byte-compatible with `_CMD_SHIM` in src/services/upgrade/layout.py —
+# `adm-agent upgrade`/`--rollback` overwrite this same file later, and a
+# mismatch would change behaviour between a fresh install and a post-upgrade one.
+$shim = @'
+@echo off
+setlocal
+set /p ADM_VERSION=<"%~dp0..\current.txt"
+"%~dp0..\versions\%ADM_VERSION%\adm-agent.exe" %*
+'@
+Set-Content -Path "$env:USERPROFILE\.uni-agent\bin\adm-agent.cmd" -Value $shim
 ```
 
 Data and configuration live in `~/.uni-agent/` alongside `versions/` and are
@@ -299,6 +315,11 @@ adm-agent upgrade --rollback
 
 That returns the user to the previous version, which is still on disk. Data
 and configuration are never modified by either direction.
+
+`adm-agent upgrade` runs the post-upgrade database migration by default. If
+the user explicitly wants to skip it (rare — only if they're migrating the
+DB separately themselves), add `--no-migrate`; the default is equivalent to
+passing `--migrate` explicitly.
 
 ---
 
