@@ -16,6 +16,7 @@ Usage:
 """
 
 import asyncio
+import json
 import logging
 import os
 import re
@@ -53,7 +54,18 @@ from src.services.crawler import (
 )
 from src.services.golden_samples import collect_golden_samples
 from src.services.quality_scoring import score_manifest
-from src.services.upgrade import check_for_updates, upgrade_backend
+from src.services.upgrade import (
+    ExitCode,
+    check_for_updates,
+    default_health_url,
+    default_install_layout,
+    default_pid_file,
+    get_current_version,
+    get_platform_info,
+    is_frozen,
+    perform_upgrade,
+    rollback,
+)
 from src.services.migrations import (
     MigrationError,
     get_migration_status,
@@ -1455,97 +1467,73 @@ def repair(
         raise typer.Exit(code=1)
 
 
-def _print_upgrade_check(update_info: dict) -> None:
-    if "error" in update_info:
-        typer.echo(f"❌ Failed to check for updates: {update_info['error']}", err=True)
-        raise typer.Exit(code=1)
+def _emit(result, as_json: bool) -> None:
+    """Print a result either as JSON (agents) or prose (humans)."""
+    if as_json:
+        typer.echo(json.dumps(result.to_json_dict(), ensure_ascii=False, indent=2))
+        return
 
-    typer.echo(f"📋 Current version: {update_info['current_version']}")
-    typer.echo(f"📋 Latest version:  {update_info['latest_version']}")
+    typer.echo(f"📋 Current version: {result.current_version}")
+    if result.latest_version:
+        typer.echo(f"📋 Latest version:  {result.latest_version}")
 
-    if not update_info.get("is_newer"):
+    if result.action_taken == "upgraded":
+        typer.echo(f"🎉 Upgraded to {result.active_version}.")
+        typer.echo("ℹ️  Restart the server to pick up the new version.")
+    elif result.action_taken == "rolled_back":
+        typer.echo(f"↩️  Rolled back to {result.active_version}.", err=True)
+    elif result.action_taken == "blocked":
+        typer.echo("⚠️  Upgrade did not run.", err=True)
+    elif result.is_newer:
+        typer.echo("🎯 Update available! Run 'upgrade' to install it.")
+    else:
         typer.echo("✅ Already on latest version.")
-        return
-    if update_info.get("asset_available"):
-        typer.echo("🎯 Update available! Run 'upgrade' without --check to install.")
-        return
 
-    typer.echo("⚠️  Update available but no compatible asset found.")
-    release_url = update_info.get("release_url")
-    if release_url:
-        typer.echo(f"   Manual download: {release_url}")
-
-
-def _run_cli_subcommand(args: list[str]) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        [sys.executable, *args],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-
-
-def _print_subprocess_logs(proc: subprocess.CompletedProcess[str], verbose: bool) -> None:
-    if not verbose:
-        return
-    if proc.stdout:
-        typer.echo(proc.stdout.strip())
-    if proc.stderr:
-        typer.echo(proc.stderr.strip(), err=True)
-
-
-def _run_migration_after_upgrade(verbose: bool) -> None:
-    typer.echo("🔄 Running database migration...")
-    migrate_proc = _run_cli_subcommand(["db-migrate", "--yes"])
-    if migrate_proc.returncode == 0:
-        typer.echo("✅ Database migration completed.")
-        return
-
-    typer.echo("⚠️  Upgrade succeeded but DB migration failed.", err=True)
-    _print_subprocess_logs(migrate_proc, verbose)
-    typer.echo("🛠 Attempting automatic rollback repair...")
-
-    repair_proc = _run_cli_subcommand(["repair", "--auto"])
-    if repair_proc.returncode == 0:
-        typer.echo("✅ Auto-repair succeeded. Data restored to a safe state.")
-        return
-
-    typer.echo("❌ Auto-repair failed. Please run: adm-agent repair --auto", err=True)
-    _print_subprocess_logs(repair_proc, verbose)
-    raise typer.Exit(code=1)
-
-
-def _perform_upgrade(force: bool, migrate: bool, verbose: bool) -> None:
-    if not upgrade_backend(force=force, verbose=verbose):
-        typer.echo("ℹ️  No upgrade needed.")
-        return
-
-    typer.echo("🎉 Upgrade completed successfully!")
-    if migrate:
-        _run_migration_after_upgrade(verbose)
-    typer.echo("ℹ️  Restart the server if it's currently running.")
+    for warning in result.warnings:
+        typer.echo(f"   • {warning}", err=result.exit_code != 0)
 
 
 @app.command()
 def upgrade(
-    check_only: bool = typer.Option(False, "--check", help="Only check for updates, don't install"),
-    force: bool = typer.Option(False, "--force", help="Force upgrade even if already on latest version"),
-    migrate: bool = typer.Option(True, "--migrate/--no-migrate", help="Run DB migration after backend upgrade"),
+    check_only: bool = typer.Option(False, "--check", help="Only check, don't install"),
+    force: bool = typer.Option(False, "--force", help="Install even if not newer"),
+    migrate: bool = typer.Option(True, "--migrate/--no-migrate", help="Run DB migration"),
+    rollback_to_previous: bool = typer.Option(
+        False, "--rollback", help="Return to the previously installed version"
+    ),
+    as_json: bool = typer.Option(False, "--json", help="Machine-readable output"),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Debug logging"),
 ) -> None:
-    """Check for and install backend updates from GitHub releases."""
+    """Check for, install, or undo backend updates."""
     _setup_logging(verbose)
 
     try:
-        if check_only:
-            _print_upgrade_check(check_for_updates(verbose=verbose))
-            return
-        _perform_upgrade(force=force, migrate=migrate, verbose=verbose)
-    except typer.Exit:
-        raise
-    except Exception as e:
-        typer.echo(f"❌ Upgrade failed: {e}", err=True)
-        raise typer.Exit(code=1)
+        if rollback_to_previous:
+            result = rollback(default_install_layout())
+        elif check_only:
+            result = check_for_updates()
+        else:
+            result = perform_upgrade(
+                default_install_layout(),
+                force=force,
+                migrate=migrate,
+                frozen=is_frozen(),
+                pid_file=default_pid_file(),
+                health_url=default_health_url(),
+            )
+    except Exception as exc:  # noqa: BLE001 - surfaced as exit code 1
+        if as_json:
+            typer.echo(
+                json.dumps({"action_taken": "blocked", "blocked_reason": "unexpected",
+                            "warnings": [str(exc)]}, ensure_ascii=False)
+            )
+        else:
+            typer.echo(f"❌ Upgrade failed: {exc}", err=True)
+        raise typer.Exit(code=int(ExitCode.UNEXPECTED))
+
+    _emit(result, as_json)
+    if result.exit_code != int(ExitCode.OK):
+        raise typer.Exit(code=result.exit_code)
 
 
 @app.command(name="llm-config")
@@ -1699,16 +1687,28 @@ def llm_config() -> None:
 
 @app.command()
 def version(
-    verbose: bool = typer.Option(False, "--verbose", "-v", help="Show detailed version info"),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Detailed info"),
+    as_json: bool = typer.Option(False, "--json", help="Machine-readable output"),
 ) -> None:
     """Display current version information."""
     try:
-        from src.services.upgrade import get_current_version
         current = get_current_version()
-        
+        os_name, arch_name = get_platform_info()
+
+        if as_json:
+            typer.echo(
+                json.dumps(
+                    {
+                        "version": current,
+                        "platform": f"{os_name}-{arch_name}",
+                        "executable": sys.executable,
+                    },
+                    ensure_ascii=False,
+                )
+            )
+            return
+
         if verbose:
-            from src.services.upgrade import get_platform_info
-            os_name, arch_name = get_platform_info()
             typer.echo(f"UniAdmission Agent {current}")
             typer.echo(f"Platform: {os_name}-{arch_name}")
             typer.echo(f"Python: {sys.version}")
@@ -1754,9 +1754,11 @@ serve:
     --verbose   Debug logging
     
 upgrade:
-    --check     Only check for updates, don't install
-    --force     Force upgrade even if already latest
-    --verbose   Show detailed progress
+    --check      Only check for updates, don't install
+    --force      Install even when not newer
+    --rollback   Return to the previously installed version
+    --json       Machine-readable output (for agents)
+    --no-migrate Skip the post-upgrade database migration
         """
     
     typer.echo(help_text)

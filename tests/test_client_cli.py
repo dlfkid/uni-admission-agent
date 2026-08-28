@@ -5,6 +5,7 @@ import signal
 from typer.testing import CliRunner
 
 from src.cmd.client_cli import app
+from src.services.upgrade.types import UpgradeResult
 
 
 runner = CliRunner()
@@ -122,55 +123,40 @@ def test_client_version_outputs_current_version(monkeypatch) -> None:
 def test_client_upgrade_check_uses_client_artifact(monkeypatch) -> None:
     captured: dict = {}
 
-    def _fake_check_for_updates_for_artifact(*, artifact_name: str, verbose: bool):
+    def _fake_check_for_updates(*, artifact_name: str) -> UpgradeResult:
         captured["artifact_name"] = artifact_name
-        captured["verbose"] = verbose
-        return {
-            "current_version": "v1.0.0",
-            "latest_version": "v1.1.0",
-            "is_newer": True,
-            "asset_available": True,
-            "release_url": "https://example.com/release",
-        }
+        return UpgradeResult(
+            current_version="v1.0.0",
+            latest_version="v1.1.0",
+            is_newer=True,
+            asset_available=True,
+        )
 
-    monkeypatch.setattr(
-        "src.cmd.client_cli.check_for_updates_for_artifact",
-        _fake_check_for_updates_for_artifact,
-    )
+    monkeypatch.setattr("src.cmd.client_cli.check_for_updates", _fake_check_for_updates)
 
     result = runner.invoke(app, ["upgrade", "--check"])
     assert result.exit_code == 0
     assert captured["artifact_name"] == "adm-agent-client"
-    assert captured["verbose"] is False
-    assert "Update available" in result.stdout
+    assert "Current version: v1.0.0" in result.stdout
 
 
-def test_client_upgrade_runs_upgrade_artifact(monkeypatch) -> None:
-    monkeypatch.setattr(
-        "src.cmd.client_cli.check_for_updates_for_artifact",
-        lambda **_kwargs: {
-            "current_version": "v1.0.0",
-            "latest_version": "v1.1.0",
-            "is_newer": True,
-            "asset_available": True,
-            "release_url": "https://example.com/release",
-        },
-    )
+def test_client_upgrade_runs_perform_upgrade(monkeypatch) -> None:
     called: dict = {}
 
-    def _fake_upgrade_artifact(*, artifact_name: str, force: bool, verbose: bool) -> bool:
-        called["artifact_name"] = artifact_name
-        called["force"] = force
-        called["verbose"] = verbose
-        return True
+    def _fake_perform_upgrade(_layout, **kwargs) -> UpgradeResult:
+        called.update(kwargs)
+        return UpgradeResult(
+            current_version="v1.0.0",
+            latest_version="v1.1.0",
+            action_taken="upgraded",
+            active_version="v1.1.0",
+        )
 
-    monkeypatch.setattr("src.cmd.client_cli.upgrade_artifact", _fake_upgrade_artifact)
+    monkeypatch.setattr("src.cmd.client_cli.perform_upgrade", _fake_perform_upgrade)
 
-    result = runner.invoke(app, ["upgrade", "--force", "--verbose"])
+    result = runner.invoke(app, ["upgrade", "--force"])
     assert result.exit_code == 0
-    assert called == {
-        "artifact_name": "adm-agent-client",
-        "force": True,
-        "verbose": True,
-    }
-    assert "Upgrade completed successfully" in result.stdout
+    assert called["artifact_name"] == "adm-agent-client"
+    assert called["force"] is True
+    assert called["migrate"] is False
+    assert "Upgraded to v1.1.0" in result.stdout
