@@ -795,3 +795,26 @@ def test_sweep_reports_a_failure_as_a_warning_and_continues(tmp_path: Path) -> N
 
     assert len(warnings) == 1
     assert "tmpabc123" in warnings[0]
+
+
+def test_a_stale_target_directory_from_an_interrupted_run_is_replaced(
+    tmp_path: Path,
+) -> None:
+    """``versions/<new>`` can already exist from a run killed after the move
+    but before the pointer switch. It is never the active version (that case
+    is refused up front), so it must simply be replaced.
+    """
+    layout = _install(tmp_path, version="v0.10.0")
+    stale = layout.version_dir("v0.11.0")
+    (stale / "_internal").mkdir(parents=True)
+    (stale / "adm-agent").write_text("half-written")
+    (stale / "garbage-from-the-killed-run").write_text("x")
+
+    result = _run(layout, tmp_path)
+
+    assert result.exit_code == ExitCode.OK
+    assert layout.active_version() == "v0.11.0"
+    assert (stale / "adm-agent").read_text() == "v0.11.0"
+    assert not (stale / "garbage-from-the-killed-run").exists()
+    assert not list(layout.versions_dir.glob(".v0.11.0.*"))
+    _assert_user_data_intact(tmp_path)

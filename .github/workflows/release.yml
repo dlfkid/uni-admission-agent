@@ -146,6 +146,38 @@ jobs:
           name: backend-${{ matrix.os }}
           path: artifacts/
 
+      - name: Resolve the currently published release (spec §11 step 2)
+        id: previous
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # The release for THIS tag is published by the `release` job, which
+          # runs after this one — so /releases/latest is still the previous
+          # real release a user would be upgrading from.
+          ARTIFACT=$(ls artifacts/adm-agent-v* | head -1)
+          BASENAME=$(basename "$ARTIFACT")
+          # Reuse this platform's own suffix so the asset name can never drift
+          # from what the build job just produced.
+          SUFFIX=$(echo "$BASENAME" | sed -E 's/^adm-agent-.+-((windows|macos|linux)-[^-]+\.(zip|tar\.gz))$/\1/')
+
+          TAG=$(gh api "repos/${GITHUB_REPOSITORY}/releases/latest" --jq .tag_name 2>/dev/null || true)
+          if [ -z "$TAG" ] || [ "$TAG" = "null" ]; then
+            echo "SKIP: no previously published release exists — skipping the previous-real-release leg (spec §11 step 2)"
+            exit 0
+          fi
+
+          mkdir -p previous
+          ASSET="adm-agent-${TAG}-${SUFFIX}"
+          if gh release download "$TAG" --repo "$GITHUB_REPOSITORY" \
+               --pattern "$ASSET" --dir previous --clobber; then
+            echo "Previous published release: $TAG ($ASSET)"
+            echo "artifact=previous/$ASSET" >> "$GITHUB_OUTPUT"
+            echo "version=$TAG" >> "$GITHUB_OUTPUT"
+          else
+            echo "SKIP: release $TAG publishes no $ASSET — skipping the previous-real-release leg (spec §11 step 2)"
+          fi
+
       - name: Verify upgrade and rollback end to end
         shell: bash
         run: |
@@ -160,10 +192,17 @@ jobs:
           BASENAME=$(basename "$ARTIFACT")
           NEW_VERSION=$(echo "$BASENAME" | sed -E 's/^adm-agent-(.+)-(windows|macos|linux)-[^-]+\.(zip|tar\.gz)$/\1/')
           echo "Verifying $BASENAME as $NEW_VERSION"
+
+          PREVIOUS_ARGS=""
+          if [ -n "${{ steps.previous.outputs.artifact }}" ]; then
+            PREVIOUS_ARGS="--previous-artifact ${{ steps.previous.outputs.artifact }} --previous-version ${{ steps.previous.outputs.version }}"
+          fi
+
           uv run python scripts/verify_upgrade.py \
             --artifact "$ARTIFACT" \
             --new-version "$NEW_VERSION" \
-            --workdir "${RUNNER_TEMP}/upgrade-verify"
+            --workdir "${RUNNER_TEMP}/upgrade-verify" \
+            $PREVIOUS_ARGS
 
   release:
     name: Create GitHub Release
