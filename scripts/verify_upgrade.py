@@ -20,7 +20,7 @@ from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-from src.services.upgrade.layout import _CMD_SHIM, _WINDOWS_POINTER
+from src.services.upgrade.layout import _CMD_SHIM, _WINDOWS_POINTER, InstallLayout
 
 REPO = "dlfkid/uni-admission-agent"
 
@@ -67,7 +67,13 @@ def _build_fake_release(serve_dir: Path, artifact: Path, tag: str, base: str) ->
     (target / "latest").write_text(json.dumps(release))
 
 
-def _install(artifact: Path, root: Path, version: str, windows: bool) -> Path:
+def _install(artifact: Path, root: Path, version: str, windows: bool) -> None:
+    """Place *artifact* at ``versions/<version>`` and wire up the entry point.
+
+    Mirrors what a real installer would produce (spec §3.2), so the gate
+    then drives the CLI's own upgrade/rollback machinery against a layout
+    it would actually recognise — not a shape invented just for the test.
+    """
     vdir = root / "versions" / version
     vdir.mkdir(parents=True)
     if artifact.suffix == ".zip":
@@ -90,22 +96,47 @@ def _install(artifact: Path, root: Path, version: str, windows: bool) -> Path:
         (bin_dir / "adm-agent.cmd").write_text(
             _CMD_SHIM.format(pointer=_WINDOWS_POINTER, exe="adm-agent.exe")
         )
-        return bin_dir / "adm-agent.cmd"
+        return
 
     (root / "current").symlink_to(Path("versions") / version, target_is_directory=True)
     (bin_dir / "adm-agent").symlink_to(Path("..") / "current" / "adm-agent")
     (vdir / "adm-agent").chmod(0o755)
-    return bin_dir / "adm-agent"
 
 
-def _run(entry: Path, args: list[str], env_base: str, home: Path) -> subprocess.CompletedProcess:
+def _run(
+    layout: InstallLayout, args: list[str], env_base: str, home: Path
+) -> subprocess.CompletedProcess:
+    """Invoke the entry point via :meth:`InstallLayout.spawn_argv`.
+
+    Not ``[str(layout.entrypoint_path), *args]``: on Windows the entry point
+    is a ``.cmd`` shim, and ``subprocess.run`` with ``shell=False`` hands the
+    path straight to ``CreateProcess``, which can only load a PE image — a
+    batch file is not one, and this raises ``OSError: [WinError 193] %1 is
+    not a valid Win32 application`` before any assertion below even runs.
+    ``spawn_argv`` is the one place (shared with the production post-check
+    in ``transaction.py``) that knows to route a ``.cmd`` through
+    ``cmd.exe /c`` instead.
+    """
     env = os.environ.copy()
     env["ADM_AGENT_RELEASE_API_BASE"] = f"{env_base}/repos"
     env["HOME"] = str(home)
     env["USERPROFILE"] = str(home)
     return subprocess.run(
-        [str(entry), *args], capture_output=True, text=True, env=env, check=False
+        layout.spawn_argv(*args), capture_output=True, text=True, env=env, check=False
     )
+
+
+def _load_json(stdout: str) -> tuple[dict | None, str | None]:
+    """Parse *stdout* as JSON. Returns ``(value, None)`` or ``(None, message)``.
+
+    A non-JSON stdout — the exact class of bug the pymupdf4llm stdout-
+    pollution fix (previous commit) addressed — must fail with a readable
+    ``FAIL:`` line, not an uncaught ``JSONDecodeError`` traceback.
+    """
+    try:
+        return json.loads(stdout), None
+    except json.JSONDecodeError:
+        return None, f"unparseable output: {stdout!r}"
 
 
 def _data_intact(root: Path) -> str | None:
@@ -117,30 +148,64 @@ def _data_intact(root: Path) -> str | None:
     return None
 
 
-def _verify(entry: Path, root: Path, args: argparse.Namespace, base: str, home: Path) -> str | None:
-    """Run upgrade, entry-point and rollback checks, then data safety.
-
-    Returns a failure description, or ``None`` when everything checks out.
-    Factored out of ``main()`` purely to keep the return count low enough
-    for pylint's too-many-returns check while still failing loudly and
-    distinctly on every kind of mismatch.
-    """
-    upgraded = _run(entry, ["upgrade", "--force", "--no-migrate", "--json"], base, home)
+def _step_upgrade(
+    layout: InstallLayout, args: argparse.Namespace, base: str, home: Path
+) -> str | None:
+    """Run ``upgrade --force`` and confirm it activated the new version."""
+    upgraded = _run(layout, ["upgrade", "--force", "--no-migrate", "--json"], base, home)
     print(upgraded.stdout, upgraded.stderr)
     if upgraded.returncode != 0:
         return f"upgrade exited {upgraded.returncode}"
-    payload = json.loads(upgraded.stdout)
+    payload, err = _load_json(upgraded.stdout)
+    if err is not None:
+        return err
     if payload["active_version"] != args.new_version:
         return f"active_version={payload['active_version']}"
+    return None
 
-    reported = _run(entry, ["version", "--json"], base, home)
-    if json.loads(reported.stdout)["version"] != args.new_version:
+
+def _step_entrypoint(
+    layout: InstallLayout, args: argparse.Namespace, base: str, home: Path
+) -> str | None:
+    """Confirm the stable entry point itself now reports the new version."""
+    reported = _run(layout, ["version", "--json"], base, home)
+    payload, err = _load_json(reported.stdout)
+    if err is not None:
+        return err
+    if payload["version"] != args.new_version:
         return f"entry point reports {reported.stdout}"
+    return None
 
-    back = _run(entry, ["upgrade", "--rollback", "--json"], base, home)
-    if back.returncode != 0 or json.loads(back.stdout)["active_version"] != args.old_version:
+
+def _step_rollback(
+    layout: InstallLayout, args: argparse.Namespace, base: str, home: Path
+) -> str | None:
+    """Run ``upgrade --rollback`` and confirm it returned to the old version."""
+    back = _run(layout, ["upgrade", "--rollback", "--json"], base, home)
+    if back.returncode != 0:
+        return f"rollback exited {back.returncode}: {back.stdout} {back.stderr}"
+    payload, err = _load_json(back.stdout)
+    if err is not None:
+        return err
+    if payload["active_version"] != args.old_version:
         return f"rollback -> {back.stdout} {back.stderr}"
+    return None
 
+
+def _verify(
+    layout: InstallLayout, root: Path, args: argparse.Namespace, base: str, home: Path
+) -> str | None:
+    """Run upgrade, entry-point and rollback checks, then data safety.
+
+    Returns a failure description, or ``None`` when everything checks out.
+    Delegates each stage to its own function purely to keep every return
+    count low enough for pylint's too-many-returns check while still
+    failing loudly and distinctly on every kind of mismatch.
+    """
+    for step in (_step_upgrade, _step_entrypoint, _step_rollback):
+        error = step(layout, args, base, home)
+        if error is not None:
+            return error
     return _data_intact(root)
 
 
@@ -158,6 +223,7 @@ def main() -> int:
     root.mkdir(parents=True)
     serve_dir = args.workdir / "serve"
     serve_dir.mkdir(parents=True)
+    layout = InstallLayout(root=root, artifact_name="adm-agent", windows=windows)
 
     # Seed user data; it must survive everything below.
     (root / ".env").write_text("DEEPSEEK_API_KEY=verify\n")
@@ -166,9 +232,9 @@ def main() -> int:
     server, base = _serve(serve_dir)
     try:
         _build_fake_release(serve_dir, args.artifact, args.new_version, base)
-        entry = _install(args.artifact, root, args.old_version, windows)
+        _install(args.artifact, root, args.old_version, windows)
 
-        error = _verify(entry, root, args, base, home)
+        error = _verify(layout, root, args, base, home)
         if error is not None:
             print(f"FAIL: {error}")
             return 1

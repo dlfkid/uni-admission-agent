@@ -153,8 +153,12 @@ jobs:
           # The version MUST come from the artifact filename, not GITHUB_REF_NAME:
           # find_release_asset builds the expected filename from the release tag,
           # so a mismatch makes the asset lookup fail rather than testing anything.
+          # Anchor on the known "-{os}-{arch}.{ext}" suffix rather than the
+          # first hyphen: this repo has tags like v0.7.5-alpha and a future
+          # v1.0.0-rc1 is expected, and the version itself may contain
+          # hyphens that a "stop at the first one" pattern would truncate.
           BASENAME=$(basename "$ARTIFACT")
-          NEW_VERSION=$(echo "$BASENAME" | sed -E 's/^adm-agent-(v[^-]+)-.*/\1/')
+          NEW_VERSION=$(echo "$BASENAME" | sed -E 's/^adm-agent-(.+)-(windows|macos|linux)-[^-]+\.(zip|tar\.gz)$/\1/')
           echo "Verifying $BASENAME as $NEW_VERSION"
           uv run python scripts/verify_upgrade.py \
             --artifact "$ARTIFACT" \
