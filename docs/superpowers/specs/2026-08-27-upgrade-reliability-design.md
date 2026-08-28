@@ -427,6 +427,7 @@ Exit codes (stable, skill routes on them):
 | 13 | activated then rolled back | `post_check_failed` |
 | 14 | source checkout, not a packaged install | `not_frozen` |
 | 15 | legacy flat layout; re-install required (§3.5) | `legacy_layout` |
+| 16 | another upgrade holds the install-root lock | `upgrade_in_progress` |
 | 1 | unexpected error | `unexpected` |
 
 Human-readable output stays exactly as friendly as it is now (emoji and

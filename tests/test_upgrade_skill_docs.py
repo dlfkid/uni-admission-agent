@@ -110,3 +110,16 @@ def test_windows_gets_its_own_path_step(skill_text: str) -> None:
     assert ".uni-agent\\bin" in skill_text
     assert "PATHEXT" in skill_text
     assert "$env:PATH" in skill_text
+
+
+def test_fresh_install_never_unpacks_over_the_active_version(skill_text: str) -> None:
+    """§1 also serves "重装" and §3's reinstall_to_replace_active_version route,
+    so ${VERSION} is often the currently active version. Extracting on top of
+    it leaves stale files and, on Windows, a half-updated directory — the very
+    hazard perform_upgrade refuses a same-version --force for."""
+    assert "tar -xzf \"$ARTIFACT\" -C ~/.uni-agent/versions/${VERSION}" not in skill_text
+    assert 'STAGE=~/.uni-agent/versions/.incoming-$$' in skill_text
+    # The payload is checked before anything is replaced.
+    assert 'test -f "$STAGE/adm-agent"' in skill_text
+    # The old directory is moved aside rather than written through.
+    assert "${VERSION}.replaced-$$" in skill_text

@@ -116,8 +116,19 @@ point resolves `versions/<VERSION>/adm-agent`, so an extra level leaves the
 install inert. `tar` strips it with `--strip-components=1`; `unzip` has no
 equivalent, so unpack to a scratch directory and lift the contents up.
 
+**Never unpack on top of `versions/${VERSION}`.** This section also serves
+"重装 / fix broken install" and the `reinstall_to_replace_active_version`
+route from §3, so `${VERSION}` is frequently the version that is *currently
+active*. Extracting over it would leave stale files the new package deleted,
+and on Windows a locked file leaves a half-updated directory — exactly the
+hazard `perform_upgrade` refuses a same-version `--force` for. Unpack into a
+scratch directory, verify it, and only then move it into place.
+
 ```bash
-mkdir -p ~/.uni-agent/versions/${VERSION} ~/.uni-agent/bin
+mkdir -p ~/.uni-agent/versions ~/.uni-agent/bin
+STAGE=~/.uni-agent/versions/.incoming-$$
+rm -rf "$STAGE" && mkdir -p "$STAGE"
+
 cd /tmp
 ARTIFACT="adm-agent-${VERSION}-${OS}-${ARCH}.${EXT}"
 curl -fL -o "$ARTIFACT" \
@@ -125,21 +136,37 @@ curl -fL -o "$ARTIFACT" \
 
 case "$EXT" in
   tar.gz)
-    tar -xzf "$ARTIFACT" -C ~/.uni-agent/versions/${VERSION} --strip-components=1
+    tar -xzf "$ARTIFACT" -C "$STAGE" --strip-components=1
     ;;
   zip)
     # unzip has no --strip-components; do it by hand.
     rm -rf /tmp/adm-agent-unzip && mkdir -p /tmp/adm-agent-unzip
     unzip -q -o "$ARTIFACT" -d /tmp/adm-agent-unzip
     INNER=$(find /tmp/adm-agent-unzip -mindepth 1 -maxdepth 1 -type d | head -1)
-    (shopt -s dotglob; mv "$INNER"/* ~/.uni-agent/versions/${VERSION}/)
+    (shopt -s dotglob; mv "$INNER"/* "$STAGE"/)
     rm -rf /tmp/adm-agent-unzip
     ;;
 esac
 
-chmod +x ~/.uni-agent/versions/${VERSION}/adm-agent 2>/dev/null || true
-xattr -dr com.apple.quarantine ~/.uni-agent/versions/${VERSION} 2>/dev/null || true
+# Verify the payload BEFORE it replaces anything.
+test -f "$STAGE/adm-agent" || { echo "extract failed — install untouched"; exit 1; }
+chmod +x "$STAGE/adm-agent" 2>/dev/null || true
+xattr -dr com.apple.quarantine "$STAGE" 2>/dev/null || true
+
+# Swap into place. The old directory is moved aside, not written through.
+if [ -d ~/.uni-agent/versions/${VERSION} ]; then
+  rm -rf ~/.uni-agent/versions/${VERSION}.replaced-$$
+  mv ~/.uni-agent/versions/${VERSION} ~/.uni-agent/versions/${VERSION}.replaced-$$
+fi
+mv "$STAGE" ~/.uni-agent/versions/${VERSION}
+rm -rf ~/.uni-agent/versions/${VERSION}.replaced-$$
 ```
+
+If `${VERSION}` is the currently active version, **make sure the server is
+stopped first** (`adm-agent serve-stop`, or Ctrl-C in the user's terminal).
+Replacing the directory a running server was launched from is safe on POSIX
+but fails on Windows, and the server would keep serving the old code either
+way.
 
 Verify the executable landed at the top level of the version directory —
 this is what the entry point will resolve, and a nested one is the failure
@@ -412,6 +439,7 @@ Route on the exit code — never parse the prose:
 | `13` | Upgraded then rolled back | The user is back on the working version. Show `warnings`; do not retry blindly. |
 | `14` | Source checkout | Update with `git pull` + `uv sync` instead. |
 | `15` | Legacy layout | One-time migration: run §1 once. `.env` and the database are preserved — say so. |
+| `16` | Another upgrade is already running | Wait for it to finish, then re-run. Do not retry in a tight loop and never delete the lock file by hand — a second upgrade would delete the first one's in-flight download. |
 
 One more shape of `0` to recognise: `action_taken="none"` together with
 `next_action="reinstall_to_replace_active_version"`. That is `--force` aimed
