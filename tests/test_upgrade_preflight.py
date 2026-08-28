@@ -55,6 +55,30 @@ def test_unreadable_pid_file_is_ignored(tmp_path: Path) -> None:
         assert is_server_running(pid_file, _HEALTH) is False
 
 
+def test_oversized_pid_does_not_crash(tmp_path: Path) -> None:
+    """An out-of-range numeric PID must not crash; fall through to health probe."""
+    pid_file = tmp_path / "server.pid"
+    pid_file.write_text("99999999999999999999999999")
+    with patch("src.services.upgrade.preflight._probe_health", return_value=False):
+        assert is_server_running(pid_file, _HEALTH) is False
+
+
+def test_pid_zero_is_not_alive(tmp_path: Path) -> None:
+    """PID 0 is a process-group signal, not a valid process signal."""
+    pid_file = tmp_path / "server.pid"
+    pid_file.write_text("0")
+    with patch("src.services.upgrade.preflight._probe_health", return_value=False):
+        assert is_server_running(pid_file, _HEALTH) is False
+
+
+def test_negative_pid_is_not_alive(tmp_path: Path) -> None:
+    """Negative PIDs are process-group signals, not valid process signals."""
+    pid_file = tmp_path / "server.pid"
+    pid_file.write_text("-1")
+    with patch("src.services.upgrade.preflight._probe_health", return_value=False):
+        assert is_server_running(pid_file, _HEALTH) is False
+
+
 # ── gate ordering ─────────────────────────────────────────────────────
 
 

@@ -21,14 +21,20 @@ class PreflightBlock:
 
 
 def is_process_alive(pid: int) -> bool:
-    """True when *pid* names a live process."""
+    """True when *pid* names a live process.
+
+    Valid PIDs are strictly positive integers. Invalid PIDs (0, negative, or
+    too large to signal) are treated as non-existent.
+    """
+    if pid <= 0:
+        return False
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
         return False
     except PermissionError:
         return True
-    except OSError:
+    except (OSError, OverflowError):
         return False
     return True
 
@@ -48,10 +54,12 @@ def is_server_running(pid_file: Path, health_url: str) -> bool:
     if pid_file.is_file():
         try:
             pid = int(pid_file.read_text().strip())
-        except (ValueError, OSError):
-            pid = None
-        if pid is not None and is_process_alive(pid):
-            return True
+            # Validate PID: must be strictly positive and within signalling range
+            if pid > 0 and is_process_alive(pid):
+                return True
+        except (ValueError, OSError, OverflowError):
+            # Unreadable, garbage, or out-of-range PID file: fall through to health probe
+            pass
     return _probe_health(health_url)
 
 
