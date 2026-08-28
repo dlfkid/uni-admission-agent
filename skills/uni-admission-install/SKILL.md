@@ -26,7 +26,8 @@ For CLI binary lifecycle:
 |---|---|---|
 | `cli=missing` | anything | **§1 Fresh install (CLI)** |
 | `cli=ok`, `server=down` | crawl / preview / export | **§2 Start an existing install** |
-| `cli=ok`, `server=ok` | "升级" / "upgrade" CLI | **§3 Upgrade CLI in place** |
+| `cli=ok`, `server=ok` | "升级" / "upgrade" CLI | **§3 Upgrade CLI in place** (start at §3.0 — the legacy-layout pre-check) |
+| `bin/_internal` exists and `versions/` does not | "升级" / "upgrade" CLI | **§1 Fresh install (CLI)** — one-time legacy migration; `.env` and the database are preserved |
 | any | "重装" / "fix broken install" | **§1 Fresh install (CLI)** (adds a new `versions/` entry and repoints `current` — does not overwrite a live install) |
 | any | "更新插件" / "update plugin" | **§4 Update the plugin itself** |
 
@@ -108,6 +109,13 @@ Wait for explicit confirmation before proceeding. If the user says no, stop — 
 
 ### 1.4 Download + extract into a versioned directory
 
+Both archives contain **one** top-level directory
+(`adm-agent-<VERSION>-<OS>-<ARCH>/`) — `scripts/build_dist.py` archives with
+`base_dir=<base_name>`. That wrapper directory must be stripped: the entry
+point resolves `versions/<VERSION>/adm-agent`, so an extra level leaves the
+install inert. `tar` strips it with `--strip-components=1`; `unzip` has no
+equivalent, so unpack to a scratch directory and lift the contents up.
+
 ```bash
 mkdir -p ~/.uni-agent/versions/${VERSION} ~/.uni-agent/bin
 cd /tmp
@@ -116,12 +124,31 @@ curl -fL -o "$ARTIFACT" \
   "https://github.com/dlfkid/uni-admission-agent/releases/download/${VERSION}/${ARTIFACT}"
 
 case "$EXT" in
-  tar.gz) tar -xzf "$ARTIFACT" -C ~/.uni-agent/versions/${VERSION} --strip-components=1 ;;
-  zip)    unzip -o "$ARTIFACT" -d ~/.uni-agent/versions/${VERSION} ;;
+  tar.gz)
+    tar -xzf "$ARTIFACT" -C ~/.uni-agent/versions/${VERSION} --strip-components=1
+    ;;
+  zip)
+    # unzip has no --strip-components; do it by hand.
+    rm -rf /tmp/adm-agent-unzip && mkdir -p /tmp/adm-agent-unzip
+    unzip -q -o "$ARTIFACT" -d /tmp/adm-agent-unzip
+    INNER=$(find /tmp/adm-agent-unzip -mindepth 1 -maxdepth 1 -type d | head -1)
+    mv "$INNER"/* "$INNER"/.[!.]* ~/.uni-agent/versions/${VERSION}/ 2>/dev/null || \
+      mv "$INNER"/* ~/.uni-agent/versions/${VERSION}/
+    rm -rf /tmp/adm-agent-unzip
+    ;;
 esac
 
-chmod +x ~/.uni-agent/versions/${VERSION}/adm-agent
+chmod +x ~/.uni-agent/versions/${VERSION}/adm-agent 2>/dev/null || true
 xattr -dr com.apple.quarantine ~/.uni-agent/versions/${VERSION} 2>/dev/null || true
+```
+
+Verify the executable landed at the top level of the version directory —
+this is what the entry point will resolve, and a nested one is the failure
+mode above:
+
+```bash
+ls ~/.uni-agent/versions/${VERSION}/adm-agent      # POSIX
+ls ~/.uni-agent/versions/${VERSION}/adm-agent.exe  # Windows
 ```
 
 (The `xattr` step is macOS-only; it's a no-op elsewhere, hence the swallowed error.)
@@ -142,11 +169,22 @@ the command users type is `adm-agent` (PATHEXT resolves `adm-agent.cmd`).
 Nothing else writes this shim during a fresh install — `ensure_entrypoint()`
 in `src/services/upgrade/layout.py` only runs from `adm-agent upgrade` /
 `--rollback`, never from this shell-only install path — so skipping this
-step leaves the user with no `adm-agent` command at all:
+step leaves the user with no `adm-agent` command at all.
+
+> ⚠️ **`$VERSION` does not cross the shell boundary.** §1.2/§1.4 set
+> `VERSION` as a *bash* variable; PowerShell runs in a different process and
+> would read `$env:VERSION` as empty, writing an empty `current.txt` and
+> leaving the shim expanding to `...\versions\\adm-agent.exe`. **Substitute
+> the literal resolved version into the first line below** (e.g.
+> `-Value "v0.11.0"`) instead of referencing a variable, or export it first
+> (`export VERSION` in bash, then launch PowerShell from that same shell so
+> `$env:VERSION` is actually populated). Do not paste this block verbatim
+> with the variable reference intact.
 
 ```powershell
 New-Item -ItemType Directory -Force -Path "$env:USERPROFILE\.uni-agent\bin" | Out-Null
-Set-Content -Path "$env:USERPROFILE\.uni-agent\current.txt" -Value $env:VERSION
+# Replace <VERSION> with the literal tag resolved in §1.2, e.g. "v0.11.0".
+Set-Content -Path "$env:USERPROFILE\.uni-agent\current.txt" -Value "<VERSION>" -NoNewline
 
 # Must stay byte-compatible with `_CMD_SHIM` in src/services/upgrade/layout.py —
 # `adm-agent upgrade`/`--rollback` overwrite this same file later, and a
@@ -160,10 +198,17 @@ set /p ADM_VERSION=<"%~dp0..\current.txt"
 Set-Content -Path "$env:USERPROFILE\.uni-agent\bin\adm-agent.cmd" -Value $shim
 ```
 
+Confirm the pointer is not empty before moving on — an empty `current.txt`
+is the exact failure this warning is about:
+
+```powershell
+Get-Content "$env:USERPROFILE\.uni-agent\current.txt"
+```
+
 Data and configuration live in `~/.uni-agent/` alongside `versions/` and are
 never touched by installs or upgrades: `.env`, `admission.db`, `schemas/`.
 
-Then check if `~/.local/bin` is in PATH:
+Then check PATH. **macOS / Linux** — is `~/.local/bin` on it:
 
 ```bash
 case ":$PATH:" in *":$HOME/.local/bin:"*) echo "PATH=ok" ;; *) echo "PATH=missing" ;; esac
@@ -176,6 +221,29 @@ If missing, tell the user (don't auto-edit shell rc files):
 > export PATH="$HOME/.local/bin:$PATH"
 > ```
 > 要么直接用全路径调用：`~/.uni-agent/bin/adm-agent`。
+
+**Windows** — is `%USERPROFILE%\.uni-agent\bin` on it? There is no
+`~/.local/bin` symlink on Windows, so this directory *is* the entry point
+and nothing else puts it on PATH:
+
+```powershell
+$binDir = "$env:USERPROFILE\.uni-agent\bin"
+if (($env:PATH -split ';') -contains $binDir) { "PATH=ok" } else { "PATH=missing" }
+```
+
+If missing, tell the user — **do not auto-edit their profile or registry**,
+same policy as the bash branch:
+
+> `%USERPROFILE%\.uni-agent\bin` 不在 PATH。在 PowerShell 里跑一次（只需一次，
+> 之后新开的终端都生效）：
+> ```powershell
+> [Environment]::SetEnvironmentVariable(
+>   "PATH", "$env:PATH;$env:USERPROFILE\.uni-agent\bin", "User")
+> ```
+> 然后重开终端。或者直接用全路径调用：`%USERPROFILE%\.uni-agent\bin\adm-agent.cmd`。
+>
+> 加上之后你输入的命令就是 `adm-agent`（不是 `adm-agent.exe`）——PATHEXT 会
+> 解析到 `adm-agent.cmd`。
 
 ### 1.6 Seed .env with one LLM key
 
@@ -287,6 +355,43 @@ If the server doesn't come up in 10 seconds:
 
 ## §3 Upgrade in place
 
+### 3.0 FIRST: is this a legacy (pre-`versions/`) install?
+
+**Run this check before calling `adm-agent upgrade` at all.** Do not skip it.
+
+```bash
+if [ -d "$HOME/.uni-agent/bin/_internal" ] && [ ! -d "$HOME/.uni-agent/versions" ]; then
+  echo "layout=legacy"
+else
+  echo "layout=versioned"
+fi
+```
+
+If it prints `layout=legacy`, **go to §1 (Fresh install) once and stop
+here** — do not run `adm-agent upgrade`.
+
+Why this branch has to come first: every install created before the
+versioned layout is running an old binary whose `upgrade` command
+*cannot* reach the fix. That old binary has no `--json` option (click
+exits `2` on an unknown option — a code that is not in the table below),
+and run without `--json` it compares versions as strings, so it prints
+`✅ Already on latest version.` and exits `0`. Either way the agent would
+conclude there is nothing to do and the user would stay pinned forever.
+The exit-`15` legacy detection in the table below is real, but it only
+exists *inside* the new binary — i.e. after the migration it is meant to
+trigger. This shell check is what actually opens the delivery channel.
+
+Say this to the user in plain terms before you start:
+
+> 你的安装是旧版目录结构，需要**重装一次**才能用上新的升级机制。
+> 这是一次性的：`~/.uni-agent/.env`（你的 LLM key）和
+> `~/.uni-agent/admission.db`（你的数据）**都不会动**，重装只会新建
+> `~/.uni-agent/versions/` 目录。之后每次升级就只要一条命令了。
+
+After that one re-install, `upgrade` is self-sufficient forever.
+
+### 3.1 Upgrade
+
 Do **not** re-run the fresh install to upgrade. `adm-agent upgrade` is
 atomic, verified and reversible; re-downloading over a live install is none
 of those things.
@@ -299,6 +404,8 @@ Route on the exit code — never parse the prose:
 
 | Code | Meaning | What to do |
 |---|---|---|
+| *(pre-check)* `~/.uni-agent/bin/_internal` exists and `~/.uni-agent/versions` does not | Legacy flat layout — the installed binary cannot upgrade itself | **Do not call `upgrade`.** Run §1 once. `.env` and the database are preserved — say so. |
+| `2`, or unrecognised / non-JSON output | Old binary: `--json` is not a known option, so click exits `2` with a usage error | Same one-time migration: run §1 once. Do not retry `upgrade`. |
 | `0` | Upgraded, or already current | Report the version; offer to restart the server. |
 | `10` | Server is running | Stop it (Ctrl-C in the user's terminal, or `adm-agent serve-stop`), then re-run. |
 | `11` | No build for this platform | Tell the user; offer the GitHub releases page. |
@@ -306,6 +413,11 @@ Route on the exit code — never parse the prose:
 | `13` | Upgraded then rolled back | The user is back on the working version. Show `warnings`; do not retry blindly. |
 | `14` | Source checkout | Update with `git pull` + `uv sync` instead. |
 | `15` | Legacy layout | One-time migration: run §1 once. `.env` and the database are preserved — say so. |
+
+A `0` exit whose stdout is **not** parseable JSON is also the old binary
+(it printed `✅ Already on latest version.` from the string-compare bug).
+Treat it exactly like `2` above: run §1 once, do not believe the "already
+latest" claim.
 
 If anything looks wrong after an upgrade:
 
