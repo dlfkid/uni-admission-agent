@@ -28,20 +28,40 @@ def _upgrade_verify_job() -> dict:
 # ── workflow wiring (spec §11 step 2) ─────────────────────────────────
 
 
+def _verify_step(job: dict) -> dict:
+    return next(s for s in job["steps"] if "verify_upgrade.py" in s.get("run", ""))
+
+
 def test_gate_resolves_the_previously_published_release(upgrade_verify_job: dict) -> None:
     """The previous *real* release, resolved the same way upgrade resolves it."""
-    steps = upgrade_verify_job["steps"]
-    resolve = next(s for s in steps if s.get("id") == "previous")
-    assert "releases/latest" in resolve["run"]
-    assert "gh release download" in resolve["run"]
+    run = _verify_step(upgrade_verify_job)["run"]
+    assert "releases/latest" in run
+    assert "gh release download" in run
 
 
 def test_gate_skips_explicitly_when_no_previous_release_exists(
     upgrade_verify_job: dict,
 ) -> None:
     """Spec §11 step 2: skip with an explicit log line, never silently pass."""
-    resolve = next(s for s in upgrade_verify_job["steps"] if s.get("id") == "previous")
-    assert "SKIP:" in resolve["run"]
+    assert "SKIP:" in _verify_step(upgrade_verify_job)["run"]
+
+
+# ── both packaged artifacts (spec §2) ─────────────────────────────────
+
+
+def test_gate_verifies_the_client_artifact_too(upgrade_verify_job: dict) -> None:
+    """The client ships the same upgrade machinery and was pinned by the same
+    defect, so a release must not publish it unverified."""
+    assert "build-client" in upgrade_verify_job["needs"]
+    run = _verify_step(upgrade_verify_job)["run"]
+    assert "for NAME in adm-agent adm-agent-client" in run
+    assert "--artifact-name" in run
+
+
+def test_gate_fails_loudly_when_an_artifact_is_missing(upgrade_verify_job: dict) -> None:
+    """A silently-absent artifact would let the gate pass by testing nothing."""
+    run = _verify_step(upgrade_verify_job)["run"]
+    assert "FAIL: no ${NAME} artifact was built" in run
 
 
 def test_gate_passes_the_previous_artifact_to_the_verifier(

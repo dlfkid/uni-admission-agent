@@ -115,7 +115,7 @@ jobs:
 
   upgrade-verify:
     name: Verify upgrade on ${{ matrix.os }}
-    needs: [build-backend]
+    needs: [build-backend, build-client]
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -140,69 +140,70 @@ jobs:
         # rather than a bare interpreter.
         run: uv sync --frozen
 
-      - name: Download the backend artifact built for this platform
+      - name: Download both artifacts built for this platform
         uses: actions/download-artifact@v4
         with:
-          name: backend-${{ matrix.os }}
+          pattern: "*-${{ matrix.os }}"
           path: artifacts/
+          merge-multiple: true
 
-      - name: Resolve the currently published release (spec §11 step 2)
-        id: previous
+      - name: Verify upgrade and rollback end to end for both artifacts
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          # The release for THIS tag is published by the `release` job, which
-          # runs after this one — so /releases/latest is still the previous
-          # real release a user would be upgrading from.
-          ARTIFACT=$(ls artifacts/adm-agent-v* | head -1)
-          BASENAME=$(basename "$ARTIFACT")
-          # Reuse this platform's own suffix so the asset name can never drift
-          # from what the build job just produced.
-          SUFFIX=$(echo "$BASENAME" | sed -E 's/^adm-agent-.+-((windows|macos|linux)-[^-]+\.(zip|tar\.gz))$/\1/')
+          set -uo pipefail
+          # Spec §2 requires full parity for BOTH packaged artifacts. The
+          # client ships the same upgrade machinery and was pinned by the same
+          # version-comparison defect, so publishing it unverified would leave
+          # exactly the hole this gate exists to close.
+          for NAME in adm-agent adm-agent-client; do
+            echo "::group::${NAME}"
+            ARTIFACT=$(ls artifacts/${NAME}-v* 2>/dev/null | head -1)
+            if [ -z "$ARTIFACT" ]; then
+              echo "FAIL: no ${NAME} artifact was built for this platform"
+              exit 1
+            fi
+            BASENAME=$(basename "$ARTIFACT")
 
-          TAG=$(gh api "repos/${GITHUB_REPOSITORY}/releases/latest" --jq .tag_name 2>/dev/null || true)
-          if [ -z "$TAG" ] || [ "$TAG" = "null" ]; then
-            echo "SKIP: no previously published release exists — skipping the previous-real-release leg (spec §11 step 2)"
-            exit 0
-          fi
+            # The version MUST come from the artifact filename, not
+            # GITHUB_REF_NAME: find_release_asset builds the expected filename
+            # from the release tag, so a mismatch makes the asset lookup fail
+            # rather than testing anything. Anchor on the known
+            # "-{os}-{arch}.{ext}" suffix rather than the first hyphen — this
+            # repo has tags like v0.7.5-alpha and a future v1.0.0-rc1 is
+            # expected, and a "stop at the first hyphen" pattern truncates them.
+            NEW_VERSION=$(echo "$BASENAME" | sed -E "s/^${NAME}-(.+)-(windows|macos|linux)-[^-]+\.(zip|tar\.gz)$/\1/")
+            SUFFIX=$(echo "$BASENAME" | sed -E "s/^${NAME}-.+-((windows|macos|linux)-[^-]+\.(zip|tar\.gz))$/\1/")
+            echo "Verifying $BASENAME as $NEW_VERSION"
 
-          mkdir -p previous
-          ASSET="adm-agent-${TAG}-${SUFFIX}"
-          if gh release download "$TAG" --repo "$GITHUB_REPOSITORY" \
-               --pattern "$ASSET" --dir previous --clobber; then
-            echo "Previous published release: $TAG ($ASSET)"
-            echo "artifact=previous/$ASSET" >> "$GITHUB_OUTPUT"
-            echo "version=$TAG" >> "$GITHUB_OUTPUT"
-          else
-            echo "SKIP: release $TAG publishes no $ASSET — skipping the previous-real-release leg (spec §11 step 2)"
-          fi
+            # The release for THIS tag is published by the `release` job, which
+            # runs after this one — so /releases/latest is still the previous
+            # real release a user would be upgrading from (spec §11 step 2).
+            PREVIOUS_ARGS=""
+            TAG=$(gh api "repos/${GITHUB_REPOSITORY}/releases/latest" --jq .tag_name 2>/dev/null || true)
+            if [ -z "$TAG" ] || [ "$TAG" = "null" ]; then
+              echo "SKIP: no previously published release exists — skipping the previous-real-release leg for ${NAME}"
+            else
+              mkdir -p "previous-${NAME}"
+              ASSET="${NAME}-${TAG}-${SUFFIX}"
+              if gh release download "$TAG" --repo "$GITHUB_REPOSITORY" \
+                   --pattern "$ASSET" --dir "previous-${NAME}" --clobber; then
+                echo "Previous published release: $TAG ($ASSET)"
+                PREVIOUS_ARGS="--previous-artifact previous-${NAME}/${ASSET} --previous-version ${TAG}"
+              else
+                echo "SKIP: release $TAG publishes no $ASSET — skipping the previous-real-release leg for ${NAME}"
+              fi
+            fi
 
-      - name: Verify upgrade and rollback end to end
-        shell: bash
-        run: |
-          ARTIFACT=$(ls artifacts/adm-agent-v* | head -1)
-          # The version MUST come from the artifact filename, not GITHUB_REF_NAME:
-          # find_release_asset builds the expected filename from the release tag,
-          # so a mismatch makes the asset lookup fail rather than testing anything.
-          # Anchor on the known "-{os}-{arch}.{ext}" suffix rather than the
-          # first hyphen: this repo has tags like v0.7.5-alpha and a future
-          # v1.0.0-rc1 is expected, and the version itself may contain
-          # hyphens that a "stop at the first one" pattern would truncate.
-          BASENAME=$(basename "$ARTIFACT")
-          NEW_VERSION=$(echo "$BASENAME" | sed -E 's/^adm-agent-(.+)-(windows|macos|linux)-[^-]+\.(zip|tar\.gz)$/\1/')
-          echo "Verifying $BASENAME as $NEW_VERSION"
-
-          PREVIOUS_ARGS=""
-          if [ -n "${{ steps.previous.outputs.artifact }}" ]; then
-            PREVIOUS_ARGS="--previous-artifact ${{ steps.previous.outputs.artifact }} --previous-version ${{ steps.previous.outputs.version }}"
-          fi
-
-          uv run python scripts/verify_upgrade.py \
-            --artifact "$ARTIFACT" \
-            --new-version "$NEW_VERSION" \
-            --workdir "${RUNNER_TEMP}/upgrade-verify" \
-            $PREVIOUS_ARGS
+            uv run python scripts/verify_upgrade.py \
+              --artifact "$ARTIFACT" \
+              --artifact-name "$NAME" \
+              --new-version "$NEW_VERSION" \
+              --workdir "${RUNNER_TEMP}/upgrade-verify-${NAME}" \
+              $PREVIOUS_ARGS || exit 1
+            echo "::endgroup::"
+          done
 
   release:
     name: Create GitHub Release

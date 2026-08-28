@@ -106,7 +106,9 @@ def _extract_flat(artifact: Path, dest: Path) -> None:
     shutil.rmtree(scratch)
 
 
-def _install(artifact: Path, root: Path, version: str, windows: bool) -> None:
+def _install(
+    artifact: Path, root: Path, version: str, windows: bool, artifact_name: str
+) -> None:
     """Place *artifact* at ``versions/<version>`` and wire up the entry point.
 
     Mirrors what a real installer would produce (spec §3.2), so the gate
@@ -122,14 +124,14 @@ def _install(artifact: Path, root: Path, version: str, windows: bool) -> None:
         (root / _WINDOWS_POINTER).write_text(version)
         # Use the real shim template from layout.py rather than a copy of it,
         # so the gate exercises the exact layout ensure_entrypoint() produces.
-        (bin_dir / "adm-agent.cmd").write_text(
-            _CMD_SHIM.format(pointer=_WINDOWS_POINTER, exe="adm-agent.exe")
+        (bin_dir / f"{artifact_name}.cmd").write_text(
+            _CMD_SHIM.format(pointer=_WINDOWS_POINTER, exe=f"{artifact_name}.exe")
         )
         return
 
     (root / "current").symlink_to(Path("versions") / version, target_is_directory=True)
-    (bin_dir / "adm-agent").symlink_to(Path("..") / "current" / "adm-agent")
-    (vdir / "adm-agent").chmod(0o755)
+    (bin_dir / artifact_name).symlink_to(Path("..") / "current" / artifact_name)
+    (vdir / artifact_name).chmod(0o755)
 
 
 def _run(
@@ -332,7 +334,9 @@ def _step_previous_release(args: argparse.Namespace, base: str) -> str | None:
 
     windows = sys.platform == "win32"
     home = args.workdir / "home-previous"
-    root = home / ".uni-agent"
+    root = home / (
+        ".uni-agent" if args.artifact_name == "adm-agent" else ".adm-agent-client"
+    )
     _seed_user_data(root)
 
     prev_exe = _unpack_runnable(args.previous_artifact, args.workdir / "prevbin")
@@ -342,8 +346,16 @@ def _step_previous_release(args: argparse.Namespace, base: str) -> str | None:
         # Post-transition: the published release already has the §3.2 layout,
         # so this leg is the real published → new happy path.
         print(f"Previous release {args.previous_version} has the versioned layout")
-        layout = InstallLayout(root=root, artifact_name="adm-agent", windows=windows)
-        _install(args.previous_artifact, root, args.previous_version, windows)
+        layout = InstallLayout(
+            root=root, artifact_name=args.artifact_name, windows=windows
+        )
+        _install(
+            args.previous_artifact,
+            root,
+            args.previous_version,
+            windows,
+            args.artifact_name,
+        )
         leg_args = argparse.Namespace(
             new_version=args.new_version, old_version=args.previous_version
         )
@@ -372,6 +384,13 @@ def main() -> int:
              "with an explicit log line.",
     )
     parser.add_argument("--previous-version", default="")
+    parser.add_argument(
+        "--artifact-name",
+        default="adm-agent",
+        choices=["adm-agent", "adm-agent-client"],
+        help="Which packaged artifact to verify. Spec §2 requires full "
+             "parity for both, so the gate runs once per artifact.",
+    )
     args = parser.parse_args()
 
     if args.previous_artifact is not None and not args.previous_artifact.is_file():
@@ -380,10 +399,14 @@ def main() -> int:
 
     windows = sys.platform == "win32"
     home = args.workdir / "home"
-    root = home / ".uni-agent"
+    root = home / (
+        ".uni-agent" if args.artifact_name == "adm-agent" else ".adm-agent-client"
+    )
     serve_dir = args.workdir / "serve"
     serve_dir.mkdir(parents=True)
-    layout = InstallLayout(root=root, artifact_name="adm-agent", windows=windows)
+    layout = InstallLayout(
+        root=root, artifact_name=args.artifact_name, windows=windows
+    )
 
     # Seed user data; it must survive everything below.
     _seed_user_data(root)
@@ -397,7 +420,7 @@ def main() -> int:
             print(f"FAIL: {error}")
             return 1
 
-        _install(args.artifact, root, args.old_version, windows)
+        _install(args.artifact, root, args.old_version, windows, args.artifact_name)
         error = _verify(layout, root, args, base, home)
         if error is not None:
             print(f"FAIL: {error}")
