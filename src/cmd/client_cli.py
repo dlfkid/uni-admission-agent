@@ -328,7 +328,10 @@ def upgrade(
 
     try:
         if rollback_to_previous:
-            result = rollback(default_client_layout())
+            # migrate=False: the client has no database (mirrors the
+            # forward path below). default_post_check is a no-op for a
+            # non-"adm-agent" artifact anyway.
+            result = rollback(default_client_layout(), migrate=False)
         elif check_only:
             result = check_for_updates(artifact_name="adm-agent-client")
         else:

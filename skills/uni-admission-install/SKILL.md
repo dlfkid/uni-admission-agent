@@ -428,6 +428,13 @@ adm-agent upgrade --rollback
 That returns the user to the previous version, which is still on disk. Data
 and configuration are never modified by either direction.
 
+`--rollback` also re-runs the post-activation check (`check`, then
+`db-migrate --yes` with its `repair --auto` fallback) against the restored
+version, so rolling back across a schema change still attempts to reconcile
+the database. Those checks are **warn-only here** — a failure cannot undo
+the repoint, because there is no rolling back a rollback. Read `warnings`
+in the JSON and relay anything in it to the user.
+
 `adm-agent upgrade` runs the post-upgrade database migration by default. If
 the user explicitly wants to skip it (rare — only if they're migrating the
 DB separately themselves), add `--no-migrate`; the default is equivalent to

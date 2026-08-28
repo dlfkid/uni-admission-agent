@@ -181,7 +181,7 @@ def _step_rollback(
     layout: InstallLayout, args: argparse.Namespace, base: str, home: Path
 ) -> str | None:
     """Run ``upgrade --rollback`` and confirm it returned to the old version."""
-    back = _run(layout, ["upgrade", "--rollback", "--json"], base, home)
+    back = _run(layout, ["upgrade", "--rollback", "--no-migrate", "--json"], base, home)
     if back.returncode != 0:
         return f"rollback exited {back.returncode}: {back.stdout} {back.stderr}"
     payload, err = _load_json(back.stdout)

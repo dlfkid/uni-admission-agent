@@ -413,12 +413,17 @@ def test_prune_falls_back_to_newest_other_version_when_previous_is_unknown(
 # ── manual rollback (spec §3.2 retention) ─────────────────────────────
 
 
+def _quiet_post_check(_layout: InstallLayout, _migrate: bool) -> list[str]:
+    """A post-check that passes, so rollback tests assert on retention only."""
+    return []
+
+
 def test_manual_rollback_keeps_the_version_rolled_back_from(tmp_path: Path) -> None:
     layout = _install(tmp_path)
     _run(layout, tmp_path)
     assert layout.active_version() == "v0.11.0"
 
-    result = rollback(layout)
+    result = rollback(layout, post_check=_quiet_post_check)
     assert result.action_taken == "rolled_back"
     assert layout.active_version() == "v0.10.0"
     # Retained so the user can move forward again without re-downloading.
@@ -428,7 +433,7 @@ def test_manual_rollback_keeps_the_version_rolled_back_from(tmp_path: Path) -> N
 def test_rollback_without_a_previous_version_errors(tmp_path: Path) -> None:
     layout = _install(tmp_path)
     with pytest.raises(UpgradeError, match="no previous version"):
-        rollback(layout)
+        rollback(layout, post_check=_quiet_post_check)
 
 
 def test_rollback_never_rolls_forward_onto_a_retained_newer_version(
@@ -442,12 +447,84 @@ def test_rollback_never_rolls_forward_onto_a_retained_newer_version(
     """
     layout = _install(tmp_path)
     _run(layout, tmp_path)
-    rollback(layout)
+    rollback(layout, post_check=_quiet_post_check)
     assert layout.active_version() == "v0.10.0"
 
     with pytest.raises(UpgradeError, match="no previous version"):
-        rollback(layout)
+        rollback(layout, post_check=_quiet_post_check)
     assert layout.active_version() == "v0.10.0"
+
+
+# ── rollback re-runs the §6.3 post-check, warn-only (spec §5) ─────────
+
+
+def test_rollback_runs_the_post_check_on_the_restored_version(
+    tmp_path: Path,
+) -> None:
+    """Spec §5: rolling back across a schema migration must still attempt
+    db-migrate / repair --auto rather than leaving an old binary pointed at
+    a newer database."""
+    layout = _install(tmp_path)
+    _run(layout, tmp_path)
+    seen: list[tuple[str, bool]] = []
+
+    def recording(active_layout: InstallLayout, migrate: bool) -> list[str]:
+        seen.append((active_layout.active_version() or "", migrate))
+        return ["migration ran"]
+
+    result = rollback(layout, post_check=recording)
+
+    # Ran once, after the repoint, against the version rolled back *to*.
+    assert seen == [("v0.10.0", True)]
+    assert "migration ran" in result.warnings
+
+
+def test_rollback_honours_no_migrate(tmp_path: Path) -> None:
+    layout = _install(tmp_path)
+    _run(layout, tmp_path)
+    seen: list[bool] = []
+
+    def recording(_layout: InstallLayout, migrate: bool) -> list[str]:
+        seen.append(migrate)
+        return []
+
+    rollback(layout, migrate=False, post_check=recording)
+    assert seen == [False]
+
+
+def test_rollback_post_check_failure_is_a_warning_not_an_undo(
+    tmp_path: Path,
+) -> None:
+    """Controller ruling: warn-only. There is no rolling back a rollback —
+    the version just left is the one the user is escaping — so a failing
+    post-check must never re-point forward."""
+    layout = _install(tmp_path)
+    _run(layout, tmp_path)
+
+    def failing(_layout: InstallLayout, _migrate: bool) -> list[str]:
+        raise UpgradeError("db-migrate could not downgrade the schema")
+
+    result = rollback(layout, post_check=failing)
+
+    assert result.action_taken == "rolled_back"
+    assert result.active_version == "v0.10.0"
+    assert layout.active_version() == "v0.10.0"
+    assert result.exit_code == int(ExitCode.OK)
+    assert any("db-migrate could not downgrade" in w for w in result.warnings)
+
+
+def test_rollback_survives_an_untyped_post_check_exception(tmp_path: Path) -> None:
+    """post_check shells out; any leaked exception must still be a warning."""
+    layout = _install(tmp_path)
+    _run(layout, tmp_path)
+
+    def exploding(_layout: InstallLayout, _migrate: bool) -> list[str]:
+        raise RuntimeError("boom")
+
+    result = rollback(layout, post_check=exploding)
+
+    assert layout.active_version() == "v0.10.0"
+    assert any("boom" in w for w in result.warnings)
 
 
 # ── default_post_check (spec §6.3 — Important 4) ────────────────────────

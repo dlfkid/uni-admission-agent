@@ -1526,7 +1526,8 @@ def upgrade(
 
     try:
         if rollback_to_previous:
-            result = rollback(default_install_layout())
+            # Spec §5: the rollback re-runs the §6.3 post-check, warn-only.
+            result = rollback(default_install_layout(), migrate=migrate)
         elif check_only:
             result = check_for_updates()
         else:

@@ -387,14 +387,30 @@ def _stage_failed(
     return _blocked(result, reason, code, str(exc))
 
 
-def rollback(layout: InstallLayout) -> UpgradeResult:
+def rollback(
+    layout: InstallLayout,
+    *,
+    migrate: bool = True,
+    post_check: Callable[[InstallLayout, bool], list[str]] | None = None,
+) -> UpgradeResult:
     """Repoint to the newest retained version older than the active one.
 
     Deliberately not just "any other installed version": after a manual
     rollback, a *newer* version is typically still retained on disk so the
     user can move forward again without re-downloading (spec §3.2) — a
     second ``rollback()`` call must not roll *forward* onto it.
+
+    Spec §5 requires the §6.3 post-check to run after the repoint, so that
+    rolling back across a schema migration still attempts ``db-migrate``
+    and its ``repair --auto`` fallback instead of silently leaving an old
+    binary pointed at a newer database.
+
+    The post-check here is **warn-only**, unlike the upgrade path: a
+    failure cannot undo the repoint, because there is no rolling back a
+    rollback — the version just left is the one the user is escaping. All
+    failures are surfaced as warnings on the result instead.
     """
+    post_check = post_check or default_post_check
     active = layout.active_version()
     active_parsed = parse_tag(active) if active else None
 
@@ -415,12 +431,21 @@ def rollback(layout: InstallLayout) -> UpgradeResult:
 
     layout.activate(older)
     layout.ensure_entrypoint()
-    return UpgradeResult(
+    result = UpgradeResult(
         current_version=active or "",
         action_taken="rolled_back",
         active_version=older,
         previous_version=active or "",
     )
+
+    try:
+        result.warnings.extend(post_check(layout, migrate))
+    except Exception as exc:  # pylint: disable=broad-except
+        result.warnings.append(
+            "Post-rollback check failed. The rollback itself stands — "
+            f"{older} is active — but verify the database before continuing: {exc}"
+        )
+    return result
 
 
 def _blocked(
