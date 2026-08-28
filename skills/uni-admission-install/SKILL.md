@@ -125,10 +125,30 @@ hazard `perform_upgrade` refuses a same-version `--force` for. Unpack into a
 scratch directory, verify it, and only then move it into place.
 
 ```bash
+set -e
 mkdir -p ~/.uni-agent/versions ~/.uni-agent/bin
+TARGET=~/.uni-agent/versions/${VERSION}
 STAGE=~/.uni-agent/versions/.incoming-$$
-rm -rf "$STAGE" && mkdir -p "$STAGE"
+BACKUP=~/.uni-agent/versions/${VERSION}.replaced-$$
 
+# The Windows archive's entry point is adm-agent.exe, not adm-agent.
+case "$EXT" in zip) EXE=adm-agent.exe ;; *) EXE=adm-agent ;; esac
+
+# If anything below fails — including the second move — put the old install
+# back before exiting. Without this, a failed placement leaves the pointer
+# aimed at a directory that no longer exists and the only working copy
+# sitting under a scratch name.
+restore() {
+  rc=$?
+  rm -rf "$STAGE"
+  if [ -d "$BACKUP" ] && [ ! -d "$TARGET" ]; then
+    mv "$BACKUP" "$TARGET" && echo "placement failed — previous install restored"
+  fi
+  exit $rc
+}
+trap restore EXIT
+
+rm -rf "$STAGE" && mkdir -p "$STAGE"
 cd /tmp
 ARTIFACT="adm-agent-${VERSION}-${OS}-${ARCH}.${EXT}"
 curl -fL -o "$ARTIFACT" \
@@ -149,17 +169,18 @@ case "$EXT" in
 esac
 
 # Verify the payload BEFORE it replaces anything.
-test -f "$STAGE/adm-agent" || { echo "extract failed — install untouched"; exit 1; }
-chmod +x "$STAGE/adm-agent" 2>/dev/null || true
+test -f "$STAGE/$EXE"
+chmod +x "$STAGE/$EXE" 2>/dev/null || true
 xattr -dr com.apple.quarantine "$STAGE" 2>/dev/null || true
 
-# Swap into place. The old directory is moved aside, not written through.
-if [ -d ~/.uni-agent/versions/${VERSION} ]; then
-  rm -rf ~/.uni-agent/versions/${VERSION}.replaced-$$
-  mv ~/.uni-agent/versions/${VERSION} ~/.uni-agent/versions/${VERSION}.replaced-$$
+# Swap into place: move the old aside, move the new in, and only then drop
+# the backup. The trap restores it if the second move fails.
+if [ -d "$TARGET" ]; then
+  mv "$TARGET" "$BACKUP"
 fi
-mv "$STAGE" ~/.uni-agent/versions/${VERSION}
-rm -rf ~/.uni-agent/versions/${VERSION}.replaced-$$
+mv "$STAGE" "$TARGET"
+rm -rf "$BACKUP"
+trap - EXIT
 ```
 
 If `${VERSION}` is the currently active version, **make sure the server is

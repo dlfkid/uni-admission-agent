@@ -118,8 +118,31 @@ def test_fresh_install_never_unpacks_over_the_active_version(skill_text: str) ->
     it leaves stale files and, on Windows, a half-updated directory — the very
     hazard perform_upgrade refuses a same-version --force for."""
     assert "tar -xzf \"$ARTIFACT\" -C ~/.uni-agent/versions/${VERSION}" not in skill_text
-    assert 'STAGE=~/.uni-agent/versions/.incoming-$$' in skill_text
-    # The payload is checked before anything is replaced.
-    assert 'test -f "$STAGE/adm-agent"' in skill_text
-    # The old directory is moved aside rather than written through.
+    assert "STAGE=~/.uni-agent/versions/.incoming-$$" in skill_text
     assert "${VERSION}.replaced-$$" in skill_text
+
+
+def test_fresh_install_checks_the_right_executable_on_each_platform(
+    skill_text: str,
+) -> None:
+    """The Windows archive's entry point is adm-agent.exe. A check hardcoded to
+    the POSIX name fails every Windows install and every legacy migration."""
+    assert "case \"$EXT\" in zip) EXE=adm-agent.exe ;; *) EXE=adm-agent ;; esac" in skill_text
+    assert 'test -f "$STAGE/$EXE"' in skill_text
+    # ...and nothing still hardcodes the POSIX name for the check.
+    assert 'test -f "$STAGE/adm-agent"' not in skill_text
+
+
+def test_fresh_install_restores_the_backup_if_placement_fails(
+    skill_text: str,
+) -> None:
+    """Between moving the old directory aside and moving the new one in there
+    is a window with no valid target — spec §3.3 rejected exactly this shape.
+    A trap must put the backup back, and the backup must only be deleted once
+    the new directory is actually in place."""
+    assert "trap restore EXIT" in skill_text
+    assert 'if [ -d "$BACKUP" ] && [ ! -d "$TARGET" ]; then' in skill_text
+    # The delete comes after the placement, never before it.
+    place = skill_text.index('mv "$STAGE" "$TARGET"')
+    drop = skill_text.index('rm -rf "$BACKUP"')
+    assert place < drop
