@@ -140,9 +140,21 @@ case "$EXT" in zip) EXE=adm-agent.exe ;; *) EXE=adm-agent ;; esac
 # sitting under a scratch name.
 restore() {
   rc=$?
+  # `set -e` is still in force inside an EXIT trap, so a failing cleanup here
+  # would abort the handler before the restore below ever ran — on Windows an
+  # AV scanner or file lock makes that a real possibility, and it would leave
+  # TARGET missing with the only working copy under a scratch name.
+  set +e
   rm -rf "$STAGE"
   if [ -d "$BACKUP" ] && [ ! -d "$TARGET" ]; then
-    mv "$BACKUP" "$TARGET" && echo "placement failed — previous install restored"
+    if mv "$BACKUP" "$TARGET"; then
+      echo "placement failed — previous install restored"
+    else
+      echo "CRITICAL: could not restore the previous install." >&2
+      echo "  It is intact at: $BACKUP" >&2
+      echo "  Move it back to: $TARGET" >&2
+      rc=1
+    fi
   fi
   exit $rc
 }

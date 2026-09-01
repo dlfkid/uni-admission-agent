@@ -142,6 +142,13 @@ def test_fresh_install_restores_the_backup_if_placement_fails(
     the new directory is actually in place."""
     assert "trap restore EXIT" in skill_text
     assert 'if [ -d "$BACKUP" ] && [ ! -d "$TARGET" ]; then' in skill_text
+    # `set -e` stays in force inside an EXIT trap, so a failing cleanup would
+    # abort the handler before the restore ran.
+    handler = skill_text[skill_text.index("restore() {"):skill_text.index("trap restore EXIT")]
+    assert "set +e" in handler
+    assert handler.index("set +e") < handler.index('rm -rf "$STAGE"')
+    # A restore that itself fails must be reported, not silently swallowed.
+    assert "CRITICAL: could not restore the previous install." in skill_text
     # The delete comes after the placement, never before it.
     place = skill_text.index('mv "$STAGE" "$TARGET"')
     drop = skill_text.index('rm -rf "$BACKUP"')
