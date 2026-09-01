@@ -10,7 +10,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from src.services.upgrade.layout import InstallLayout
-from src.services.upgrade.locking import LOCK_NAME, install_lock
+from src.services.upgrade.locking import UpgradeInProgressError, install_lock
 from src.services.upgrade.transaction import (
     check_for_updates,
     default_post_check,
@@ -317,10 +317,19 @@ def test_state_is_re_read_inside_the_lock_not_before_it(tmp_path: Path) -> None:
     _assert_user_data_intact(tmp_path)
 
 
+def _lock_is_free(layout: InstallLayout) -> bool:
+    """Releasability, not file absence — the lock file is kept by design."""
+    try:
+        with install_lock(layout.root):
+            return True
+    except UpgradeInProgressError:
+        return False
+
+
 def test_the_lock_is_released_after_a_successful_upgrade(tmp_path: Path) -> None:
     layout = _install(tmp_path)
     assert _run(layout, tmp_path).action_taken == "upgraded"
-    assert not (layout.root / LOCK_NAME).exists()
+    assert _lock_is_free(layout)
 
 
 def test_the_lock_is_released_after_a_failed_upgrade(tmp_path: Path) -> None:
@@ -330,7 +339,21 @@ def test_the_lock_is_released_after_a_failed_upgrade(tmp_path: Path) -> None:
         side_effect=OSError("permission denied"),
     ):
         _run(layout, tmp_path)
-    assert not (layout.root / LOCK_NAME).exists()
+    assert _lock_is_free(layout)
+
+
+def test_rollback_contention_returns_exit_16_not_a_generic_failure(
+    tmp_path: Path,
+) -> None:
+    """The forward path maps lock contention to upgrade_in_progress/16; letting
+    rollback leak the exception would have the CLI's broad handler report a
+    generic exit 1, breaking the stable routing contract §7 documents."""
+    layout = _install(tmp_path)
+    with install_lock(layout.root):
+        result = rollback(layout, migrate=False, post_check=lambda layout, migrate: [])
+    assert result.exit_code == ExitCode.UPGRADE_IN_PROGRESS
+    assert result.blocked_reason == BlockedReason.UPGRADE_IN_PROGRESS
+    assert result.next_action == "wait_for_other_upgrade_then_retry"
 
 
 # ── activation-phase compensation (spec §5 step 6) ────────────────────
@@ -466,6 +489,39 @@ def test_migration_failure_rolls_back_and_deletes_the_bad_version(tmp_path: Path
     assert layout.active_version() == "v0.10.0"
     # An automatically rolled-back version is proven bad; it is removed.
     assert not layout.version_dir("v0.11.0").exists()
+    _assert_user_data_intact(tmp_path)
+
+
+def test_a_failing_post_check_rollback_still_returns_a_structured_result(
+    tmp_path: Path,
+) -> None:
+    """The automatic rollback can itself fail on permissions, a full disk or an
+    AV lock. Unguarded, that raw exception escaped every structured result:
+    the CLI reported a generic exit 1 instead of post_check_failed, and the
+    new version was left active with no indication of the mixed state."""
+    layout = _install(tmp_path)
+    calls = {"n": 0}
+    real_activate = InstallLayout.activate
+
+    def forward_ok_restore_fails(self, version):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return real_activate(self, version)
+        raise OSError("permission denied")
+
+    def failing_post_check(layout, migrate):
+        raise UpgradeError("migration failed and repair --auto could not fix it")
+
+    with patch.object(InstallLayout, "activate", forward_ok_restore_fails):
+        result = _run(layout, tmp_path, post_check=failing_post_check)
+
+    assert result.exit_code == ExitCode.POST_CHECK_FAILED
+    assert result.blocked_reason == BlockedReason.POST_CHECK_FAILED
+    assert result.action_taken == "blocked"
+    assert result.next_action == "rollback_then_inspect"
+    assert any("rollback did not complete" in w for w in result.warnings)
+    # The new version stays: it is what the user has to recover from.
+    assert layout.version_dir("v0.11.0").exists()
     _assert_user_data_intact(tmp_path)
 
 
