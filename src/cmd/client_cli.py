@@ -27,10 +27,16 @@ from src.client.config import (
 from src.client.native_browser import fetch_browser_payload
 from src.client.runtime import ClientRuntime
 from src.services.upgrade import (
-    check_for_updates_for_artifact,
+    ExitCode,
+    check_for_updates,
+    default_client_layout,
+    default_client_pid_file,
     get_current_version,
     get_platform_info,
-    upgrade_artifact,
+    is_frozen,
+    is_process_alive,
+    perform_upgrade,
+    rollback,
 )
 
 
@@ -74,25 +80,25 @@ def _remove_client_pid_file() -> None:
         pass
 
 
-def _print_upgrade_check(update_info: dict) -> None:
-    if "error" in update_info:
-        typer.echo(f"❌ Failed to check for updates: {update_info['error']}", err=True)
-        raise typer.Exit(code=1)
-
-    typer.echo(f"📋 Current version: {update_info['current_version']}")
-    typer.echo(f"📋 Latest version:  {update_info['latest_version']}")
-
-    if not update_info.get("is_newer"):
+def _emit_client(result, as_json: bool) -> None:
+    if as_json:
+        typer.echo(json.dumps(result.to_json_dict(), ensure_ascii=False, indent=2))
+        return
+    typer.echo(f"📋 Current version: {result.current_version}")
+    if result.latest_version:
+        typer.echo(f"📋 Latest version:  {result.latest_version}")
+    if result.action_taken == "upgraded":
+        typer.echo(f"🎉 Upgraded to {result.active_version}.")
+    elif result.action_taken == "rolled_back":
+        typer.echo(f"↩️  Rolled back to {result.active_version}.", err=True)
+    elif result.action_taken == "blocked":
+        typer.echo("⚠️  Upgrade did not run.", err=True)
+    elif result.is_newer:
+        typer.echo("🎯 Update available! Run 'adm-agent-client upgrade' to install it.")
+    else:
         typer.echo("✅ Already on latest version.")
-        return
-    if update_info.get("asset_available"):
-        typer.echo("🎯 Update available! Run 'adm-agent-client upgrade' to install.")
-        return
-
-    typer.echo("⚠️  Update available but no compatible client asset found.")
-    release_url = update_info.get("release_url")
-    if release_url:
-        typer.echo(f"   Manual download: {release_url}")
+    for warning in result.warnings:
+        typer.echo(f"   • {warning}", err=result.exit_code != 0)
 
 
 @app.command()
@@ -210,15 +216,15 @@ def start_install() -> None:
 
     existing_pid = _read_client_pid_file()
     if existing_pid is not None:
-        try:
-            os.kill(existing_pid, 0)
+        # `is_process_alive`, never `os.kill(pid, 0)`: on Windows os.kill
+        # terminates the target rather than probing it.
+        if is_process_alive(existing_pid):
             typer.echo(
                 f"⚠️  Client already running (PID {existing_pid}). "
                 "Stop it first with: adm-agent-client stop"
             )
             raise typer.Exit(code=1)
-        except (ProcessLookupError, OSError):
-            _remove_client_pid_file()
+        _remove_client_pid_file()
 
     cmd = _build_client_base_cmd() + ["start", "--continuous"]
 
@@ -253,9 +259,9 @@ def stop(
         typer.echo(f"   Checked: {pid_file} (not present)")
         raise typer.Exit(code=0)
 
-    try:
-        os.kill(pid, 0)
-    except (ProcessLookupError, OSError):
+    # Probing must never terminate the target, which `os.kill(pid, 0)` would
+    # do on Windows.
+    if not is_process_alive(pid):
         typer.echo(f"ℹ️  Client process (PID {pid}) is not running. Removing stale PID file.")
         _remove_client_pid_file()
         raise typer.Exit(code=0)
@@ -274,12 +280,27 @@ def stop(
 @app.command()
 def version(
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Show detailed version info"),
+    as_json: bool = typer.Option(False, "--json", help="Machine-readable output"),
 ) -> None:
     """Display current client version information."""
     try:
         current = get_current_version()
+        os_name, arch_name = get_platform_info()
+
+        if as_json:
+            typer.echo(
+                json.dumps(
+                    {
+                        "version": current,
+                        "platform": f"{os_name}-{arch_name}",
+                        "executable": sys.executable,
+                    },
+                    ensure_ascii=False,
+                )
+            )
+            return
+
         if verbose:
-            os_name, arch_name = get_platform_info()
             typer.echo(f"adm-agent-client {current}")
             typer.echo(f"Platform: {os_name}-{arch_name}")
             typer.echo(f"Python: {sys.version}")
@@ -293,35 +314,51 @@ def version(
 
 @app.command()
 def upgrade(
-    check_only: bool = typer.Option(False, "--check", help="Only check for updates, do not install"),
-    force: bool = typer.Option(False, "--force", help="Force upgrade even if already latest version"),
-    verbose: bool = typer.Option(False, "--verbose", "-v", help="Show detailed upgrade logs"),
+    check_only: bool = typer.Option(False, "--check", help="Only check, don't install"),
+    force: bool = typer.Option(False, "--force", help="Install even if not newer"),
+    rollback_to_previous: bool = typer.Option(
+        False, "--rollback", help="Return to the previously installed version"
+    ),
+    as_json: bool = typer.Option(False, "--json", help="Machine-readable output"),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Debug logging"),
 ) -> None:
-    """Check for and install client updates from GitHub releases."""
-    try:
-        update_info = check_for_updates_for_artifact(
-            artifact_name="adm-agent-client",
-            verbose=verbose,
-        )
-        if check_only:
-            _print_upgrade_check(update_info)
-            return
+    """Check for, install, or undo client updates."""
+    if verbose:
+        _configure_client_logging()
 
-        upgraded = upgrade_artifact(
-            artifact_name="adm-agent-client",
-            force=force,
-            verbose=verbose,
-        )
-        if not upgraded:
-            typer.echo("ℹ️  No upgrade needed.")
-            return
-        typer.echo("🎉 Upgrade completed successfully!")
-        typer.echo("ℹ️  Restart the client if it is currently running.")
-    except typer.Exit:
-        raise
-    except Exception as exc:
-        typer.echo(f"❌ Upgrade failed: {exc}", err=True)
-        raise typer.Exit(code=1)
+    try:
+        if rollback_to_previous:
+            # migrate=False: the client has no database (mirrors the
+            # forward path below). default_post_check is a no-op for a
+            # non-"adm-agent" artifact anyway.
+            result = rollback(default_client_layout(), migrate=False)
+        elif check_only:
+            result = check_for_updates(artifact_name="adm-agent-client")
+        else:
+            result = perform_upgrade(
+                default_client_layout(),
+                artifact_name="adm-agent-client",
+                force=force,
+                migrate=False,  # the client has no database
+                frozen=is_frozen(),
+                # The client's own PID file — a running *server* is unrelated
+                # to a client upgrade and must not block it.
+                pid_file=default_client_pid_file(),
+                health_url="",  # no health endpoint; PID liveness is the signal
+            )
+    except Exception as exc:  # noqa: BLE001 - surfaced as exit code 1
+        if as_json:
+            typer.echo(
+                json.dumps({"action_taken": "blocked", "blocked_reason": "unexpected",
+                            "warnings": [str(exc)]}, ensure_ascii=False)
+            )
+        else:
+            typer.echo(f"❌ Upgrade failed: {exc}", err=True)
+        raise typer.Exit(code=int(ExitCode.UNEXPECTED))
+
+    _emit_client(result, as_json)
+    if result.exit_code != int(ExitCode.OK):
+        raise typer.Exit(code=result.exit_code)
 
 
 @app.command("bootstrap")

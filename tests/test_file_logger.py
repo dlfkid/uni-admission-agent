@@ -29,13 +29,29 @@ class TestResolveLogDir:
         result = resolve_log_dir()
         assert result == get_data_dir() / "logs"
 
-    def test_returns_executable_parent_in_frozen_mode(self, monkeypatch):
-        """Frozen mode returns parent directory of sys.executable."""
+    def test_frozen_mode_logs_to_the_data_dir_not_the_version_dir(
+        self, monkeypatch, tmp_path
+    ):
+        """Frozen mode must resolve to ``<data dir>/logs``, never
+        ``Path(sys.executable).parent``.
+
+        Under the versioned install layout the executable's parent is
+        ``versions/<v>/``, which ``prune()`` deletes after a successful
+        upgrade and which the transaction ``rmtree``s on a post-check
+        failure — taking with it the very logs the reported
+        ``next_action="inspect_logs_then_retry"`` asks the agent to read.
+        """
         monkeypatch.setattr(sys, "frozen", True, raising=False)
-        fake_exe = Path("/opt/myapp/bin/server")
-        monkeypatch.setattr(sys, "executable", str(fake_exe))
+        version_dir = tmp_path / "versions" / "v0.11.0"
+        version_dir.mkdir(parents=True)
+        monkeypatch.setattr(sys, "executable", str(version_dir / "adm-agent"))
+        monkeypatch.setattr("src.core.file_logger.get_data_dir", lambda: tmp_path)
+
         result = resolve_log_dir()
-        assert result == Path("/opt/myapp/bin")
+
+        assert result == tmp_path / "logs"
+        assert version_dir not in result.parents
+        assert result != version_dir
 
 
 class TestSetupFileLogging:

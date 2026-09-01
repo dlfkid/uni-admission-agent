@@ -11,7 +11,6 @@ from pathlib import Path
 from typing import Optional, Union
 
 import httpx
-import pymupdf4llm
 from pydantic import BaseModel, Field
 
 from src.core.environment import PDFProcessingError
@@ -127,7 +126,15 @@ class PDFProcessor:
         page_limit: int,
     ) -> PDFConversionResult:
         """Convert a local PDF file to Markdown."""
+        # Imported lazily: pymupdf4llm prints a stdout notice
+        # ("Consider using the pymupdf_layout package...") the first time it
+        # is imported anywhere in the process. An eager top-level import
+        # made that notice appear ahead of every `adm-agent ... --json`
+        # invocation, corrupting the "prints JSON and nothing else"
+        # contract that the upgrade staged-binary check and the release
+        # gate (scripts/verify_upgrade.py) both parse as pure JSON.
         import pymupdf
+        import pymupdf4llm
 
         try:
             # Open to check page count

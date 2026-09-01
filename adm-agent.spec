@@ -28,6 +28,8 @@ _COLLECT_PKGS = [
     "typer",
     "click",
     "rich",
+    # --- Version comparison (upgrade) ---
+    "packaging",
     # --- FastAPI / ASGI ---
     "fastapi",
     "starlette",
