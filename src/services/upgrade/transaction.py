@@ -316,12 +316,29 @@ def perform_upgrade(
             # `previous != new_version` is guaranteed by the same-version refusal
             # above; only "no previous version at all" (a first-ever install)
             # reaches the else branch.
+            next_action = "inspect_logs_then_retry"
             if previous:
-                layout.activate(previous)
-                layout.ensure_entrypoint()
-                shutil.rmtree(target, ignore_errors=True)
-                result.action_taken = "rolled_back"
-                result.previous_version = new_version
+                # The rollback itself can fail — permissions, a full disk, an
+                # AV lock — and an unguarded activate() here would throw the
+                # raw exception past every structured result, leaving the new
+                # version active and the CLI reporting a generic exit 1
+                # instead of post_check_failed.
+                pointer_restored, _ = _restore_pointer(layout, previous, result)
+                if pointer_restored:
+                    shutil.rmtree(target, ignore_errors=True)
+                    result.action_taken = "rolled_back"
+                    result.previous_version = new_version
+                else:
+                    # Mixed state: the new version is still active and its
+                    # directory is kept, because that is what the user has to
+                    # recover from.
+                    result.action_taken = "blocked"
+                    result.previous_version = ""
+                    next_action = "rollback_then_inspect"
+                    result.warnings.append(
+                        "Post-check failed and the rollback did not complete; "
+                        "the new version is still active and was kept."
+                    )
             else:
                 # A first-ever install has nothing to roll back to. Leave it
                 # active and warn plainly rather than falsely claiming a rollback.
@@ -332,7 +349,7 @@ def perform_upgrade(
                     "roll back to; the new version remains active."
                 )
             result.blocked_reason = BlockedReason.POST_CHECK_FAILED
-            result.next_action = "inspect_logs_then_retry"
+            result.next_action = next_action
             result.exit_code = int(ExitCode.POST_CHECK_FAILED)
             result.active_version = layout.active_version() or ""
             result.warnings.append(str(exc))
@@ -603,6 +620,11 @@ def rollback(
     failure cannot undo the repoint, because there is no rolling back a
     rollback — the version just left is the one the user is escaping. All
     failures are surfaced as warnings on the result instead.
+
+    Lock contention returns the same structured refusal the forward path
+    returns — ``upgrade_in_progress`` / exit 16 — rather than escaping to the
+    CLI's broad handler, which would report a generic exit 1 and break the
+    stable routing contract §7 and the skill both document.
     """
     post_check = post_check or default_post_check
 
@@ -611,6 +633,25 @@ def rollback(
     # upgrade that is mid-activation. The target is chosen *inside* the lock
     # for the same reason: choosing it first would let a concurrent upgrade
     # change what "active" and "newest older" mean before the repoint lands.
+    try:
+        return _rollback_locked(layout, migrate, post_check)
+    except UpgradeInProgressError as exc:
+        result = UpgradeResult(current_version=get_current_version())
+        result.next_action = "wait_for_other_upgrade_then_retry"
+        return _blocked(
+            result,
+            BlockedReason.UPGRADE_IN_PROGRESS,
+            ExitCode.UPGRADE_IN_PROGRESS,
+            str(exc),
+        )
+
+
+def _rollback_locked(
+    layout: InstallLayout,
+    migrate: bool,
+    post_check: Callable[[InstallLayout, bool], list[str]],
+) -> UpgradeResult:
+    """The locked half of :func:`rollback`."""
     with install_lock(layout.root):
         active = layout.active_version()
         older = _select_rollback_target(layout, active)
