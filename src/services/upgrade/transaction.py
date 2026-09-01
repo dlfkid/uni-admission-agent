@@ -316,8 +316,14 @@ def perform_upgrade(
             # `previous != new_version` is guaranteed by the same-version refusal
             # above; only "no previous version at all" (a first-ever install)
             # reaches the else branch.
+            # `mixed_state`, not `rollback_failed`: what decides the exit code
+            # is whether the install ended up on a known-good version, not why
+            # it did not. "The rollback errored" and "there was nothing to roll
+            # back to" leave the user in the same place — new version active,
+            # post-check failed — and both must be kept apart from 13, which
+            # tells the agent the user is back on a working version.
             next_action = "inspect_logs_then_retry"
-            rollback_failed = False
+            mixed_state = False
             if previous:
                 # The rollback itself can fail — permissions, a full disk, an
                 # AV lock — and an unguarded activate() here would throw the
@@ -340,28 +346,34 @@ def perform_upgrade(
                     result.action_taken = "blocked"
                     result.previous_version = ""
                     next_action = "rollback_then_inspect"
-                    rollback_failed = True
+                    mixed_state = True
                     result.warnings.append(
                         "Post-check failed and the rollback did not complete; "
                         "the new version is still active and was kept."
                     )
             else:
-                # A first-ever install has nothing to roll back to. Leave it
-                # active and warn plainly rather than falsely claiming a rollback.
+                # A first-ever install has nothing to roll back to. The new
+                # version stays active with a failed post-check, so this is a
+                # mixed state too — reporting 13 here would tell the agent the
+                # user had been returned to a working version when there has
+                # never been one. `--rollback` is not the remedy either: there
+                # is nothing behind this install to return to.
                 result.action_taken = "blocked"
                 result.previous_version = ""
+                mixed_state = True
                 result.warnings.append(
-                    "Post-check failed but there is no previous version to "
-                    "roll back to; the new version remains active."
+                    "Post-check failed and there is no previous version to roll "
+                    "back to; the new version remains active. Fix the reported "
+                    "problem and run the upgrade again."
                 )
             result.blocked_reason = (
                 BlockedReason.ROLLBACK_FAILED
-                if rollback_failed
+                if mixed_state
                 else BlockedReason.POST_CHECK_FAILED
             )
             result.next_action = next_action
             result.exit_code = int(
-                ExitCode.ROLLBACK_FAILED if rollback_failed else ExitCode.POST_CHECK_FAILED
+                ExitCode.ROLLBACK_FAILED if mixed_state else ExitCode.POST_CHECK_FAILED
             )
             result.active_version = layout.active_version() or ""
             result.warnings.append(str(exc))

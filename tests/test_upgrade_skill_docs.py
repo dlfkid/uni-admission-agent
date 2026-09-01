@@ -165,5 +165,10 @@ def test_the_skill_routes_rollback_failure_apart_from_a_completed_rollback(
     thirteen = skill_text[skill_text.index("| `13` |") :].split("\n")[0]
     seventeen = skill_text[skill_text.index("| `17` |") :].split("\n")[0]
     assert "back on the working version" in thirteen
-    assert "mixed state" in seventeen
+    assert "Mixed state" in seventeen
     assert "not** tell the user they recovered" in seventeen
+    # 17 covers both "the rollback failed" and "there was nothing to roll back
+    # to"; the remedy differs, so the row must send the agent to next_action
+    # rather than unconditionally offering --rollback.
+    assert "rollback_then_inspect" in seventeen
+    assert "inspect_logs_then_retry" in seventeen

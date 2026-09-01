@@ -531,29 +531,35 @@ def test_a_failing_post_check_rollback_still_returns_a_structured_result(
     _assert_user_data_intact(tmp_path)
 
 
-def test_post_check_failure_with_no_previous_version_blocks_without_rollback(
+def test_no_previous_version_to_roll_back_to_is_not_reported_as_recovered(
     tmp_path: Path,
 ) -> None:
-    """A first-ever install has nothing to roll back to."""
+    """A first-ever install whose post-check fails ends up with the new version
+    active and nothing to return to. That is the same user-visible state as a
+    failed rollback, so it must not report 13 — the skill routes on the exit
+    code alone and 13 means the user is back on a working version.
+
+    `--rollback` is not the remedy here either: there is nothing behind this
+    install to return to, so next_action stays "inspect_logs_then_retry".
+    """
     layout = InstallLayout(root=tmp_path, windows=False)
     (tmp_path / ".env").write_text("DEEPSEEK_API_KEY=secret\n")
     (tmp_path / "admission.db").write_bytes(b"SQLite format 3\x00")
+    assert layout.active_version() is None  # nothing installed yet
 
     def failing_post_check(layout, migrate):
         raise UpgradeError("migration failed and repair --auto could not fix it")
 
-    result = _run(
-        layout,
-        tmp_path,
-        current_version="v0.0.0-dev",
-        post_check=failing_post_check,
-    )
-    assert result.exit_code == ExitCode.POST_CHECK_FAILED
+    result = _run(layout, tmp_path, post_check=failing_post_check)
+
+    assert result.exit_code == ExitCode.ROLLBACK_FAILED
+    assert result.exit_code != ExitCode.POST_CHECK_FAILED
+    assert result.blocked_reason == BlockedReason.ROLLBACK_FAILED
     assert result.action_taken == "blocked"
-    assert result.blocked_reason == BlockedReason.POST_CHECK_FAILED
-    # Nothing to roll back to: the new version stays active.
+    # No previous version exists, so --rollback would fail; don't suggest it.
+    assert result.next_action == "inspect_logs_then_retry"
     assert layout.active_version() == "v0.11.0"
-    assert any("no previous version" in w.lower() for w in result.warnings)
+    assert any("no previous version to roll back to" in w for w in result.warnings)
     _assert_user_data_intact(tmp_path)
 
 
