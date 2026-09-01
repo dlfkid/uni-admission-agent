@@ -5,6 +5,16 @@ on:
     tags:
       - 'v*'
   workflow_dispatch:
+    inputs:
+      version:
+        description: >-
+          Version to build, e.g. v0.11.0-rc1. Leave blank to derive it from
+          git describe. Required to be PEP 440-parseable: the upgrade path
+          runs every version through packaging (spec §4), so a raw
+          'v0.10.0-44-g8349299' would fail the gate with InvalidVersion
+          rather than exercising it.
+        required: false
+        type: string
 
 permissions:
   contents: write
@@ -32,6 +42,8 @@ jobs:
         run: pip install uv
 
       - name: Build Extension Artifact
+        env:
+          ADM_AGENT_BUILD_VERSION: ${{ inputs.version }}
         run: |
           uv run python scripts/build_dist.py --extension-only
 
@@ -64,7 +76,9 @@ jobs:
       - name: Install dependencies
         run: uv sync --frozen
 
-      - name: Build Backend Artifact  
+      - name: Build Backend Artifact
+        env:
+          ADM_AGENT_BUILD_VERSION: ${{ inputs.version }}
         run: |
           uv run python scripts/build_dist.py --backend-only
 
@@ -101,6 +115,8 @@ jobs:
         run: uv sync --frozen
 
       - name: Build Client Artifact
+        env:
+          ADM_AGENT_BUILD_VERSION: ${{ inputs.version }}
         run: |
           uv run python scripts/build_dist.py --client-only
 

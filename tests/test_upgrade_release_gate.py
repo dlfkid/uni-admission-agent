@@ -249,3 +249,68 @@ def test_the_gate_argv_is_accepted_by_the_cli_it_targets(
         # accepted the argv and the command actually ran.
         assert result.exit_code != 2, f"{artifact_name}: {argv} -> {result.output}"
         assert "No such option" not in result.output
+
+
+# ── building from a non-tag ref (workflow_dispatch) ───────────────────
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "v0.10.0-44-g8349299",   # the shape this repo's HEAD produces today
+        "v0.7.5-alpha-2-gdeadbee",
+        "v1.0.0-rc1-3-gabc1234",
+    ],
+)
+def test_describe_output_is_normalised_into_a_parseable_version(raw: str) -> None:
+    """`git describe` output is not PEP 440. The upgrade path runs every
+    version through packaging (spec §4), so a build from a non-tag ref — what
+    workflow_dispatch on a branch produces — failed the gate with
+    InvalidVersion instead of exercising it, leaving no manual way to run the
+    workflow before merging.
+    """
+    from packaging.version import Version
+
+    from scripts.build_dist import normalise_describe
+
+    import re
+
+    normalised = normalise_describe(raw)
+    parsed = Version(normalised.lstrip("v"))  # must not raise
+    # "N commits past the tag" sorts after the tag itself — and the tag is
+    # everything before the trailing "-<distance>-g<sha>", not the first
+    # hyphen-separated chunk (v0.7.5-alpha is one tag, not two parts).
+    base = re.sub(r"-\d+-g[0-9a-f]+$", "", raw)
+    assert parsed > Version(base.lstrip("v"))
+
+
+def test_a_plain_tag_is_left_alone() -> None:
+    from scripts.build_dist import normalise_describe
+
+    assert normalise_describe("v0.10.0") == "v0.10.0"
+    assert normalise_describe("v0.7.5-alpha") == "v0.7.5-alpha"
+
+
+def test_the_build_version_override_wins_and_keeps_the_v_prefix(monkeypatch) -> None:
+    """The gate globs '<name>-v*', so a bare '0.11.0' would build artifacts it
+    cannot find."""
+    from scripts.build_dist import get_version
+
+    monkeypatch.setenv("ADM_AGENT_BUILD_VERSION", "0.11.0-rc1")
+    assert get_version() == "v0.11.0-rc1"
+    monkeypatch.setenv("ADM_AGENT_BUILD_VERSION", "v0.11.0-rc1")
+    assert get_version() == "v0.11.0-rc1"
+
+
+def test_workflow_dispatch_can_supply_a_version() -> None:
+    """Without this input the only manual entry point for exercising the
+    workflow before merge is unusable on a PR branch."""
+    workflow = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
+    dispatch = workflow[True]["workflow_dispatch"]
+    assert "version" in dispatch["inputs"]
+
+    for job in ("build-extension", "build-backend", "build-client"):
+        build = next(
+            s for s in workflow["jobs"][job]["steps"] if "build_dist.py" in s.get("run", "")
+        )
+        assert build["env"]["ADM_AGENT_BUILD_VERSION"] == "${{ inputs.version }}", job

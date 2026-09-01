@@ -19,6 +19,7 @@ import json
 import logging
 import os
 import platform
+import re
 import shutil
 import subprocess
 import sys
@@ -95,8 +96,37 @@ def _ensure_tool(name: str, install_hint: str) -> None:
         )
 
 
+def normalise_describe(raw: str) -> str:
+    """Turn ``git describe`` output into something PEP 440 can parse.
+
+    ``git describe --tags`` yields ``v0.10.0-44-g8349299`` off a tag, which
+    ``packaging.Version`` rejects. That matters beyond tidiness: the upgrade
+    path runs every version string through ``packaging`` (spec §4), so a
+    build made from a non-tag ref — which is exactly what
+    ``workflow_dispatch`` on a branch produces — fails the release gate with
+    ``InvalidVersion`` instead of exercising it. Rendered as a PEP 440 local
+    version, ``v0.10.0+44.g8349299`` parses and correctly sorts *after*
+    ``v0.10.0``, which is what "44 commits past the tag" means.
+
+    A plain tag is returned unchanged.
+    """
+    match = re.fullmatch(r"(.+)-(\d+)-g([0-9a-f]+)", raw)
+    if not match:
+        return raw
+    tag, distance, sha = match.groups()
+    return f"{tag}+{distance}.g{sha}"
+
+
 def get_version() -> str:
     """Detect version from Env -> Git -> pyproject.toml."""
+    # 0. Explicit override — the supported way to build from a non-tag ref
+    #    (workflow_dispatch) with a version the whole pipeline can parse.
+    override = os.environ.get("ADM_AGENT_BUILD_VERSION")
+    if override:
+        # The release gate globs artifacts as "<name>-v*", so a bare
+        # "0.11.0" here would produce artifacts the gate cannot find.
+        return override if override.startswith("v") else f"v{override}"
+
     # 1. CI Environment
     env_ver = os.environ.get("GITHUB_REF_NAME")
     if env_ver and env_ver.startswith("v"):
@@ -108,7 +138,7 @@ def get_version() -> str:
             ["git", "describe", "--tags"], cwd=PROJECT_ROOT, stderr=subprocess.DEVNULL
         ).decode().strip()
         if git_ver:
-            return git_ver
+            return normalise_describe(git_ver)
     except (subprocess.CalledProcessError, FileNotFoundError):
         pass
 
@@ -181,7 +211,6 @@ def prepare_extension_version(version: str) -> Path:
     
     # Chrome extension version format: up to 4 dot-separated integers (e.g., 0.4.6 or 0.4.6.1)
     # Remove any pre-release identifiers (alpha, beta, rc, etc.)
-    import re
     # Match: digits.digits.digits[.digits] and stop at first non-numeric part
     match = re.match(r'^(\d+(?:\.\d+){0,3})', clean_version)
     if match:
