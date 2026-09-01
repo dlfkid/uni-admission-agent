@@ -472,6 +472,7 @@ Route on the exit code — never parse the prose:
 | `13` | Upgraded then rolled back | The user is back on the working version. Show `warnings`; do not retry blindly. |
 | `14` | Source checkout | Update with `git pull` + `uv sync` instead. |
 | `15` | Legacy layout | One-time migration: run §1 once. `.env` and the database are preserved — say so. |
+| `17` | Upgraded, then the automatic rollback **failed** | The install is in a mixed state: the new version is still active and its directory was kept. Do **not** tell the user they recovered. Show `warnings`, and offer `<artifact> upgrade --rollback`; if that also fails, the previous version's directory is still under `versions/`. |
 | `16` | Another upgrade is already running | Wait for it to finish, then re-run. Do not retry in a tight loop and never delete the lock file by hand — a second upgrade would delete the first one's in-flight download. |
 
 One more shape of `0` to recognise: `action_taken="none"` together with

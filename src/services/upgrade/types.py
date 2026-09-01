@@ -50,6 +50,7 @@ class ExitCode(IntEnum):
     NOT_FROZEN = 14
     LEGACY_LAYOUT = 15
     UPGRADE_IN_PROGRESS = 16
+    ROLLBACK_FAILED = 17
 
 
 class BlockedReason(str):
@@ -64,6 +65,7 @@ class BlockedReason(str):
     NOT_FROZEN = "not_frozen"
     LEGACY_LAYOUT = "legacy_layout"
     UPGRADE_IN_PROGRESS = "upgrade_in_progress"
+    ROLLBACK_FAILED = "rollback_failed"
     UNEXPECTED = "unexpected"
 
 

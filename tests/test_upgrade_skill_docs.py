@@ -153,3 +153,17 @@ def test_fresh_install_restores_the_backup_if_placement_fails(
     place = skill_text.index('mv "$STAGE" "$TARGET"')
     drop = skill_text.index('rm -rf "$BACKUP"')
     assert place < drop
+
+
+def test_the_skill_routes_rollback_failure_apart_from_a_completed_rollback(
+    skill_text: str,
+) -> None:
+    """The skill routes on the exit code alone, so 13 ("you are back on a
+    working version") must not also cover the case where the rollback failed
+    and the install needs a human."""
+    assert "| `17` |" in skill_text
+    thirteen = skill_text[skill_text.index("| `13` |") :].split("\n")[0]
+    seventeen = skill_text[skill_text.index("| `17` |") :].split("\n")[0]
+    assert "back on the working version" in thirteen
+    assert "mixed state" in seventeen
+    assert "not** tell the user they recovered" in seventeen

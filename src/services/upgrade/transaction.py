@@ -317,6 +317,7 @@ def perform_upgrade(
             # above; only "no previous version at all" (a first-ever install)
             # reaches the else branch.
             next_action = "inspect_logs_then_retry"
+            rollback_failed = False
             if previous:
                 # The rollback itself can fail — permissions, a full disk, an
                 # AV lock — and an unguarded activate() here would throw the
@@ -331,10 +332,15 @@ def perform_upgrade(
                 else:
                     # Mixed state: the new version is still active and its
                     # directory is kept, because that is what the user has to
-                    # recover from.
+                    # recover from. This must NOT report 13 — the skill routes
+                    # on the exit code alone and defines 13 as "upgraded then
+                    # rolled back", i.e. the user is back on a working version.
+                    # Saying that here would tell them they had recovered at
+                    # the one moment they need to intervene by hand.
                     result.action_taken = "blocked"
                     result.previous_version = ""
                     next_action = "rollback_then_inspect"
+                    rollback_failed = True
                     result.warnings.append(
                         "Post-check failed and the rollback did not complete; "
                         "the new version is still active and was kept."
@@ -348,9 +354,15 @@ def perform_upgrade(
                     "Post-check failed but there is no previous version to "
                     "roll back to; the new version remains active."
                 )
-            result.blocked_reason = BlockedReason.POST_CHECK_FAILED
+            result.blocked_reason = (
+                BlockedReason.ROLLBACK_FAILED
+                if rollback_failed
+                else BlockedReason.POST_CHECK_FAILED
+            )
             result.next_action = next_action
-            result.exit_code = int(ExitCode.POST_CHECK_FAILED)
+            result.exit_code = int(
+                ExitCode.ROLLBACK_FAILED if rollback_failed else ExitCode.POST_CHECK_FAILED
+            )
             result.active_version = layout.active_version() or ""
             result.warnings.append(str(exc))
             return result
@@ -534,24 +546,35 @@ def _activation_failed(
         shutil.rmtree(target, ignore_errors=True)
 
     result.active_version = layout.active_version() or ""
-    if pointer_restored:
-        result.next_action = "retry_upgrade"
-        message = f"Activation failed and the install was left unchanged: {exc}"
-    else:
+
+    if not pointer_restored:
+        # A mixed state, not an "unchanged" one: exit 17 rather than the
+        # generic 1, so the agent can tell "nothing happened, retry is safe"
+        # apart from "this needs a human".
         result.next_action = "rollback_then_inspect"
-        message = (
+        return _blocked(
+            result,
+            BlockedReason.ROLLBACK_FAILED,
+            ExitCode.ROLLBACK_FAILED,
             f"Activation failed and could not be undone: {exc}. The install is "
             f"in a mixed state — {result.active_version or 'no version'} is "
             "active and the new version directory was kept. Inspect it before "
-            "retrying."
+            "retrying.",
         )
-    if pointer_restored and not entrypoint_rewritten:
+
+    result.next_action = "retry_upgrade"
+    if not entrypoint_rewritten:
         result.warnings.append(
             "The previous version is active again, but rewriting the stable "
             "entry point failed. It still resolves through the restored "
             "pointer; re-run the upgrade to have it rewritten."
         )
-    return _blocked(result, BlockedReason.UNEXPECTED, ExitCode.UNEXPECTED, message)
+    return _blocked(
+        result,
+        BlockedReason.UNEXPECTED,
+        ExitCode.UNEXPECTED,
+        f"Activation failed and the install was left unchanged: {exc}",
+    )
 
 
 def _restore_pointer(
@@ -568,9 +591,13 @@ def _restore_pointer(
             if pointer.exists() or pointer.is_symlink():
                 pointer.unlink()
     except Exception as exc:  # pylint: disable=broad-except
+        # Name the artifact's own command. This path serves the client too,
+        # and telling a client user to run `adm-agent upgrade --rollback`
+        # points them at ~/.uni-agent — a different install from the one in
+        # a mixed state, which they would then roll back by accident.
         result.warnings.append(
             f"Could not restore the previous version after a failed "
-            f"activation: {exc}. Run 'adm-agent upgrade --rollback'."
+            f"activation: {exc}. Run '{layout.artifact_name} upgrade --rollback'."
         )
         return False, False
 

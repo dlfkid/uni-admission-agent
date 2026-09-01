@@ -12,6 +12,7 @@ import pytest
 from src.services.upgrade.layout import InstallLayout
 from src.services.upgrade.locking import UpgradeInProgressError, install_lock
 from src.services.upgrade.transaction import (
+    _restore_pointer,
     check_for_updates,
     default_post_check,
     perform_upgrade,
@@ -24,6 +25,7 @@ from src.services.upgrade.types import (
     ExitCode,
     StagedBinaryError,
     UpgradeError,
+    UpgradeResult,
 )
 
 _HEALTH = "http://127.0.0.1:8910/health"
@@ -445,7 +447,8 @@ def test_a_failed_pointer_restore_is_reported_honestly(tmp_path: Path) -> None:
          patch.object(InstallLayout, "activate", flaky_activate):
         result = _run(layout, tmp_path)
 
-    assert result.exit_code == ExitCode.UNEXPECTED
+    assert result.exit_code == ExitCode.ROLLBACK_FAILED
+    assert result.blocked_reason == BlockedReason.ROLLBACK_FAILED
     assert result.next_action == "rollback_then_inspect"
     assert any("--rollback" in w for w in result.warnings)
     assert any("mixed state" in w for w in result.warnings)
@@ -515,8 +518,11 @@ def test_a_failing_post_check_rollback_still_returns_a_structured_result(
     with patch.object(InstallLayout, "activate", forward_ok_restore_fails):
         result = _run(layout, tmp_path, post_check=failing_post_check)
 
-    assert result.exit_code == ExitCode.POST_CHECK_FAILED
-    assert result.blocked_reason == BlockedReason.POST_CHECK_FAILED
+    # NOT 13: the skill routes on the exit code alone and defines 13 as
+    # "upgraded then rolled back", i.e. the user is back on a working version.
+    assert result.exit_code == ExitCode.ROLLBACK_FAILED
+    assert result.exit_code != ExitCode.POST_CHECK_FAILED
+    assert result.blocked_reason == BlockedReason.ROLLBACK_FAILED
     assert result.action_taken == "blocked"
     assert result.next_action == "rollback_then_inspect"
     assert any("rollback did not complete" in w for w in result.warnings)
@@ -1068,3 +1074,27 @@ def test_a_stale_target_directory_from_an_interrupted_run_is_replaced(
     assert not (stale / "garbage-from-the-killed-run").exists()
     assert not list(layout.versions_dir.glob(".v0.11.0.*"))
     _assert_user_data_intact(tmp_path)
+
+
+def test_the_restore_hint_names_the_artifact_being_upgraded(tmp_path: Path) -> None:
+    """A client user told to run `adm-agent upgrade --rollback` would be
+    pointed at ~/.uni-agent — a different install from the one in a mixed
+    state, which they would then roll back by accident."""
+    layout = InstallLayout(
+        root=tmp_path, artifact_name="adm-agent-client", windows=False
+    )
+    vdir = layout.version_dir("v0.10.0")
+    (vdir / "_internal").mkdir(parents=True)
+    (vdir / "adm-agent-client").write_text("old")
+    layout.activate("v0.10.0")
+
+    result = UpgradeResult()
+    with patch.object(
+        InstallLayout, "activate", side_effect=OSError("permission denied")
+    ):
+        restored, _ = _restore_pointer(layout, "v0.10.0", result)
+
+    assert restored is False
+    hint = next(w for w in result.warnings if "--rollback" in w)
+    assert "adm-agent-client upgrade --rollback" in hint
+    assert "'adm-agent upgrade --rollback'" not in hint
