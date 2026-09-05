@@ -38,10 +38,41 @@ ClientFetch = Callable[..., Tuple[str, str]]
 ApiFetch = Callable[..., str]
 
 
+# Trailing labels that are part of a domain's suffix rather than its name.
+# Two-letter labels are treated as country codes, which covers .hk, .uk, .sg,
+# .au, .cn, .jp and the rest without carrying a full public-suffix list.
+_SUFFIX_LABELS = frozenset({"edu", "ac", "org", "com", "net", "gov", "co", "sch"})
+
+
 def _university_slug(index_url: str) -> str:
-    host = urlsplit(index_url).netloc.lower()
-    parts = [p for p in host.split(".") if p not in ("www", "study", "courses")]
-    return parts[0] if parts else host
+    """Best-effort institution label from *index_url*'s host.
+
+    Taken from the *right*, dropping suffix labels, rather than from the left
+    after a denylist of known prefixes. The left-hand approach only works for
+    hosts whose prefix happens to be listed: ``ar.hkbu.edu.hk`` yielded ``ar``,
+    ``portal.hku.hk`` yielded ``portal``, and — worse — ``gs.cuhk.edu.hk``,
+    ``gs.hsu.edu.hk`` and ``gs.hksyu.edu`` all collapsed to the same ``gs``,
+    so three different universities shared one label.
+
+    This is a display and report label, not a storage key (the crawl path takes
+    the slug from ``--name``), so a best-effort heuristic is appropriate — but
+    it must not collide.
+    """
+    host = urlsplit(index_url).netloc.lower().split(":")[0]
+    labels = [p for p in host.split(".") if p]
+    if not labels:
+        return host
+
+    # Strip at most one ccTLD and then at most one second-level suffix — the
+    # shape of every academic host we handle (edu.hk, ac.uk, edu.sg, edu).
+    # A loop would keep going and eat the institution itself: Lingnan is
+    # literally ``ln``, so ``www.ln.edu.hk`` would strip hk, edu and then ln,
+    # leaving ``www``.
+    if len(labels) > 1 and len(labels[-1]) == 2 and labels[-1].isalpha():
+        labels.pop()
+    if len(labels) > 1 and labels[-1] in _SUFFIX_LABELS:
+        labels.pop()
+    return labels[-1]
 
 
 def _do_fetch(
