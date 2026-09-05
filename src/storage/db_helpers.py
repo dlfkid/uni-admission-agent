@@ -9,10 +9,18 @@ from src.models.admission import StudyMode
 
 
 def _load_env_file(env_file: str) -> bool:
-    """Load one .env with encoding fallbacks. Returns True on success."""
+    """Load one .env with encoding fallbacks. Returns True on success.
+
+    ``override=False``: a variable already in the environment wins over the
+    file. This used to be ``True``, which made ``DATABASE_URL=... adm-agent
+    crawl`` silently do nothing whenever a ``.env`` existed — the README tells
+    users to control the backend with that variable, and they could not. It
+    also disagreed with ``src/agents/factory.py``, which loads the same file
+    with ``override=False`` for the LLM keys.
+    """
     for encoding in ("utf-8-sig", "utf-8", "gb18030"):
         try:
-            load_dotenv(env_file, encoding=encoding, override=True)
+            load_dotenv(env_file, encoding=encoding, override=False)
             return True
         except (UnicodeDecodeError, LookupError):
             continue
