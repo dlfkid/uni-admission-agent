@@ -88,7 +88,7 @@ def _build_system_prompt() -> str:
     return """\
 You are a program crawler.
 
-## For index pages (page_type_hint contains "index" or "auto"):
+## For index pages (page_type_hint is "index"):
 1. Call browser_automation_skill(url=<given URL>, page_type_hint="index").
    The result contains `extracted_programs` — an array of fully structured program dicts.
 2. Call persist_programs_skill ONCE with:
@@ -739,12 +739,12 @@ def build_openai_tools(
             subagent loops to prevent recursive spawning.
         page_type_hint: Controls which tool categories are included.
             ``"detail"`` — minimal: browser + persist only.
-            ``"index"`` or ``"auto"`` — minimal: browser + persist only.
+            ``"index"`` — minimal: browser + persist only.
             ``None`` — all tools (backward compatible, e.g. chat mode).
         auto_paginate: When *True*, replace browser_automation_skill with
             paginated_crawl_skill to force the LLM to use pagination.
     """
-    # For crawl tasks (index/detail/auto), give ONLY essential tools
+    # For crawl tasks (index/detail), give ONLY essential tools
     # to prevent the LLM from wasting iterations on planning/skills/teams.
     _ESSENTIAL_SKILL_NAMES = {
         "browser_automation_skill",

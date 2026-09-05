@@ -50,8 +50,8 @@ class CrawlRequest(BaseModel):
         description="Extra depth for LLM-driven scouting",
     )
     page_type_hint: str = Field(
-        default="auto",
-        description="Page type hint: 'auto', 'index', or 'detail'. Used to skip auto-detection.",
+        default="index",
+        description="Page type: 'index' (default) or 'detail'. The caller decides; there is no detection.",
     )
     limit: Optional[int] = Field(
         default=None, ge=1,
@@ -202,8 +202,8 @@ class AgentRunRequest(BaseModel):
     univ_slug: str = Field(description="University slug (a-z0-9-)")
     year: int = Field(description="Academic year (e.g. 2026)")
     page_type_hint: str = Field(
-        default="auto",
-        description="Page type hint: auto/index/detail",
+        default="index",
+        description="Page type: index (default) or detail",
     )
     limit: Optional[int] = Field(
         default=None, ge=1,
@@ -282,8 +282,10 @@ class AnalyzeRequest(BaseModel):
     url: str = Field(description="Page URL to analyze")
     html_content: str = Field(description="Pre-rendered HTML content from browser")
     page_type_hint: str = Field(
-        default="auto",
-        description="Page type hint: 'auto', 'index', or 'detail'",
+        default="index",
+        description="'index' (default) or 'detail'. The caller decides; nothing is detected. "
+                    "(MCP's analyze tool additionally accepts 'ask'; this REST endpoint does not — "
+                    "its response model cannot carry a choice prompt.)",
     )
 
 

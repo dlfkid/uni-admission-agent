@@ -274,8 +274,8 @@ The MCP server is mounted at `/mcp`. Tools are grouped into two sets:
 **Recommended MCP interactive flow:**
 
 1. Call `runtime_status` — inspect available runtime path (`client_available`, `internal_llm_available` — whether the server's LLM is actually configured, so `analyze`/`crawl` calls will succeed).
-2. Call `analyze` as the **single entrypoint**. Read `page_type_detected`, `requires_user_confirmation`, `next_step_options`.
-3. If `requires_user_confirmation=true`, ask the user whether to proceed with detected `index` / `detail`.
+2. Call `analyze` as the **single entrypoint** with `page_type_hint` set to `index`, `detail`, or `ask` (the default).
+3. With `ask` — or anything unrecognised — nothing is fetched or guessed: the response comes back with `requires_user_confirmation=true` and `next_step_options` listing both the `index` and `detail` flows. Put the choice to the user, then re-run with their answer. (There is deliberately no automatic detection: page structure differs too much between universities for any heuristic to be trusted, and an earlier "detect then confirm" mode was steering users into confirming wrong guesses.)
 4. Follow the selected next-step path:
    - **detail path:** `crawl`
    - **index, already have structured data:** select candidates → structure data yourself → `ingest`

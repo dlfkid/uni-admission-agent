@@ -28,7 +28,6 @@ from src.scrapers.link_parser import (
 )
 from src.scrapers.page_processor import process_page_for_program, process_pages_batch
 from src.scrapers.scout import run_scout, print_scout_report
-from src.services.page_type_resolution import classify_page_type_auto
 from src.storage.db_manager import DatabaseManager
 from src.utils.pdf_processor import PDFProcessor, PDFProcessingError
 
@@ -389,32 +388,28 @@ class AdmissionScraper:
     def _determine_page_type(
         self, probe_result: Optional[CrawlPageResult], page_type_hint: str
     ) -> bool:
-        """Determine if page is index (True) or detail (False)."""
+        """Determine if page is index (True) or detail (False).
+
+        The hint is authoritative and must be concrete. There used to be an
+        ``auto`` branch here that classified the fetched page — but on the
+        plain server path nothing ever fetched one first, so it fell through
+        to a silent ``return False`` and every ``auto`` crawl ran as DETAIL.
+        Index pages were then fed to the LLM cleaner whole and produced
+        nothing, reported as success. Page structure differs too much between
+        universities for any one heuristic to be trusted; the caller decides,
+        and an unresolved hint reaching this point is a programming error.
+        """
+        del probe_result  # kept for signature compatibility with callers
         if page_type_hint == "index":
-            logger.info("Page type manually set to: INDEX")
+            logger.info("Page type set to: INDEX")
             return True
         if page_type_hint == "detail":
-            logger.info("Page type manually set to: DETAIL")
+            logger.info("Page type set to: DETAIL")
             return False
-        
-        if probe_result and probe_result.markdown:
-            decision = classify_page_type_auto(
-                url=probe_result.url,
-                markdown=probe_result.markdown,
-                html=str(probe_result.html or ""),
-                link_count=len(probe_result.links),
-                router=self.router,
-            )
-            logger.info(
-                "Entry Point detected as: %s (source=%s confidence=%.2f scores=%s reasons=%s)",
-                decision.page_type.upper(),
-                decision.decision_source,
-                decision.confidence,
-                decision.scores,
-                decision.reasons,
-            )
-            return decision.page_type == "index"
-        return False
+        raise ValueError(
+            f"page_type_hint must be 'index' or 'detail', got {page_type_hint!r}. "
+            "'auto' is no longer a page type; the caller must resolve it first."
+        )
 
     def _process_browser_html(
         self, probe_result: CrawlPageResult, univ_slug: str, year: int

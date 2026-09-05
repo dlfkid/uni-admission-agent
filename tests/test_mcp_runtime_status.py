@@ -124,7 +124,70 @@ async def test_mcp_analyze_normalizes_multilingual_page_type_hint(monkeypatch) -
 
 
 @pytest.mark.asyncio
-async def test_mcp_analyze_auto_requires_confirmation_and_next_steps(monkeypatch) -> None:
+async def test_mcp_analyze_ask_presents_both_options_without_fetching(monkeypatch) -> None:
+    """'ask' means the user chooses. Nothing is fetched and nothing is guessed.
+
+    The old 'auto' mode detected a type and asked the user to confirm it —
+    but the detector was wrong often enough (an index page listing 49
+    programmes scored 'detail' at 0.99) that it steered users into confirming
+    a bad guess. Page structure differs too much between universities for any
+    detection to be trusted, so the question is now put to the user plainly.
+    """
+    calls: list[dict] = []
+
+    async def _fake_analyze_url_candidates(**kwargs):
+        calls.append(kwargs)
+        return {"page_type": "index", "links": [], "total_found": 0}
+
+    monkeypatch.setattr("src.api.server.analyze_url_candidates", _fake_analyze_url_candidates)
+
+    result = await server.mcp_analyze(url="https://example.edu/list", page_type_hint="ask")
+
+    assert calls == [], "ask must not fetch or classify anything"
+    assert result["requires_user_confirmation"] is True
+    assert result["page_type_hint_applied"] == "ask"
+    assert result["page_type_detected"] == "unknown"
+    assert "index" in result["confirmation_prompt"] and "detail" in result["confirmation_prompt"]
+    offered = {item["page_type"] for item in result["next_step_options"]}
+    assert offered == {"index", "detail"}
+
+
+@pytest.mark.asyncio
+async def test_mcp_analyze_treats_the_retired_auto_as_ask(monkeypatch) -> None:
+    """'auto' is not an alias — it is simply unrecognised, and unrecognised means ask."""
+    calls: list[dict] = []
+
+    async def _fake_analyze_url_candidates(**kwargs):
+        calls.append(kwargs)
+        return {"page_type": "index", "links": [], "total_found": 0}
+
+    monkeypatch.setattr("src.api.server.analyze_url_candidates", _fake_analyze_url_candidates)
+
+    result = await server.mcp_analyze(url="https://example.edu/list", page_type_hint="auto")
+
+    assert calls == []
+    assert result["page_type_hint_applied"] == "ask"
+    assert result["requires_user_confirmation"] is True
+
+
+@pytest.mark.asyncio
+async def test_mcp_analyze_defaults_to_ask(monkeypatch) -> None:
+    calls: list[dict] = []
+
+    async def _fake_analyze_url_candidates(**kwargs):
+        calls.append(kwargs)
+        return {"page_type": "index", "links": [], "total_found": 0}
+
+    monkeypatch.setattr("src.api.server.analyze_url_candidates", _fake_analyze_url_candidates)
+
+    result = await server.mcp_analyze(url="https://example.edu/list")
+
+    assert calls == []
+    assert result["requires_user_confirmation"] is True
+
+
+@pytest.mark.asyncio
+async def test_mcp_analyze_with_a_concrete_hint_needs_no_confirmation(monkeypatch) -> None:
     async def _fake_analyze_url_candidates(**_kwargs):
         return {
             "page_type": "index",
@@ -134,13 +197,10 @@ async def test_mcp_analyze_auto_requires_confirmation_and_next_steps(monkeypatch
 
     monkeypatch.setattr("src.api.server.analyze_url_candidates", _fake_analyze_url_candidates)
 
-    result = await server.mcp_analyze(
-        url="https://example.edu/list",
-        page_type_hint="auto",
-    )
+    result = await server.mcp_analyze(url="https://example.edu/list", page_type_hint="index")
 
-    assert result["requires_user_confirmation"] is True
-    assert "是否按 index 流程继续" in result["confirmation_prompt"]
+    assert result["requires_user_confirmation"] is False
+    assert result["confirmation_prompt"] == ""
     assert any(item["tool"] == "ingest" for item in result["next_step_options"])
     assert any(item["tool"] == "crawl_detail_batch" for item in result["next_step_options"])
 

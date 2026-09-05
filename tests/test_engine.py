@@ -87,67 +87,22 @@ def test_determine_page_type_manual_detail() -> None:
     assert result is False
 
 
-def test_determine_page_type_auto_detail_signals() -> None:
-    router = MagicMock()
-    scraper = AdmissionScraper(router=router)
-    page = CrawlPageResult(
-        url="https://example.com",
-        markdown="# MSc Finance\n\n## Tuition Fee\nHK$ 350,000",
-        char_count=100,
-        links=[],
-    )
-    result = scraper._determine_page_type(page, "auto")
-    assert result is False  # DETAIL
+def test_determine_page_type_rejects_auto() -> None:
+    """'auto' is no longer a page type. It used to fall through to a silent
+    'return False' on the plain server path — nothing had fetched a page to
+    classify — so every default crawl ran as DETAIL and index pages produced
+    nothing while reporting success."""
+    scraper = AdmissionScraper(router=MagicMock())
+    with pytest.raises(ValueError, match="'index' or 'detail'"):
+        scraper._determine_page_type(None, "auto")
 
 
-def test_determine_page_type_auto_index_many_links() -> None:
-    router = MagicMock()
-    scraper = AdmissionScraper(router=router)
-    page = CrawlPageResult(
-        url="https://example.com",
-        markdown="# Our Programmes\n\nBrowse available courses.",
-        char_count=50,
-        links=[f"https://example.com/prog{i}" for i in range(20)],
-    )
-    result = scraper._determine_page_type(page, "auto")
-    assert result is True  # INDEX
-
-
-def test_determine_page_type_auto_uses_two_stage_classifier(monkeypatch) -> None:
-    router = MagicMock()
-    scraper = AdmissionScraper(router=router)
-    page = CrawlPageResult(
-        url="https://example.com/programmes",
-        markdown="# Programmes",
-        char_count=20,
-        links=[],
-        html="<html><head><title>Programmes</title></head></html>",
-    )
-
-    monkeypatch.setattr(
-        "src.scrapers.engine.classify_page_type_auto",
-        lambda **_kwargs: type(
-            "Decision",
-            (),
-            {
-                "page_type": "index",
-                "decision_source": "rule",
-                "confidence": 0.88,
-                "scores": {"index": 0.8, "detail": 0.2},
-                "reasons": ["test"],
-            },
-        )(),
-    )
-
-    result = scraper._determine_page_type(page, "auto")
-    assert result is True
-
-
-def test_determine_page_type_no_probe() -> None:
-    router = MagicMock()
-    scraper = AdmissionScraper(router=router)
-    result = scraper._determine_page_type(None, "auto")
-    assert result is False  # Default to DETAIL
+@pytest.mark.parametrize("hint", ["", "ask", "unknown", "INDEX "])
+def test_determine_page_type_rejects_anything_not_concrete(hint: str) -> None:
+    """The caller resolves the type; an unresolved hint here is a bug upstream."""
+    scraper = AdmissionScraper(router=MagicMock())
+    with pytest.raises(ValueError):
+        scraper._determine_page_type(None, hint)
 
 
 # ── _extract_page_links ─────────────────────────────────────────────

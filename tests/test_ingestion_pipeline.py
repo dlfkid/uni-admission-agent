@@ -520,7 +520,7 @@ async def test_fetch_raw_uses_scout_when_continue_depth_enabled(monkeypatch) -> 
             "url": "https://example.com",
             "selected_urls": ["https://example.com/detail"],
             "continue_depth": 1,
-            "page_type_hint": "auto",
+            "page_type_hint": "index",
         }
     )
 

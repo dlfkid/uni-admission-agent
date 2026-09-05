@@ -469,7 +469,7 @@ def crawl(
         0, "--continue", help="Extra depth for LLM scouting"
     ),
     page_type: str = typer.Option(
-        "auto", "--page-type", help="Page type: auto, index, or detail"
+        "index", "--page-type", help="Page type: index (default) or detail"
     ),
     export_md: bool = typer.Option(
         False, "--export-md", help="Export crawled markdown files"
@@ -528,8 +528,14 @@ def crawl(
         typer.echo("Error: --export-path is required when --export-md is enabled", err=True)
         raise typer.Exit(code=1)
     
-    if page_type not in ["auto", "index", "detail"]:
-        typer.echo(f"Error: --page-type must be one of: auto, index, detail", err=True)
+    if page_type not in ["index", "detail"]:
+        typer.echo(
+            "Error: --page-type must be index or detail. "
+            "'auto' is no longer accepted: page structure differs too much "
+            "between universities for detection to be trusted, so you say "
+            "which it is.",
+            err=True,
+        )
         raise typer.Exit(code=1)
     
     if browser_provider not in ["auto", "server", "client"]:

@@ -162,7 +162,7 @@ class PydanticAIRuntime:
             url = payload.get("url", "")
             univ_slug = payload.get("univ_slug", "")
             year = payload.get("year", "")
-            page_type_hint = payload.get("page_type_hint", "auto")
+            page_type_hint = payload.get("page_type_hint", "index")
 
             parts = [
                 f"Crawl admission programs from this URL: {url}",

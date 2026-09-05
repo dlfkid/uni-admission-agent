@@ -206,8 +206,9 @@ Runtime introspection:
 - `runtime_status` exposes `client_available`, `client_count`, `client_ids`, `internal_llm_available`, `default_browser_provider_resolved`
 - Crawl/analyze payloads include `resolved_browser_provider` and `client_id_used`
 
-Interactive decision policy for index pages:
-- Year is mandatory before crawl execution (`requires_user_input`, `missing_fields=["year"]`)
+Interactive decision policy:
+- **Page type is never detected — the caller states it.** `crawl` (CLI, REST, MCP) takes `index` (default) or `detail`. MCP `analyze` additionally takes `ask` (its default), which returns both flows for the user to choose from without fetching anything. The old `auto` mode is gone: on the plain server path it never had a page to classify and silently fell through to `detail`, so index pages were fed to the LLM cleaner whole and produced nothing while reporting success; and even the classifier it was meant to run scored a 49-programme listing as `detail` at 0.99. Page structure differs too much between universities for a universal heuristic.
+- Year is mandatory before crawl execution (`requires_user_input`, `missing_fields=["year"]`); a non-concrete page type blocks the same way (`missing_fields=["page_type_hint"]`)
 - Taxonomy candidate keep threshold: `0.75`
 - Taxonomy auto-run threshold: `0.92`
 - Auto-run only when retained candidate count `<= 10`; otherwise require user review

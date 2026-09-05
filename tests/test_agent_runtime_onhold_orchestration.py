@@ -125,7 +125,7 @@ async def test_runtime_builds_correct_user_message(monkeypatch):
                 "url": "https://example.com/programs",
                 "univ_slug": "ucl",
                 "year": 2026,
-                "page_type_hint": "auto",
+                "page_type_hint": "index",
             },
         )
     )
@@ -135,7 +135,7 @@ async def test_runtime_builds_correct_user_message(monkeypatch):
     assert "https://example.com/programs" in msg
     assert "ucl" in msg
     assert "2026" in msg
-    assert "auto" in msg
+    assert "index" in msg  # the default; "auto" is no longer a page type
 
 
 @pytest.mark.asyncio

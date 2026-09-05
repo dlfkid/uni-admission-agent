@@ -40,7 +40,9 @@ export function restoreCachedPreferences(callbacks: {
     updateTaxonomySettingsVisibility: () => void;
 }): void {
     const cachedPageType = localStorage.getItem(PAGE_TYPE_KEY);
-    if (cachedPageType && ["auto", "index", "detail"].includes(cachedPageType)) {
+    // "auto" is deliberately absent: it is no longer a page type the server
+    // accepts, so a value cached by an older build must not be restored.
+    if (cachedPageType && ["index", "detail"].includes(cachedPageType)) {
         pageTypeSelect.value = cachedPageType;
     }
 
