@@ -18,6 +18,7 @@ from src.scrapers.helpers import (
     extract_program_name,
     is_noise_program_name,
     strip_html_boilerplate,
+    strip_shared_boilerplate,
 )
 from src.scrapers.name_critique import (
     _name_looks_suspect,
@@ -214,13 +215,29 @@ def extract_program_data_from_page(
     from_browser: bool = False,
     name_hints: Optional[List[str]] = None,
     selected_anchor_text: Optional[str] = None,
+    boilerplate_reference: Optional[str] = None,
 ) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
-    """Extract structured program payload from one page without DB persistence."""
+    """Extract structured program payload from one page without DB persistence.
+
+    ``boilerplate_reference`` is the markdown of the index page this detail
+    page was discovered from. Lines the two share verbatim, in blocks, are
+    the site's navigation and are dropped before the LLM sees the page — on
+    HKBU that is ~90% of every detail page and the difference between one
+    extraction call and eight. Absent (detail mode), nothing is filtered.
+    """
     if not page.markdown:
         return None, "No markdown content"
 
     content_for_llm = page.markdown
     content_type = "markdown"
+    if boilerplate_reference:
+        content_for_llm = strip_shared_boilerplate(page.markdown, boilerplate_reference)
+        if len(content_for_llm) < len(page.markdown):
+            logger.info(
+                "Dropped %s chars of index-shared boilerplate from %s (%s -> %s)",
+                f"{len(page.markdown) - len(content_for_llm):,}", page.url,
+                f"{len(page.markdown):,}", f"{len(content_for_llm):,}",
+            )
 
     if page.html and len(page.html) > 1000:
         markdown_length = len(page.markdown)

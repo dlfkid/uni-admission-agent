@@ -253,7 +253,7 @@ def analyze_page_external(
 async def analyze_url_candidates(
     *,
     url: str,
-    page_type_hint: str = "auto",
+    page_type_hint: str = "index",
     html_content: Optional[str] = None,
     browser_provider: str = "auto",
     client_id: Optional[str] = None,
@@ -489,7 +489,8 @@ async def crawl_url(
         univ_slug: University identifier (e.g. ``"hku"``).
         year: Academic year (e.g. ``2026``).
         continue_depth: Extra depth for LLM-driven scouting.
-        page_type_hint: Page type hint ('auto', 'index', or 'detail').
+        page_type_hint: Page type ('index' or 'detail'). Must be concrete —
+            the caller decides; there is no automatic detection.
         export_md: Whether to export markdown files.
         export_path: Path to export markdown files.
         html_content: Pre-rendered HTML from browser (bypasses crawling).
@@ -597,6 +598,10 @@ async def crawl_url(
             discovery.supplement_url_re if discovery is not None else None
         ),
         selected_sibling_urls=discovery_sibling_urls,
+        index_markdown=(
+            discovery.index_markdown
+            if discovery is not None and discovery.matched else None
+        ),
         candidate_taxonomy_filter_enabled=candidate_taxonomy_filter_enabled,
         candidate_taxonomy_filter_threshold=candidate_taxonomy_filter_threshold,
         candidate_taxonomy_filter_top_k=candidate_taxonomy_filter_top_k,

@@ -23,6 +23,8 @@ Three patterns based on the URL and user phrasing:
 
 **When in doubt, ask** which mode they want and how many programmes they want. Don't guess on full-index crawls — they cost the most.
 
+`--page-type` defaults to `index` and accepts only `index` or `detail`. There is no `auto`: the engine does not detect page type, because page structure differs too much between universities for detection to be trusted — you decide from the URL and the user's phrasing, and ask when you cannot tell.
+
 ---
 
 ## Step 2 — Get the user-side parameters

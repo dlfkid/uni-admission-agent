@@ -122,3 +122,10 @@ class CrawlOutcome:
     # through the LLM index-analysis branch) silently starves that
     # mechanism of its main input on every domain it matches.
     sibling_urls: SiblingMap = field(default_factory=dict)
+    # Markdown of the index page (first page when paginated). Detail
+    # extraction uses it as the boilerplate reference: lines a detail page
+    # shares verbatim, in blocks, with its own index are navigation, not
+    # content (src/scrapers/helpers.py:strip_shared_boilerplate). Like
+    # sibling_urls, this fast path is the only place that markdown exists
+    # when a strategy matches, so it has to travel with the outcome.
+    index_markdown: str = ""

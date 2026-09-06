@@ -143,3 +143,22 @@ def test_every_markdown_extractkind_is_registered():
         if kind in exempt:
             continue
         assert kind in EXTRACTORS
+
+
+def test_inline_degree_hkbu_golden_fixture_counts():
+    """extract_inline_degree on the HKBU golden sample must find exactly the
+    49 programmes the live 2027 crawl imported — each with its own detail URL,
+    so no two programmes collapse into one catalog row."""
+    from pathlib import Path
+    md_path = (
+        Path(__file__).parent.parent.parent
+        / "golden_samples" / "cases" / "hkbu_masters_communication" / "index.md"
+    )
+    md = md_path.read_text(encoding="utf-8")
+    items = get_extractor(ExtractKind.INLINE_DEGREE)(
+        md, "https://ar.hkbu.edu.hk/tpg-admissions/programmes"
+    )
+    names = [it.name_en for it in items]
+    assert len(names) == 49, f"Expected 49 HKBU programmes, got {len(names)}"
+    assert len(set(names)) == 49
+    assert len({it.detail_url for it in items}) == 49

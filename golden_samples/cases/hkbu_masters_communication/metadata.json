@@ -1,0 +1,31 @@
+{
+  "case_id": "hkbu_masters_communication",
+  "name": "HKBU",
+  "university": "Hong Kong Baptist University",
+  "index_url": "https://ar.hkbu.edu.hk/tpg-admissions/programmes",
+  "detail_url": "https://ar.hkbu.edu.hk/tpg-admissions/programmes/master-of-arts-ma-in-communication",
+  "fetched_at": "2026-09-06T01:35:41.153512+00:00",
+  "expected_strategy": "server×inline_degree",
+  "expected_min_names": 49,
+  "notes": "Battle-test round for the 2026-27 HK target list (entry year 2027). HKBU's TPG programme index is server-rendered and the deterministic tier handles it with no registry entry: classify() scores inline_degree 49 / merged_columns 49 (tie resolved to inline_degree) and extract_inline_degree yields exactly 49 programmes with 49 unique detail URLs; the live crawl (--all, default page type) imported 49/49 with full coverage of zh name, faculty, tuition, study options and deadlines and 48/49 requirements.\n\nDefects this round surfaced and fixed before the full run: _university_slug took the leftmost host label (ar.hkbu.edu.hk -> 'ar'; gs.cuhk/gs.hsu/gs.hksyu collided on 'gs'); _init_db swallowed migration failures so a crawl against a half-migrated database reported '0 programs imported' as if the university had no programmes; DATABASE_URL set in the shell was clobbered by .env (override=True); and the 'auto' page type never resolved for a server-fetched index, so the index page was fed to the LLM as a detail page. 'auto' was retired: the caller states index or detail (default index).\n\nCost issue found and fixed in the same round: every HKBU detail page converted to ~117k chars of markdown of which ~90% was the site's mega-menu link list; the real programme content (~5.5k chars) landed in chunk 8 of 8, so 7 of the 8 extraction calls per programme parsed navigation (49 programmes: 95 minutes, 3.8M tokens, ~$2.27 on deepseek-v4-flash; EMBA's requirements, present on the page, were lost in the chunk merge). Fix: src/scrapers/helpers.py:strip_shared_boilerplate drops the lines a detail page shares verbatim, in blocks of >=3, with its own index page — evidence from the site itself, no pattern list. Rejected alternatives, measured on the nine golden pairs: dropping pure-link lines deletes CityU's tuition and Lingnan's requirements; stripping nav/header/footer tags leaves HKBU at 42k and wipes Lingnan. With the filter each HKBU detail page is ~8k chars, one chunk, one extraction call. detail.md here is the MA in Communication page and reproduces the original shape (markdown_chars ~118k); index.md is its reference.",
+  "pages": {
+    "index": {
+      "status": "ok",
+      "status_code": 200,
+      "url": "https://ar.hkbu.edu.hk/tpg-admissions/programmes",
+      "html_chars": 205857,
+      "markdown_chars": 85892,
+      "html_path": "golden_samples/cases/hkbu_masters_communication/index.html",
+      "markdown_path": "golden_samples/cases/hkbu_masters_communication/index.md"
+    },
+    "detail": {
+      "status": "ok",
+      "status_code": 200,
+      "url": "https://ar.hkbu.edu.hk/tpg-admissions/programmes/master-of-arts-ma-in-communication",
+      "html_chars": 289290,
+      "markdown_chars": 118045,
+      "html_path": "golden_samples/cases/hkbu_masters_communication/detail.html",
+      "markdown_path": "golden_samples/cases/hkbu_masters_communication/detail.md"
+    }
+  }
+}

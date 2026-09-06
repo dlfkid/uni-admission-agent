@@ -59,7 +59,7 @@ class IngestionJob(SQLModel, table=True):
     academic_year: int = Field(index=True)
     source_url: str = Field(default="")
     continue_depth: int = Field(default=0)
-    page_type_hint: str = Field(default="auto")
+    page_type_hint: str = Field(default="index")
 
     status: IngestionJobStatus = Field(default=IngestionJobStatus.PENDING, index=True)
     current_stage: Optional[IngestionStage] = Field(

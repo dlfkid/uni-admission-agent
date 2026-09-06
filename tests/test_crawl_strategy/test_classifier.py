@@ -59,3 +59,19 @@ def test_feature_signals_counts():
     sig = feature_signals(md, "https://x/")
     assert sig["heading_link"] >= 1
     assert sig["link_total"] >= 2
+
+
+def test_classify_hkbu_golden_fixture():
+    """HKBU's TPG index (2026-27 battle test) is handled with no registry
+    entry: inline_degree and merged_columns tie at 49 and the tie must
+    resolve to inline_degree, confidently."""
+    from pathlib import Path
+    md_path = (
+        Path(__file__).parent.parent.parent
+        / "golden_samples" / "cases" / "hkbu_masters_communication" / "index.md"
+    )
+    md = md_path.read_text(encoding="utf-8")
+    result = classify(md, "https://ar.hkbu.edu.hk/tpg-admissions/programmes")
+    assert result.kind is ExtractKind.INLINE_DEGREE
+    assert result.confident is True
+    assert result.count == 49

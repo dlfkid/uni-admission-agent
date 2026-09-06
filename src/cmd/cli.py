@@ -284,17 +284,54 @@ def _setup_logging(verbose: bool = False) -> None:
     setup_file_logging()
 
 
+def _abort_db(headline: str, detail: str, remedy: str) -> None:
+    """Report a database preparation failure and stop the command.
+
+    Deliberately fatal. These used to be warnings gated on ``--verbose``, so a
+    command whose schema preparation had failed ran anyway: a crawl against a
+    database that was not at head imported nothing, wrote no audit record, and
+    still printed ``✅ Crawl complete: 0 programs imported``. To the person
+    reading that, it is indistinguishable from "this university has no
+    programmes" — and it is the maintainer who then gets asked why.
+    """
+    typer.echo(f"❌ {headline}", err=True)
+    typer.echo(f"   {detail}", err=True)
+    typer.echo(f"👉 {remedy}", err=True)
+    raise typer.Exit(code=1)
+
+
 def _init_db(verbose: bool = False) -> None:
-    """Ensure database is initialised and schema is migrated."""
+    """Ensure database is initialised and schema is migrated.
+
+    Any failure here aborts: every caller goes on to read or write the
+    database, and doing that against a half-prepared schema produces wrong
+    results silently rather than loudly.
+    """
     try:
         DatabaseManager().init_db()
     except Exception as e:
-        if verbose:
-            logger.warning("Database auto-init warning: %s", e)
-        return
+        _abort_db(
+            "Could not open the database.",
+            str(e),
+            "Check DATABASE_URL and that the database is reachable, "
+            "then run: adm-agent status",
+        )
 
+    # Reading the schema version and migrating it are separate failures with
+    # separate remedies, and they must stay in separate try blocks: when both
+    # shared one, a failed *read* landed in the MigrationError handler below,
+    # which formats `status` — unbound at that point, so the user got an
+    # UnboundLocalError instead of the error and the remedy.
     try:
         status = get_migration_status()
+    except Exception as e:
+        _abort_db(
+            "Could not read the database schema version.",
+            str(e),
+            "Run: adm-agent db-version   to see where the schema stands.",
+        )
+
+    try:
         if status["pending"]:
             logger.info(
                 "Pending DB migration detected (%s -> %s), applying...",
@@ -311,18 +348,33 @@ def _init_db(verbose: bool = False) -> None:
             )
             run_db_migrations(verbose=verbose)
             typer.echo("✅ Database schema up to date.")
+    except typer.Exit:
+        raise
     except MigrationError as e:
-        if verbose:
-            logger.warning("Database migration warning: %s", e)
-    except Exception as e:  # pragma: no cover - defensive logging path
-        if verbose:
-            logger.warning("Unexpected migration warning: %s", e)
+        _abort_db(
+            f"Database migration failed "
+            f"({status['current_revision'] or 'unversioned'} → "
+            f"{status['head_revision']}). The schema is not up to date, so "
+            "this command would read and write the wrong shape.",
+            str(e),
+            "Run: adm-agent repair --auto   (if that cannot recover it, "
+            "back up with 'adm-agent db-export' and then 'adm-agent db-reinit --yes')",
+        )
+    except Exception as e:
+        _abort_db(
+            "Unexpected failure while migrating the database schema.",
+            str(e),
+            "Run: adm-agent db-version   to see where the schema stands.",
+        )
 
     try:
         bootstrap_subject_taxonomy()
     except Exception as e:
-        if verbose:
-            logger.warning("Subject taxonomy bootstrap warning: %s", e)
+        # Genuinely non-fatal, unlike the two above: the taxonomy only guides
+        # programme-name matching, so a crawl without it still produces
+        # correct data. Reported unconditionally so it is not invisible.
+        typer.echo(f"⚠️  Subject taxonomy bootstrap failed: {e}", err=True)
+        typer.echo("   Crawls will run, but name matching will be weaker.", err=True)
 
 
 # ---------------------------------------------------------------------------
@@ -430,7 +482,7 @@ def crawl(
         0, "--continue", help="Extra depth for LLM scouting"
     ),
     page_type: str = typer.Option(
-        "auto", "--page-type", help="Page type: auto, index, or detail"
+        "index", "--page-type", help="Page type: index (default) or detail"
     ),
     export_md: bool = typer.Option(
         False, "--export-md", help="Export crawled markdown files"
@@ -489,8 +541,14 @@ def crawl(
         typer.echo("Error: --export-path is required when --export-md is enabled", err=True)
         raise typer.Exit(code=1)
     
-    if page_type not in ["auto", "index", "detail"]:
-        typer.echo(f"Error: --page-type must be one of: auto, index, detail", err=True)
+    if page_type not in ["index", "detail"]:
+        typer.echo(
+            "Error: --page-type must be index or detail. "
+            "'auto' is no longer accepted: page structure differs too much "
+            "between universities for detection to be trusted, so you say "
+            "which it is.",
+            err=True,
+        )
         raise typer.Exit(code=1)
     
     if browser_provider not in ["auto", "server", "client"]:

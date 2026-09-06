@@ -74,7 +74,7 @@ async def test_analyze_url_candidates_uses_client_html_when_not_provided(monkeyp
         captured["resolve"] = kwargs
         return {"html_content": "<html>index</html>"}
 
-    def _fake_analyze_page(url: str, html_content: str, page_type_hint: str = "auto"):
+    def _fake_analyze_page(url: str, html_content: str, page_type_hint: str = "index"):
         captured["analyze"] = {
             "url": url,
             "html_content": html_content,
@@ -90,7 +90,7 @@ async def test_analyze_url_candidates_uses_client_html_when_not_provided(monkeyp
 
     result = await analyze_url_candidates(
         url="https://example.edu/list",
-        page_type_hint="auto",
+        page_type_hint="index",
         browser_provider="client",
     )
 

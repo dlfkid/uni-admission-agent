@@ -22,7 +22,7 @@ def test_serve_tool_bridge_analyze_contract(monkeypatch):
     output = bridge.analyze_page(
         AnalyzeInput(
             url="https://x",
-            page_type_hint="auto",
+            page_type_hint="index",
             html_content="<html></html>",
         )
     )

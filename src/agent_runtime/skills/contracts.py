@@ -11,7 +11,15 @@ class AnalyzePageSkillInput(BaseModel):
     """Input payload for page analysis skill."""
 
     url: str = Field(min_length=1)
-    page_type_hint: str = "auto"
+    # Literal, not str: this model becomes the JSON schema the LLM is shown,
+    # so the retired "auto" must not appear there as a legal value. It used
+    # to be the default, and a model that omitted the field sent "auto" into
+    # analyze_page_links, where _determine_page_type raises.
+    page_type_hint: Literal["index", "detail"] = Field(
+        default="index",
+        description="Kind of page this URL is: 'index' (a programme list) or "
+                    "'detail' (one programme). There is no detection — say which.",
+    )
     html_content: str = ""
 
 
@@ -111,7 +119,15 @@ class BrowserAutomationSkillInput(BaseModel):
     """Input payload for browser automation skill."""
 
     url: str = Field(min_length=1)
-    page_type_hint: str = "auto"
+    # See AnalyzePageSkillInput.page_type_hint. Here "auto" also silently
+    # skipped the index-only handling downstream (LLM-ranked candidates and
+    # HTML trimming both key off == "index"), so an index page fetched with
+    # the old default got neither.
+    page_type_hint: Literal["index", "detail"] = Field(
+        default="index",
+        description="Kind of page this URL is: 'index' (a programme list) or "
+                    "'detail' (one programme). There is no detection — say which.",
+    )
     client_id: Optional[str] = None
 
 

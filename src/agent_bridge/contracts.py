@@ -18,7 +18,7 @@ class AnalyzeInput(BaseModel):
     """Input payload for serve-side analysis wrapper."""
 
     url: str
-    page_type_hint: str = "auto"
+    page_type_hint: str = "index"
     html_content: str = ""
 
 
@@ -34,7 +34,7 @@ class BrowserFetchInput(BaseModel):
     """Input payload for browser automation fetch wrapper."""
 
     url: str
-    page_type_hint: str = "auto"
+    page_type_hint: str = "index"
     client_id: str | None = None
 
 

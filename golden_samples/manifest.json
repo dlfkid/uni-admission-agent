@@ -48,6 +48,12 @@
       "name": "Lingnan",
       "index_url": "https://www.ln.edu.hk/sgs/programmes-on-offer",
       "detail_url": "https://www.ln.edu.hk/fin/mfin"
+    },
+    {
+      "case_id": "hkbu_masters_communication",
+      "name": "HKBU",
+      "index_url": "https://ar.hkbu.edu.hk/tpg-admissions/programmes",
+      "detail_url": "https://ar.hkbu.edu.hk/tpg-admissions/programmes/master-of-arts-ma-in-communication"
     }
   ]
 }

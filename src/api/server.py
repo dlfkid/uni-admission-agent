@@ -485,8 +485,17 @@ async def api_analyze(body: AnalyzeRequest) -> AnalyzeResponse:
     likely course-detail links so the client can present a selection UI.
     For **detail** pages the ``links`` list is empty.
     """
+    hint = _normalize_page_type_hint(body.page_type_hint)
+    if hint not in {"index", "detail"}:
+        # This response model has no way to carry a choice prompt; the MCP
+        # analyze tool is where "ask" lives. Refuse rather than let an
+        # unresolved hint reach the engine, which (correctly) raises on it.
+        raise HTTPException(
+            status_code=400,
+            detail="page_type_hint must be 'index' or 'detail' for this endpoint.",
+        )
     result = await asyncio.to_thread(
-        analyze_page, body.url, body.html_content, body.page_type_hint,
+        analyze_page, body.url, body.html_content, hint,
     )
     return AnalyzeResponse(
         page_type=result["page_type"],
@@ -1958,18 +1967,26 @@ def _to_valid_year(value: Optional[int]) -> Optional[int]:
 
 
 def _normalize_page_type_hint(value: str) -> str:
+    """Map free-form input to ``index`` / ``detail`` / ``ask``.
+
+    ``ask`` means "present both options and let the user choose". Anything we
+    cannot recognise — including the retired ``auto`` — resolves to ``ask``:
+    when we do not know, we ask, we never guess. Page structure differs too
+    much between universities for any detection heuristic to be trusted.
+    """
     raw = str(value or "").strip()
     if not raw:
-        return "auto"
+        return "ask"
     normalized = raw.lower()
     compact = normalized.replace(" ", "").replace("-", "").replace("_", "")
 
     alias_map = {
-        # auto
-        "auto": "auto",
-        "自动": "auto",
-        "自动识别": "auto",
-        "默认": "auto",
+        # ask
+        "ask": "ask",
+        "询问": "ask",
+        "问我": "ask",
+        "确认": "ask",
+        "让我选": "ask",
         # index-like
         "index": "index",
         "listing": "index",
@@ -1994,7 +2011,7 @@ def _normalize_page_type_hint(value: str) -> str:
         return alias_map[compact]
     if normalized in alias_map:
         return alias_map[normalized]
-    return "auto"
+    return "ask"
 
 
 def _connected_browser_client_ids() -> List[str]:
@@ -2059,12 +2076,23 @@ def _analyze_next_step_options(
                 "when": "Use selected candidate URLs for batched detail crawl/import (server-side LLM extraction).",
             },
         ]
+    # "ask" (or anything unrecognised): both flows, side by side, for the user
+    # to pick from. No detection result is offered because none is made.
     return [
         {
-            "mode": "entrypoint",
+            "mode": "user_choice",
+            "page_type": "index",
             "tool": "analyze",
-            "when": "Re-run analyze with explicit page_type_hint=index|detail if detection is uncertain.",
-        }
+            "when": "The URL lists many programmes (a catalogue / search-results page). "
+                    "Re-run analyze with page_type_hint=index.",
+        },
+        {
+            "mode": "user_choice",
+            "page_type": "detail",
+            "tool": "crawl",
+            "when": "The URL is one specific programme. "
+                    "Run crawl with page_type_hint=detail.",
+        },
     ]
 
 
@@ -2106,13 +2134,47 @@ def _index_review_response(
 async def _mcp_analyze_impl(
     *,
     url: str,
-    page_type_hint: str = "auto",
+    page_type_hint: str = "ask",
     browser_provider: str = "auto",
     client_id: Optional[str] = None,
     strict_client: bool = False,
     html_content: Optional[str] = None,
 ) -> dict:
     normalized_hint = _normalize_page_type_hint(page_type_hint)
+    if normalized_hint == "ask":
+        # Nothing is fetched and nothing is guessed. There used to be an
+        # "auto" mode here that detected a type and asked the user to confirm
+        # it — but the detector was wrong often enough that it was steering
+        # users into confirming a bad guess. Now the user simply chooses.
+        response: dict = {
+            "url": url,
+            "page_type": "unknown",
+            "links": [],
+            "total_found": 0,
+            "page_type_hint_applied": "ask",
+            "page_type_detected": "unknown",
+            "requires_user_confirmation": True,
+            "confirmation_prompt": (
+                "这个页面是课程列表页（index）还是单个课程的详情页（detail）？"
+                "请选择后重新调用。"
+            ),
+            "next_step_options": _analyze_next_step_options(page_type="ask"),
+            "next_action_hint": "Ask the user which page type this is, then re-run analyze with it.",
+        }
+        # Same runtime metadata the normal path carries: which browser
+        # provider would be used and whether the client_id is valid are facts
+        # about the runtime, not about the page, so the response shape stays
+        # stable whichever hint was given.
+        response.update(
+            _resolve_provider_metadata_for_response(
+                browser_provider=browser_provider,
+                client_id=client_id,
+                strict_client=strict_client,
+            )
+        )
+        response.setdefault("client_id_used", None)
+        response.update(_client_id_usage_metadata(client_id=client_id))
+        return response
     result = await analyze_url_candidates(
         url=url,
         page_type_hint=normalized_hint,
@@ -2134,13 +2196,9 @@ async def _mcp_analyze_impl(
     response["page_type_hint_applied"] = normalized_hint
     detected_page_type = str(response.get("page_type") or "unknown").strip().lower()
     response["page_type_detected"] = detected_page_type if detected_page_type in {"index", "detail"} else "unknown"
-    response["requires_user_confirmation"] = normalized_hint == "auto"
-    if response["requires_user_confirmation"] and response["page_type_detected"] in {"index", "detail"}:
-        response["confirmation_prompt"] = (
-            f"检测为 {response['page_type_detected']}，是否按 {response['page_type_detected']} 流程继续？"
-        )
-    else:
-        response["confirmation_prompt"] = ""
+    # A concrete hint was given, so there is nothing to confirm.
+    response["requires_user_confirmation"] = False
+    response["confirmation_prompt"] = ""
     response["next_step_options"] = _analyze_next_step_options(page_type=response["page_type_detected"])
     response["next_action_hint"] = (
         "Review next_step_options and choose one tool path."
@@ -2155,7 +2213,7 @@ async def _mcp_crawl_impl(
     univ_slug: str,
     year: Optional[int] = None,
     continue_depth: int = 0,
-    page_type_hint: str = "auto",
+    page_type_hint: str = "index",
     browser_provider: str = "auto",
     client_id: Optional[str] = None,
     strict_client: bool = False,
@@ -2175,20 +2233,33 @@ async def _mcp_crawl_impl(
         return payload
 
     normalized_hint = _normalize_page_type_hint(page_type_hint)
-    analysis_result: dict[str, Any] = {}
-    page_type = normalized_hint if normalized_hint in {"index", "detail"} else "unknown"
+    if normalized_hint not in {"index", "detail"}:
+        # crawl executes; it needs a concrete type. Same shape as the
+        # missing-year refusal above, so the agent routes on it the same way.
+        payload = {
+            "requires_user_input": True,
+            "missing_fields": ["page_type_hint"],
+            "prompt": "这个页面是课程列表页（index）还是单个课程的详情页（detail）？",
+            "next_action_hint": (
+                "Ask the user, then re-run crawl with page_type_hint=index or detail. "
+                "Use analyze first if you want the index candidates reviewed."
+            ),
+        }
+        payload.update(_client_id_usage_metadata(client_id=client_id))
+        return payload
 
-    if normalized_hint != "detail":
+    analysis_result: dict[str, Any] = {}
+    page_type = normalized_hint
+
+    if page_type == "index":
         try:
             analysis_result = await analyze_url_candidates(
                 url=url,
-                page_type_hint=normalized_hint,
+                page_type_hint=page_type,
                 browser_provider=browser_provider,
                 client_id=client_id,
                 strict_client=strict_client,
             )
-            if normalized_hint == "auto":
-                page_type = str(analysis_result.get("page_type") or "unknown").strip().lower()
         except Exception as exc:  # pylint: disable=broad-except
             logger.info("Pre-crawl analyze unavailable for %s: %s", url, exc)
 
@@ -2204,28 +2275,6 @@ async def _mcp_crawl_impl(
             auto_run_threshold=0.92,
             top_k=max(1, int(candidate_taxonomy_filter_top_k)),
         )
-        if not ranked_candidates:
-            response = _index_review_response(
-                candidates=[],
-                decision_reason="no_candidates_above_keep_threshold",
-                browser_provider=browser_provider,
-                client_id=client_id,
-                strict_client=strict_client,
-            )
-            response["page_type_hint_applied"] = normalized_hint
-            return response
-
-        if len(ranked_candidates) > 10:
-            response = _index_review_response(
-                candidates=ranked_candidates,
-                decision_reason="candidate_count_exceeds_auto_limit",
-                browser_provider=browser_provider,
-                client_id=client_id,
-                strict_client=strict_client,
-            )
-            response["page_type_hint_applied"] = normalized_hint
-            return response
-
         def _auto_run_eligible(row: Dict[str, Any]) -> bool:
             if "auto_run_eligible" in row:
                 return bool(row.get("auto_run_eligible"))
@@ -2234,10 +2283,21 @@ async def _mcp_crawl_impl(
             except (TypeError, ValueError):
                 return False
 
-        if not all(_auto_run_eligible(row) for row in ranked_candidates):
+        # The three reasons to hand the candidate list back for review instead
+        # of crawling it. One return, because all three build the same
+        # response — separate returns only cost the reader a diff to compare.
+        review_reason: Optional[str] = None
+        if not ranked_candidates:
+            review_reason = "no_candidates_above_keep_threshold"
+        elif len(ranked_candidates) > 10:
+            review_reason = "candidate_count_exceeds_auto_limit"
+        elif not all(_auto_run_eligible(row) for row in ranked_candidates):
+            review_reason = "confidence_below_auto_threshold"
+
+        if review_reason is not None:
             response = _index_review_response(
                 candidates=ranked_candidates,
-                decision_reason="confidence_below_auto_threshold",
+                decision_reason=review_reason,
                 browser_provider=browser_provider,
                 client_id=client_id,
                 strict_client=strict_client,
@@ -2367,7 +2427,7 @@ try:
     @mcp.tool(name="analyze")
     async def mcp_analyze(
         url: str,
-        page_type_hint: str = "auto",
+        page_type_hint: str = "ask",
         browser_provider: str = "auto",
         client_id: Optional[str] = None,
         strict_client: bool = False,
@@ -2434,7 +2494,7 @@ try:
         univ_slug: str,
         year: Optional[int] = None,
         continue_depth: int = 0,
-        page_type_hint: str = "auto",
+        page_type_hint: str = "index",
         browser_provider: str = "auto",
         client_id: Optional[str] = None,
         strict_client: bool = False,
@@ -2744,7 +2804,7 @@ repair:
         url: str,
         univ_slug: str,
         year: int,
-        page_type_hint: str = "auto",
+        page_type_hint: str = "index",
         runtime: Optional[str] = None,
         policy_profile: Optional[Dict[str, Any]] = None,
         client_id: Optional[str] = None,

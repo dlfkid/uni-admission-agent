@@ -39,6 +39,27 @@ class PolicyProfilePayload(BaseModel):
     detail_concurrency: Optional[int] = Field(default=None, ge=1, le=20)
 
 
+_CONCRETE_PAGE_TYPES = ("index", "detail")
+
+
+def _require_concrete_page_type(value: str) -> str:
+    """Normalise a page-type hint, rejecting anything that is not a page type.
+
+    ``auto`` was retired — the caller states which kind of page it is passing.
+    Accepting it here meant an old client got a task_id and a 202, and the
+    value only failed deep inside a background task, where nothing reports
+    back. Rejecting it during validation turns that into a 422 the caller
+    can act on, before any work is queued.
+    """
+    normalized = str(value or "").strip().lower()
+    if normalized not in _CONCRETE_PAGE_TYPES:
+        raise ValueError(
+            "page_type_hint must be one of: index, detail "
+            "('auto' is no longer a page type — state which one this URL is)"
+        )
+    return normalized
+
+
 class CrawlRequest(BaseModel):
     """Body for ``POST /crawl``."""
 
@@ -50,8 +71,8 @@ class CrawlRequest(BaseModel):
         description="Extra depth for LLM-driven scouting",
     )
     page_type_hint: str = Field(
-        default="auto",
-        description="Page type hint: 'auto', 'index', or 'detail'. Used to skip auto-detection.",
+        default="index",
+        description="Page type: 'index' (default) or 'detail'. The caller decides; there is no detection.",
     )
     limit: Optional[int] = Field(
         default=None, ge=1,
@@ -194,6 +215,11 @@ class CrawlRequest(BaseModel):
             raise ValueError("browser_provider must be one of: auto, server, client")
         return normalized
 
+    @field_validator("page_type_hint")
+    @classmethod
+    def _validate_page_type_hint(cls, value: str) -> str:
+        return _require_concrete_page_type(value)
+
 
 class AgentRunRequest(BaseModel):
     """Body for ``POST /agent/run``."""
@@ -202,8 +228,8 @@ class AgentRunRequest(BaseModel):
     univ_slug: str = Field(description="University slug (a-z0-9-)")
     year: int = Field(description="Academic year (e.g. 2026)")
     page_type_hint: str = Field(
-        default="auto",
-        description="Page type hint: auto/index/detail",
+        default="index",
+        description="Page type: index (default) or detail",
     )
     limit: Optional[int] = Field(
         default=None, ge=1,
@@ -244,6 +270,11 @@ class AgentRunRequest(BaseModel):
             raise ValueError("limit and crawl_all are mutually exclusive")
         return self
 
+    @field_validator("page_type_hint")
+    @classmethod
+    def _validate_page_type_hint(cls, value: str) -> str:
+        return _require_concrete_page_type(value)
+
 
 class AgentChatRequest(BaseModel):
     """Body for ``POST /agent/chat``."""
@@ -282,9 +313,16 @@ class AnalyzeRequest(BaseModel):
     url: str = Field(description="Page URL to analyze")
     html_content: str = Field(description="Pre-rendered HTML content from browser")
     page_type_hint: str = Field(
-        default="auto",
-        description="Page type hint: 'auto', 'index', or 'detail'",
+        default="index",
+        description="'index' (default) or 'detail'. The caller decides; nothing is detected. "
+                    "(MCP's analyze tool additionally accepts 'ask'; this REST endpoint does not — "
+                    "its response model cannot carry a choice prompt.)",
     )
+
+    @field_validator("page_type_hint")
+    @classmethod
+    def _validate_page_type_hint(cls, value: str) -> str:
+        return _require_concrete_page_type(value)
 
 
 class QueryRequest(BaseModel):

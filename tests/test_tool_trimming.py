@@ -41,13 +41,6 @@ def test_index_hint_returns_only_essential_tools(registry):
     assert names == _ESSENTIAL_TOOLS
 
 
-def test_auto_hint_returns_only_essential_tools(registry):
-    """Auto hint gets only essential tools."""
-    tools = build_openai_tools(registry, page_type_hint="auto")
-    names = _tool_names(tools)
-    assert names == _ESSENTIAL_TOOLS
-
-
 def test_crawl_has_fewer_tools_than_no_hint(registry):
     """Crawl modes should have significantly fewer tools than unrestricted."""
     crawl = build_openai_tools(registry, page_type_hint="index")
