@@ -184,6 +184,7 @@ def crawl_index(
             names_count=len(names), strategy_used=strat,
             pages_fetched=pages_fetched, stopped_reason=stopped_reason,
             sibling_urls=sibling_urls,
+            index_markdown=md or "",
             message_for_user=(
                 f"成功抓取 {len(names)} 门课程名字"
                 f"（策略 {strat}，翻页 {mechanism.value}，{reason_zh}）。"),

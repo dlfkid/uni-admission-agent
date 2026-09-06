@@ -50,6 +50,9 @@ class DiscoveryResult:
     # since it otherwise never goes through the LLM index-analysis branch
     # that would normally build this map.
     sibling_urls: Dict[str, List[str]] = field(default_factory=dict)
+    # Index-page markdown (see CrawlOutcome.index_markdown) — the boilerplate
+    # reference for detail extraction. Same seam as sibling_urls.
+    index_markdown: str = ""
 
 
 def discover_candidates(
@@ -96,6 +99,7 @@ def discover_candidates(
         pages_fetched=outcome.pages_fetched,
         supplement_url_re=supplement_url_re,
         sibling_urls=outcome.sibling_urls,
+        index_markdown=outcome.index_markdown,
     )
 
 

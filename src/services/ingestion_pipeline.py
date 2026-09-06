@@ -67,6 +67,7 @@ IngestionEventCallback = Callable[[str, Dict[str, Any]], None]
 STAGE_CONTEXT_KEYS = {
     IngestionStage.FETCH_RAW: (
         "raw_pages",
+        "index_markdown",
         "raw_page_count",
         "failed_urls",
         "scouted_links",
@@ -253,13 +254,14 @@ class IngestionPipeline:
         univ_slug: str,
         year: int,
         continue_depth: int = 0,
-        page_type_hint: str = "auto",
+        page_type_hint: str = "index",
         export_md: bool = False,
         export_path: Optional[str] = None,
         html_content: Optional[str] = None,
         selected_urls: Optional[List[str]] = None,
         selected_link_texts: Optional[Dict[str, str]] = None,
         selected_sibling_urls: Optional[Dict[str, List[str]]] = None,
+        index_markdown: Optional[str] = None,
         max_detail_pages: Optional[int] = None,
         browser_automation_enabled: bool = False,
         detail_pages_batch: Optional[List[Dict[str, Any]]] = None,
@@ -294,6 +296,7 @@ class IngestionPipeline:
                 str(url): list(sibs)
                 for url, sibs in dict(selected_sibling_urls or {}).items()
             },
+            "index_markdown": index_markdown or "",
             "max_detail_pages": max_detail_pages,
             "browser_automation_enabled": bool(browser_automation_enabled),
             "detail_pages_batch": list(detail_pages_batch or []),
@@ -789,6 +792,10 @@ class IngestionPipeline:
         )
 
         fetched_pages: List[Dict[str, Any]] = []
+        # Boilerplate reference for detail extraction: the index page's
+        # markdown. Seeded from the caller (strategy discovery already fetched
+        # it) and set by every branch below that fetches an index itself.
+        index_markdown = str(request_payload.get("index_markdown") or "")
         failed_urls: List[str] = []
         visited_urls: set[str] = set()
         scout_call_count = 0
@@ -845,6 +852,7 @@ class IngestionPipeline:
 
             return {
                 "raw_pages": fetched_pages,
+                "index_markdown": index_markdown,
                 "raw_page_count": len(fetched_pages),
                 "failed_urls": sorted(set(failed_urls)),
                 "scouted_links": serialized_scout_links,
@@ -998,6 +1006,7 @@ class IngestionPipeline:
                     index_probe = scraper._create_result_from_browser_html(
                         url, str(html_content)
                     )
+                    index_markdown = index_markdown or (index_probe.markdown or "")
                     derived_siblings = build_sibling_link_map(
                         index_probe.markdown, crawl_urls
                     )
@@ -1048,6 +1057,8 @@ class IngestionPipeline:
             probe = scraper._create_result_from_browser_html(url, html_content)
             visited_urls.add(probe.url)
             is_index = scraper._determine_page_type(probe, page_type_hint)
+            if is_index:
+                index_markdown = probe.markdown or ""
             if not is_index:
                 _append_pages([probe], depth=0, from_browser=True)
                 scout_candidates = [probe]
@@ -1114,10 +1125,9 @@ class IngestionPipeline:
             seed_page = await scraper.crawl_page(url)
             visited_urls.add(seed_page.url)
             is_index = page_type_hint == "index"
-            if page_type_hint == "auto":
-                is_index = scraper._determine_page_type(seed_page, "auto")
 
             if is_index:
+                index_markdown = seed_page.markdown or ""
                 _emit_fetch_event(
                     "fetch_phase",
                     {
@@ -1222,6 +1232,7 @@ class IngestionPipeline:
     ) -> Dict[str, Any]:
         raw_pages = context.get("raw_pages") or []
         known_detail_pattern = context.get("known_detail_pattern")
+        boilerplate_reference = str(context.get("index_markdown") or "") or None
         if known_detail_pattern:
             logger.info(
                 "extract_structured: domain has known_detail_pattern=%s from a "
@@ -1435,6 +1446,7 @@ class IngestionPipeline:
                 from_browser=from_browser,
                 name_hints=name_hints,
                 selected_anchor_text=str(row.get("selected_anchor_text") or "").strip() or None,
+                boilerplate_reference=boilerplate_reference,
             )
 
             thin_pending: Optional[Dict[str, Any]] = None
@@ -1527,6 +1539,7 @@ class IngestionPipeline:
                         from_browser=from_browser,
                         name_hints=name_hints,
                         selected_anchor_text=str(row.get("selected_anchor_text") or "").strip() or None,
+                        boilerplate_reference=boilerplate_reference,
                     )
                     if enriched_data is not None and not is_thin_program_result(enriched_data):
                         # The merged markdown now contains the supplement

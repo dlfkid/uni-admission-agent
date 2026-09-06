@@ -56,6 +56,58 @@ def save_html_debug(export_path: str, url: str, html: str) -> None:
     logger.info("Saved HTML for debugging: %s", filepath)
 
 
+def strip_shared_boilerplate(
+    markdown: str,
+    reference_markdown: "str | None",
+    *,
+    min_run: int = 3,
+) -> str:
+    """Drop the lines of *markdown* that the same site's index page also
+    carries, verbatim, in blocks of at least *min_run* lines.
+
+    This is how a detail page's navigation, mega-menu and footer are told
+    apart from its content: not by what a line looks like, but by the site's
+    own index page carrying the identical line. HKBU's detail pages are ~117k
+    chars of markdown of which ~90% is the mega-menu; the programme itself is
+    ~5k chars in the last of 8 LLM chunks, so 7 of every 8 extraction calls
+    parsed navigation.
+
+    Why not the obvious alternatives: dropping pure-link lines deletes the
+    tuition CityU and the requirements Lingnan publish inside links; stripping
+    <nav>/<header>/<footer> leaves HKBU at 42k chars (the menu is not inside
+    those tags) and wipes Lingnan's department page; a pattern list is one
+    university's furniture. Measured on the nine golden index/detail pairs,
+    this filter loses none of the admission signals in any of them.
+
+    The *min_run* guard keeps isolated coincidences: Edinburgh's index lists
+    "4 years" and "Full-time" for every degree, and those same short facts on
+    a detail page are content. Blank lines inside a shared block do not split
+    it. With no reference the page is returned unchanged.
+    """
+    if not markdown or not reference_markdown:
+        return markdown
+
+    reference = {line.strip() for line in reference_markdown.splitlines() if line.strip()}
+    lines = markdown.splitlines()
+    shared = [bool(line.strip()) and line.strip() in reference for line in lines]
+    keep = [True] * len(lines)
+
+    i = 0
+    while i < len(lines):
+        if not shared[i]:
+            i += 1
+            continue
+        j = i
+        while j < len(lines) and (shared[j] or not lines[j].strip()):
+            j += 1
+        if sum(1 for k in range(i, j) if shared[k]) >= min_run:
+            for k in range(i, j):
+                keep[k] = False
+        i = j
+
+    return "\n".join(line for line, kept in zip(lines, keep) if kept)
+
+
 def strip_html_boilerplate(html: str) -> str:
     """Remove nav/header/footer HTML elements to reduce page size for LLM.
 
