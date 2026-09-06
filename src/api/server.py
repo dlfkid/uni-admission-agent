@@ -2275,28 +2275,6 @@ async def _mcp_crawl_impl(
             auto_run_threshold=0.92,
             top_k=max(1, int(candidate_taxonomy_filter_top_k)),
         )
-        if not ranked_candidates:
-            response = _index_review_response(
-                candidates=[],
-                decision_reason="no_candidates_above_keep_threshold",
-                browser_provider=browser_provider,
-                client_id=client_id,
-                strict_client=strict_client,
-            )
-            response["page_type_hint_applied"] = normalized_hint
-            return response
-
-        if len(ranked_candidates) > 10:
-            response = _index_review_response(
-                candidates=ranked_candidates,
-                decision_reason="candidate_count_exceeds_auto_limit",
-                browser_provider=browser_provider,
-                client_id=client_id,
-                strict_client=strict_client,
-            )
-            response["page_type_hint_applied"] = normalized_hint
-            return response
-
         def _auto_run_eligible(row: Dict[str, Any]) -> bool:
             if "auto_run_eligible" in row:
                 return bool(row.get("auto_run_eligible"))
@@ -2305,10 +2283,21 @@ async def _mcp_crawl_impl(
             except (TypeError, ValueError):
                 return False
 
-        if not all(_auto_run_eligible(row) for row in ranked_candidates):
+        # The three reasons to hand the candidate list back for review instead
+        # of crawling it. One return, because all three build the same
+        # response — separate returns only cost the reader a diff to compare.
+        review_reason: Optional[str] = None
+        if not ranked_candidates:
+            review_reason = "no_candidates_above_keep_threshold"
+        elif len(ranked_candidates) > 10:
+            review_reason = "candidate_count_exceeds_auto_limit"
+        elif not all(_auto_run_eligible(row) for row in ranked_candidates):
+            review_reason = "confidence_below_auto_threshold"
+
+        if review_reason is not None:
             response = _index_review_response(
                 candidates=ranked_candidates,
-                decision_reason="confidence_below_auto_threshold",
+                decision_reason=review_reason,
                 browser_provider=browser_provider,
                 client_id=client_id,
                 strict_client=strict_client,

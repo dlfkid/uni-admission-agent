@@ -13,7 +13,7 @@ from unittest.mock import patch
 import pytest
 import typer
 
-import src.cmd.cli as cli
+from src.cmd import cli
 from src.services.migrations import MigrationError
 
 _PENDING = {"pending": True, "current_revision": "aaa", "head_revision": "bbb"}
@@ -42,6 +42,49 @@ def test_a_failed_migration_aborts_the_command(verbose: bool, capsys) -> None:
     assert "aaa" in combined and "bbb" in combined
     # ...and how to get out of it.
     assert "repair --auto" in combined
+
+
+def test_a_failure_reading_the_migration_status_aborts_with_a_message() -> None:
+    """Reading the status can fail too, and it is a different failure.
+
+    Both the read and the migration used to sit in one `try`, and the
+    MigrationError handler formatted `status[...]` — so when the read itself
+    raised, the handler died with UnboundLocalError and the user saw neither
+    the original error nor the remedy this function promises.
+    """
+    with patch.object(cli, "DatabaseManager"), patch.object(
+        cli, "bootstrap_subject_taxonomy"
+    ), patch.object(
+        cli, "get_migration_status", side_effect=MigrationError("cannot read alembic_version")
+    ):
+        with pytest.raises(typer.Exit) as exc:
+            cli._init_db(verbose=False)
+    assert exc.value.exit_code != 0
+
+
+def test_a_failure_reading_the_migration_status_names_the_error_and_a_remedy(capsys) -> None:
+    with patch.object(cli, "DatabaseManager"), patch.object(
+        cli, "bootstrap_subject_taxonomy"
+    ), patch.object(
+        cli, "get_migration_status", side_effect=MigrationError("cannot read alembic_version")
+    ):
+        with pytest.raises(typer.Exit):
+            cli._init_db(verbose=False)
+    combined = "".join(capsys.readouterr())
+    assert "cannot read alembic_version" in combined
+    assert "db-version" in combined
+
+
+def test_the_status_read_failing_never_reports_a_revision_it_does_not_know(capsys) -> None:
+    """No made-up 'unversioned -> None' gap when the read never returned one."""
+    with patch.object(cli, "DatabaseManager"), patch.object(
+        cli, "bootstrap_subject_taxonomy"
+    ), patch.object(cli, "get_migration_status", side_effect=RuntimeError("connection reset")):
+        with pytest.raises(typer.Exit):
+            cli._init_db(verbose=False)
+    combined = "".join(capsys.readouterr())
+    assert "connection reset" in combined
+    assert "None" not in combined
 
 
 @pytest.mark.parametrize("verbose", [False, True])
@@ -127,11 +170,25 @@ def test_an_explicit_database_url_is_not_clobbered_by_dotenv(
 
 
 def test_dotenv_still_supplies_the_value_when_unset(tmp_path, monkeypatch) -> None:
+    """The variable this writes must not outlive the test.
+
+    ``monkeypatch.delenv(raising=False)`` records an undo only when the
+    variable existed. On a clean machine (and in CI) ``DATABASE_URL`` does
+    not, so nothing was recorded, and the value ``load_dotenv`` then wrote
+    straight into ``os.environ`` leaked into every later test — seven
+    tests in test_db_portability.py failed trying to resolve the host
+    ``from-dotenv``. A developer with a project ``.env`` never saw it,
+    because that file made the variable exist and the undo get recorded.
+    """
     from src.storage.db_helpers import _load_env_file
 
     env_file = tmp_path / ".env"
     env_file.write_text("DATABASE_URL=postgresql://from-dotenv/db\n", encoding="utf-8")
 
     monkeypatch.delenv("DATABASE_URL", raising=False)
-    assert _load_env_file(str(env_file)) is True
-    assert os.environ["DATABASE_URL"] == "postgresql://from-dotenv/db"
+    try:
+        assert _load_env_file(str(env_file)) is True
+        assert os.environ["DATABASE_URL"] == "postgresql://from-dotenv/db"
+    finally:
+        os.environ.pop("DATABASE_URL", None)
+    assert "DATABASE_URL" not in os.environ

@@ -317,8 +317,21 @@ def _init_db(verbose: bool = False) -> None:
             "then run: adm-agent status",
         )
 
+    # Reading the schema version and migrating it are separate failures with
+    # separate remedies, and they must stay in separate try blocks: when both
+    # shared one, a failed *read* landed in the MigrationError handler below,
+    # which formats `status` — unbound at that point, so the user got an
+    # UnboundLocalError instead of the error and the remedy.
     try:
         status = get_migration_status()
+    except Exception as e:
+        _abort_db(
+            "Could not read the database schema version.",
+            str(e),
+            "Run: adm-agent db-version   to see where the schema stands.",
+        )
+
+    try:
         if status["pending"]:
             logger.info(
                 "Pending DB migration detected (%s -> %s), applying...",

@@ -167,6 +167,27 @@ async def test_review_required_when_count_gt_10_or_low_confidence(monkeypatch) -
     assert len(result_low["candidates"]) == 3
     assert crawl_calls["count"] == 0
 
+    def _rank_none(*, links, **_kwargs):  # pylint: disable=unused-argument
+        _ = links
+        return []
+
+    monkeypatch.setattr(
+        "src.api.server._rank_index_candidates_by_taxonomy",
+        _rank_none,
+        raising=False,
+    )
+    result_none = await server.mcp_crawl(
+        url="https://example.edu/index",
+        univ_slug="uom",
+        year=2026,
+    )
+    assert result_none["auto_ready"] is False
+    assert result_none["requires_user_review"] is True
+    assert result_none["decision_reason"] == "no_candidates_above_keep_threshold"
+    assert result_none["candidates"] == []
+    assert result_none["page_type_hint_applied"] == "index"
+    assert crawl_calls["count"] == 0
+
 
 @pytest.mark.asyncio
 async def test_crawl_respects_manual_page_type_hint_detail(monkeypatch) -> None:
