@@ -11,10 +11,13 @@ decides which one becomes the headline, by a fixed priority, in code.
 from __future__ import annotations
 
 import logging
+import math
 import re
-from typing import Optional
+from dataclasses import dataclass
+from decimal import Decimal
+from typing import Optional, Protocol, Sequence
 
-from src.models.admission import TuitionScope
+from src.models.admission import CurrencyCode, StudyMode, TuitionBasis, TuitionScope
 
 logger = logging.getLogger(__name__)
 
@@ -48,3 +51,104 @@ def normalize_applicant_scope(label: Optional[str]) -> TuitionScope:
         return TuitionScope.LOCAL
     logger.warning("Unrecognised tuition applicant wording %r — stored as scope=all", text)
     return TuitionScope.ALL
+
+
+_SCOPE_ORDER = (TuitionScope.NON_LOCAL, TuitionScope.ALL, TuitionScope.LOCAL)
+_MODE_ORDER = (StudyMode.FULL_TIME, StudyMode.UNKNOWN, StudyMode.PART_TIME, StudyMode.HYBRID)
+
+
+class FeeRow(Protocol):
+    """What derive_headline_tuition needs from a fee; ParsedTuitionFee satisfies it."""
+    amount: Decimal
+    currency: CurrencyCode
+    basis: TuitionBasis
+    study_mode: StudyMode
+    applicant_scope: TuitionScope
+    credits: Optional[int]
+
+
+@dataclass(frozen=True)
+class DerivedFee:
+    """A programme total computed from a per-annum or per-credit row. Written to
+    the detail table with is_derived=True so the headline stays traceable."""
+    amount: Decimal
+    currency: CurrencyCode
+    basis: TuitionBasis
+    study_mode: StudyMode
+    applicant_scope: TuitionScope
+    source_text: str
+
+
+@dataclass(frozen=True)
+class HeadlineResult:
+    amount: Optional[Decimal]
+    currency: Optional[CurrencyCode]
+    derived: tuple[DerivedFee, ...] = ()
+
+
+_EMPTY = HeadlineResult(amount=None, currency=None)
+
+
+def _years_for(mode: StudyMode, study_options: Sequence[tuple[StudyMode, Optional[int]]]) -> Optional[int]:
+    """Whole years for *mode*; an undistinguished fee uses the full-time duration."""
+    wanted = StudyMode.FULL_TIME if mode is StudyMode.UNKNOWN else mode
+    for opt_mode, months in study_options:
+        if opt_mode is wanted and months:
+            return max(1, math.ceil(months / 12))
+    return None
+
+
+def _programme_total(fee: FeeRow, study_options) -> Optional[tuple[Decimal, Optional[DerivedFee]]]:
+    """The programme-total reading of one fee row, deriving if the basis needs it."""
+    if fee.basis is TuitionBasis.PER_PROGRAMME:
+        return fee.amount, None
+    if fee.basis is TuitionBasis.PER_ANNUM:
+        years = _years_for(fee.study_mode, study_options)
+        if years is None or years == 1:
+            # no duration, or already a single year: the per-annum figure, unconverted
+            return fee.amount, None
+        total = fee.amount * years
+        return total, DerivedFee(
+            amount=total, currency=fee.currency, basis=TuitionBasis.PER_PROGRAMME,
+            study_mode=fee.study_mode, applicant_scope=fee.applicant_scope,
+            source_text=f"derived: {fee.amount} per annum × {years} years",
+        )
+    if fee.basis is TuitionBasis.PER_CREDIT:
+        if not fee.credits:
+            return None
+        total = fee.amount * fee.credits
+        return total, DerivedFee(
+            amount=total, currency=fee.currency, basis=TuitionBasis.PER_PROGRAMME,
+            study_mode=fee.study_mode, applicant_scope=fee.applicant_scope,
+            source_text=f"derived: {fee.amount} per credit × {fee.credits} credits",
+        )
+    return None                                # per_semester never feeds the headline
+
+
+def derive_headline_tuition(
+    fees: Sequence[FeeRow],
+    study_options: Sequence[tuple[StudyMode, Optional[int]]],
+) -> HeadlineResult:
+    """Pick the coarse tuition from the page's fee rows by fixed priority.
+
+    Scope non_local › all › local (the product's users are non-local
+    applicants); mode FullTime › Unknown › PartTime › Hybrid; basis: a stated
+    programme total, else per-annum × whole years of the same mode, else
+    per-credit × credits. Per-semester rows are never used. Within one
+    (scope, mode) cell a stated total beats a derived one.
+    """
+    for scope in _SCOPE_ORDER:
+        for mode in _MODE_ORDER:
+            cell = [f for f in fees if f.applicant_scope is scope and f.study_mode is mode]
+            if not cell:
+                continue
+            cell.sort(key=lambda f: (f.basis is not TuitionBasis.PER_PROGRAMME,
+                                     f.basis is not TuitionBasis.PER_ANNUM))
+            for fee in cell:
+                reading = _programme_total(fee, study_options)
+                if reading is None:
+                    continue
+                amount, derived = reading
+                return HeadlineResult(amount=amount, currency=fee.currency,
+                                      derived=(derived,) if derived else ())
+    return _EMPTY
