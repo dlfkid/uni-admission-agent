@@ -96,6 +96,17 @@ export interface ProgramRecord {
     program_group_code: string | null;
     tuition_amount: number | null;
     currency: string | null;
+    tuition_fees?: {
+        amount: number;
+        currency: string | null;
+        basis: string;
+        study_mode: string;
+        applicant_scope: string;
+        scope_label: string | null;
+        credits: number | null;
+        is_derived: boolean;
+        source_text: string | null;
+    }[];
     study_options: { mode: string; duration_months: number }[];
     deadlines: { round?: number; description?: string; cutoff_date?: string }[];
     requirements?: {

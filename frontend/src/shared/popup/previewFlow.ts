@@ -547,6 +547,28 @@ export function initPreviewFlow(deps: PreviewFlowDeps): void {
                 card.appendChild(details);
             }
 
+            if (p.tuition_fees?.length) {
+                const details = document.createElement("details");
+                details.className = "program-fees";
+                const summary = document.createElement("summary");
+                summary.textContent = `${p.tuition_fees.length} fee line${p.tuition_fees.length > 1 ? "s" : ""}`;
+                details.appendChild(summary);
+                const list = document.createElement("ul");
+                for (const fee of p.tuition_fees) {
+                    const li = document.createElement("li");
+                    const who = fee.scope_label ?? fee.applicant_scope;
+                    const mode = fee.study_mode === "Unknown" ? "any mode" : fee.study_mode;
+                    const basis = fee.basis.replace("per_", "per ");
+                    const credits = fee.credits ? ` × ${fee.credits} credits` : "";
+                    const derived = fee.is_derived ? " (derived)" : "";
+                    li.textContent = `${who} · ${mode} · ${basis}${credits}: ${fee.currency ?? ""} ${fee.amount.toLocaleString()}${derived}`;
+                    if (fee.source_text) li.title = fee.source_text;
+                    list.appendChild(li);
+                }
+                details.appendChild(list);
+                card.appendChild(details);
+            }
+
             if (p.source_url) {
                 const a = document.createElement("a");
                 a.className = "program-card-url";

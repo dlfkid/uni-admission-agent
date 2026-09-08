@@ -806,6 +806,8 @@ button:active { transform: scale(0.97); }
 }
 
 .program-card-meta { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 6px; }
+.program-fees { margin-top: 6px; font-size: 12px; }
+.program-fees ul { margin: 4px 0 0 14px; padding: 0; }
 .program-card-actions { display: flex; gap: 8px; margin-bottom: 6px; }
 
 .program-card-action-btn {
