@@ -12,9 +12,9 @@ from src.storage.db_manager import DatabaseManager, _attach_sqlite_pragmas
 from src.services.crawler import query_programs
 
 
-def _row(amount, basis="per_programme", mode="FullTime", scope="non_local"):
+def _row(amount, basis="per_programme", mode="FullTime", scope="non_local", derived=False):
     return {"amount": amount, "currency": "HKD", "basis": basis, "study_mode": mode,
-            "applicant_scope": scope, "scope_label": None, "credits": None, "is_derived": False,
+            "applicant_scope": scope, "scope_label": None, "credits": None, "is_derived": derived,
             "source_text": None}
 
 
@@ -66,6 +66,26 @@ class TestQuery:
     def test_tuition_max_is_inclusive(self) -> None:
         names = {p.name_en for p in query_programs("x", 2027, tuition_max=150000)}
         assert "Cheap FT" in names
+
+    def test_one_year_per_annum_programme_is_visible_via_its_derived_row(self) -> None:
+        """CUHK-shaped (I2): a 1-year FullTime per_annum fee also carries a
+        derived FullTime/all/per_programme row, so the default per_programme
+        filter and tuition_max can see a 1-year programme."""
+        self._add("CUHK-shaped", [
+            _row(198000, basis="per_annum", mode="FullTime", scope="all"),
+            _row(198000, basis="per_programme", mode="FullTime", scope="all", derived=True),
+        ])
+
+        by_max = {p.name_en for p in query_programs("x", 2027, tuition_max=200000)}
+        assert "CUHK-shaped" in by_max
+
+        by_scope = {p.name_en for p in query_programs("x", 2027, tuition_scope="all")}
+        assert "CUHK-shaped" in by_scope
+
+        program = next(p for p in query_programs("x", 2027) if p.name_en == "CUHK-shaped")
+        derived_row = next(f for f in program.tuition_fees if f["basis"] == "per_programme")
+        assert derived_row["is_derived"] is True
+        assert derived_row["amount"] == 198000.0
 
 
 def test_get_programs_forwards_the_filters() -> None:

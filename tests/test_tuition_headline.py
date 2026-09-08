@@ -117,9 +117,15 @@ def test_programme_total_beats_a_per_credit_rate_on_the_same_page() -> None:  # 
     assert _amt(derive_headline_tuition(fees, [])) == 495000
 
 
-def test_per_annum_is_multiplied_by_whole_years_of_the_same_mode() -> None:   # Manchester 2yr PT
+def test_per_annum_is_multiplied_by_whole_years_of_the_same_mode() -> None:   # CUHK 1yr FT / Manchester 2yr PT
     r = derive_headline_tuition([_Fee(Decimal(15800), ANNUM, FT)], [(FT, 12), (PT, 24)])
     assert _amt(r) == 15800
+    # I2: a 1-year per-annum fee also yields a derived per_programme row, same
+    # as the multi-year case — every headline is traceable to a per_programme
+    # row, which keeps a 1-year programme visible to the default filter.
+    assert len(r.derived) == 1 and r.derived[0].basis is PROG and r.derived[0].study_mode is FT
+    assert r.derived[0].source_text == "derived: 15800 per annum × 1 year"
+
     r = derive_headline_tuition([_Fee(Decimal(99000), ANNUM, PT)], [(FT, 12), (PT, 24)])
     assert _amt(r) == 198000
     assert len(r.derived) == 1 and r.derived[0].basis is PROG and r.derived[0].study_mode is PT

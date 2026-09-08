@@ -104,14 +104,15 @@ def _programme_total(fee: FeeRow, study_options) -> Optional[tuple[Decimal, Opti
         return fee.amount, None
     if fee.basis is TuitionBasis.PER_ANNUM:
         years = _years_for(fee.study_mode, study_options)
-        if years is None or years == 1:
-            # no duration, or already a single year: the per-annum figure, unconverted
+        if years is None:
+            # no duration on record: the per-annum figure, unconverted, no derived row
             return fee.amount, None
         total = fee.amount * years
+        unit = "year" if years == 1 else "years"
         return total, DerivedFee(
             amount=total, currency=fee.currency, basis=TuitionBasis.PER_PROGRAMME,
             study_mode=fee.study_mode, applicant_scope=fee.applicant_scope,
-            source_text=f"derived: {fee.amount} per annum × {years} years",
+            source_text=f"derived: {fee.amount} per annum × {years} {unit}",
         )
     if fee.basis is TuitionBasis.PER_CREDIT:
         if not fee.credits:
