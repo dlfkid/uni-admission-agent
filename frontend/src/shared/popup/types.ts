@@ -97,7 +97,7 @@ export interface ProgramRecord {
     tuition_amount: number | null;
     currency: string | null;
     tuition_fees?: {
-        amount: number;
+        amount: number | string;
         currency: string | null;
         basis: string;
         study_mode: string;

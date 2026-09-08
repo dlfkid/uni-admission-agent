@@ -12,7 +12,7 @@ from src.agents.tuition_headline import normalize_applicant_scope
 
 
 @pytest.mark.parametrize("label", [
-    "Local", "local students", "Home", "UK", "UK/EU", "UK and EU", "Domestic", "本地", "本地学生",
+    "Local", "local students", "Home", "UK", "UK/EU", "UK and EU", "Home/EU", "Domestic", "本地", "本地学生",
 ])
 def test_local_wordings(label: str) -> None:
     assert normalize_applicant_scope(label) is TuitionScope.LOCAL

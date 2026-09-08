@@ -561,7 +561,7 @@ export function initPreviewFlow(deps: PreviewFlowDeps): void {
                     const basis = fee.basis.replace("per_", "per ");
                     const credits = fee.credits ? ` × ${fee.credits} credits` : "";
                     const derived = fee.is_derived ? " (derived)" : "";
-                    li.textContent = `${who} · ${mode} · ${basis}${credits}: ${fee.currency ?? ""} ${fee.amount.toLocaleString()}${derived}`;
+                    li.textContent = `${who} · ${mode} · ${basis}${credits}: ${fee.currency ?? ""} ${Number(fee.amount).toLocaleString()}${derived}`;
                     if (fee.source_text) li.title = fee.source_text;
                     list.appendChild(li);
                 }

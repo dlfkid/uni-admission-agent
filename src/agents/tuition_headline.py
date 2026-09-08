@@ -26,17 +26,17 @@ logger = logging.getLogger(__name__)
 _BOTH_RE = re.compile(r"\b(local|home|uk)\b.{0,12}\b(and|&|/)\b.{0,12}\b(non-?local|international|overseas)\b", re.I)
 _NON_LOCAL_RE = re.compile(r"non-?local|international|overseas|\bEU\b|非本地|國際|国际", re.I)
 _LOCAL_RE = re.compile(r"\blocal\b|\bhome\b|\bUK\b|domestic|本地", re.I)
-_UK_EU_RE = re.compile(r"\bUK\s*(/|and|&)\s*EU\b", re.I)
+_UK_EU_RE = re.compile(r"\b(UK|Home)\s*(/|and|&)\s*EU\b", re.I)
 
 
 def normalize_applicant_scope(label: Optional[str]) -> TuitionScope:
     """Map the page's applicant wording onto the three filterable values.
 
     Order matters: an explicit both-scopes phrase is ALL; the pre-Brexit
-    "UK/EU" pairing is one home band (LOCAL); any non-local keyword is
-    NON_LOCAL (bare "EU" included — UK pages now price EU with International);
-    any local keyword is LOCAL. Anything else is ALL with a warning so the
-    vocabulary can be extended.
+    "UK/EU" or "Home/EU" pairing is one home band (LOCAL); any non-local
+    keyword is NON_LOCAL (bare "EU" included — UK pages now price EU with
+    International); any local keyword is LOCAL. Anything else is ALL with a
+    warning so the vocabulary can be extended.
     """
     text = " ".join(str(label or "").split())
     if not text:
