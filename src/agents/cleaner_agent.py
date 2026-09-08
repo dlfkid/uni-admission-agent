@@ -383,6 +383,51 @@ def _normalize_parsed_data(parsed: ParsedProgramData) -> ParsedProgramData:
     )
 
 
+def _finalize_parsed(parsed: ParsedProgramData) -> ParsedProgramData:
+    """Normalise tuition_fees, derive the headline, and set parsed.tuition.
+
+    Every extraction path must call this before returning: ``clean_markdown``
+    (rolling-chunk and single-pass) and ``clean_row`` (the PDF import path,
+    which never goes through ``clean_markdown`` and reads ``parsed.tuition``
+    directly — see ``src/storage/importer.py::_import_pdf``).
+
+    Idempotent: a derived row is appended only if no row already carries its
+    ``(study_mode, applicant_scope, basis)`` key, so calling this twice on an
+    already-finalized result (e.g. clean_row's finalisation followed by
+    clean_markdown's, when _parse_single_pass -> clean_row is the underlying
+    call) does not duplicate the derived row.
+    """
+    parsed = _normalize_parsed_data(parsed)
+    headline = derive_headline_tuition(
+        parsed.tuition_fees,
+        [(opt.mode, opt.duration_months) for opt in parsed.study_options],
+    )
+    existing_keys = {
+        (fee.study_mode, fee.applicant_scope, fee.basis) for fee in parsed.tuition_fees
+    }
+    for row in headline.derived:
+        key = (row.study_mode, row.applicant_scope, row.basis)
+        if key in existing_keys:
+            continue
+        # is_derived/applicant_scope are computed fields the constructor can't
+        # accept as input (see _strip_llm_supplied_computed_fields) — set them
+        # as attributes after construction instead.
+        derived_fee = ParsedTuitionFee(
+            amount=row.amount, currency=row.currency, basis=row.basis,
+            study_mode=row.study_mode, scope_label=None, credits=None,
+            source_text=row.source_text,
+        )
+        derived_fee.is_derived = True
+        derived_fee.applicant_scope = row.applicant_scope
+        parsed.tuition_fees.append(derived_fee)
+        existing_keys.add(key)
+    parsed.tuition = (
+        ParsedTuition(amount=headline.amount, currency=headline.currency)
+        if headline.amount is not None else None
+    )
+    return parsed
+
+
 def _merge_parsed_data(
     existing: ParsedProgramData, new: ParsedProgramData,
 ) -> ParsedProgramData:
@@ -507,7 +552,7 @@ class LLMCleanerAgent:
                 return None
 
             parsed_data = ParsedProgramData.model_validate_json(response.text)
-            return parsed_data
+            return _finalize_parsed(parsed_data)
 
         except Exception as e:
             logger.error("LLM Parsing Failed: %s", e)
@@ -540,29 +585,12 @@ class LLMCleanerAgent:
 
         if parsed is None:
             return None
-        # Dedup/null-date normalization runs on BOTH paths here (not just inside the
-        # chunk merge) so behavior is uniform regardless of page size.
-        parsed = _normalize_parsed_data(parsed)
-        headline = derive_headline_tuition(
-            parsed.tuition_fees,
-            [(opt.mode, opt.duration_months) for opt in parsed.study_options],
-        )
-        for row in headline.derived:
-            # is_derived/applicant_scope are computed fields the constructor can't
-            # accept as input (see _strip_llm_supplied_computed_fields) — set them
-            # as attributes after construction instead.
-            parsed.tuition_fees.append(ParsedTuitionFee(
-                amount=row.amount, currency=row.currency, basis=row.basis,
-                study_mode=row.study_mode, scope_label=None, credits=None,
-                source_text=row.source_text,
-            ))
-            parsed.tuition_fees[-1].is_derived = True
-            parsed.tuition_fees[-1].applicant_scope = row.applicant_scope
-        parsed.tuition = (
-            ParsedTuition(amount=headline.amount, currency=headline.currency)
-            if headline.amount is not None else None
-        )
-        return parsed
+        # Dedup/null-date normalization and headline derivation run on BOTH paths
+        # here (not just inside the chunk merge) so behavior is uniform regardless
+        # of page size. _finalize_parsed is idempotent, so it's safe even when the
+        # underlying call already went through clean_row (which finalizes too, for
+        # the PDF-import path that calls clean_row directly).
+        return _finalize_parsed(parsed)
 
     # ------------------------------------------------------------------ #
     #  Self-critique retry                                                #

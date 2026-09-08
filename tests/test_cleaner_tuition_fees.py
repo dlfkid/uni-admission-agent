@@ -122,6 +122,59 @@ def test_amount_schema_still_advertises_a_number() -> None:
     assert "number" in json.dumps(amount_schema)
 
 
+def test_clean_row_finalizes_the_headline_too() -> None:
+    """PDF import (src/storage/importer.py::_import_pdf) calls clean_row
+    directly, never clean_markdown, and reads parsed.tuition (C1). If
+    clean_row doesn't derive+set the headline itself, PDF-imported
+    programmes persist with no tuition_amount even though tuition_fees are
+    present."""
+    llm_output = ParsedProgramData(
+        tuition=None,
+        tuition_fees=[_fee(198000, TuitionBasis.PER_ANNUM, StudyMode.FULL_TIME)],
+        study_options=[ParsedStudyOption(mode=StudyMode.FULL_TIME, duration_months=12)],
+    )
+
+    class _FakeRouter:
+        def generate(self, prompt, schema):  # pylint: disable=unused-argument
+            return LLMResponse(text=llm_output.model_dump_json(), model="fake")
+
+    agent = LLMCleanerAgent.__new__(LLMCleanerAgent)
+    agent.router = _FakeRouter()
+
+    parsed = agent.clean_row({"Tuition Fee": "HK$198,000 per annum"})
+
+    assert parsed.tuition is not None
+    assert parsed.tuition.amount == Decimal(198000)
+    assert parsed.tuition.currency is CurrencyCode.HKD
+
+
+def _fee_identity(fee: ParsedTuitionFee) -> tuple:
+    return (fee.amount, fee.currency, fee.basis, fee.study_mode, fee.scope_label,
+            fee.credits, fee.source_text, fee.applicant_scope, fee.is_derived)
+
+
+def test_finalize_parsed_is_idempotent() -> None:
+    """Both clean_row and clean_markdown call _finalize_parsed; when
+    _parse_single_pass -> clean_row -> clean_markdown chains, finalisation
+    could run twice on the same data. It must not double-append the
+    derived per_programme row."""
+    from src.agents.cleaner_agent import _finalize_parsed
+
+    def _build() -> ParsedProgramData:
+        return ParsedProgramData(
+            tuition_fees=[_fee(99000, TuitionBasis.PER_ANNUM, StudyMode.PART_TIME)],
+            study_options=[ParsedStudyOption(mode=StudyMode.PART_TIME, duration_months=24)],
+        )
+
+    once = _finalize_parsed(_build())
+    twice = _finalize_parsed(_finalize_parsed(_build()))
+
+    assert once.tuition == twice.tuition
+    assert [_fee_identity(f) for f in once.tuition_fees] == [_fee_identity(f) for f in twice.tuition_fees]
+    # one stated per_annum row + one derived per_programme row, not two derived rows
+    assert len(once.tuition_fees) == 2
+
+
 def test_clean_row_prompt_asks_for_every_fee_not_a_choice() -> None:
     """clean_row builds its own inline prompt (not clean_chunk.txt); make sure the
     controller-mandated rewrite of that prompt is actually in place and stays."""
