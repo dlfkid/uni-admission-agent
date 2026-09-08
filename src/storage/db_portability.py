@@ -33,14 +33,14 @@ class DatabaseNotEmptyError(Exception):
 
 
 def get_portable_tables() -> list[Table]:
-    """All 17 whole-database-portable tables, in FK-dependency order.
+    """All 18 whole-database-portable tables, in FK-dependency order.
 
     Explicitly imports every model module that defines a table=True class.
     Two of them — src.models.quarantine and src.models.extraction_audit —
     are only imported lazily elsewhere in the codebase (inside specific
     DatabaseManager methods), so without this, a fresh process that hasn't
     happened to trigger those imports yet would silently export/import only
-    14 of the 17 tables.
+    15 of the 18 tables.
     """
     import src.models.admission  # noqa: F401
     import src.models.requirement  # noqa: F401

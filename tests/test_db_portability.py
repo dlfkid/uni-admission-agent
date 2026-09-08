@@ -34,7 +34,8 @@ from src.storage.db_portability import (
 EXPECTED_TABLE_NAMES = {
     "university", "program_catalog", "program",
     "subject_dim", "exam_dim", "framework_dim", "requirement_evidence",
-    "requirement_version", "program_study_option", "program_deadline",
+    "requirement_version", "program_study_option", "program_tuition_fee",
+    "program_deadline",
     "program_requirement",
     "ingestion_job", "ingestion_task",
     "subject_taxonomy",
@@ -44,7 +45,7 @@ EXPECTED_TABLE_NAMES = {
 
 
 class TestGetPortableTables:
-    def test_returns_all_seventeen_tables_in_fk_order(self) -> None:
+    def test_returns_all_eighteen_tables_in_fk_order(self) -> None:
         tables = get_portable_tables()
         names = [t.name for t in tables]
 
@@ -69,7 +70,7 @@ class _PortabilityTestBase:
             "sqlite:///:memory:", connect_args={"check_same_thread": False}
         )
         _attach_sqlite_pragmas(self.engine)
-        get_portable_tables()  # side-effect: registers all 17 tables first
+        get_portable_tables()  # side-effect: registers all 18 tables first
         SQLModel.metadata.create_all(self.engine)
         self.dm = DatabaseManager()
         self.dm.engine = self.engine
