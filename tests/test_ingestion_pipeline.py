@@ -35,6 +35,43 @@ def test_validate_rules_filters_invalid_records() -> None:
     assert result["validated_programs"][0]["study_options"] == []
 
 
+def test_validate_rules_carries_tuition_fees_through() -> None:
+    pipeline = IngestionPipeline(db_manager=MagicMock())
+    request_payload = {"year": 2027}
+    fee_full_time = {
+        "amount": 198000, "currency": "HKD", "basis": "per_annum", "study_mode": "FullTime",
+        "applicant_scope": "all", "scope_label": None, "credits": None, "is_derived": False,
+        "source_text": "HK$198,000 per annum",
+    }
+    fee_part_time = {
+        "amount": 99000, "currency": "HKD", "basis": "per_annum", "study_mode": "PartTime",
+        "applicant_scope": "all", "scope_label": None, "credits": None, "is_derived": False,
+        "source_text": "HK$99,000 per annum",
+    }
+    context = {
+        "program_candidates": [
+            {
+                "name_en": "MA in Anthropology",
+                "academic_year": 2027,
+                "tuition_fees": [fee_full_time, fee_part_time],
+            },
+        ]
+    }
+
+    result = pipeline._stage_validate_rules(request_payload, context)
+
+    assert result["validated_count"] == 1
+    validated_fees = result["validated_programs"][0]["tuition_fees"]
+    assert len(validated_fees) == 2
+    for fee, expected in zip(validated_fees, [fee_full_time, fee_part_time]):
+        assert set(fee.keys()) >= {
+            "amount", "currency", "basis", "study_mode", "applicant_scope",
+            "scope_label", "credits", "is_derived", "source_text",
+        }
+        assert fee["amount"] == expected["amount"]
+        assert fee["study_mode"] == expected["study_mode"]
+
+
 def test_persist_versioned_counts_create_and_update() -> None:
     mock_db = MagicMock()
     mock_db.upsert_program.side_effect = [

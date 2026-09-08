@@ -205,6 +205,7 @@ class ValidatedProgramPayload(BaseModel):
     study_options: List[Dict[str, Any]] = Field(default_factory=list)
     deadlines: List[Dict[str, Any]] = Field(default_factory=list)
     requirements: List[Dict[str, Any]] = Field(default_factory=list)
+    tuition_fees: List[Dict[str, Any]] = Field(default_factory=list)
     extra_metadata: Dict[str, Any] = Field(default_factory=dict)
     source_url: Optional[str] = None
     is_active: Optional[bool] = None
@@ -225,7 +226,7 @@ class ValidatedProgramPayload(BaseModel):
             raise ValueError("academic_year must be positive")
         return int(value)
 
-    @field_validator("study_options", "deadlines", "requirements", mode="before")
+    @field_validator("study_options", "deadlines", "requirements", "tuition_fees", mode="before")
     @classmethod
     def _coerce_list(cls, value: Any) -> list:
         if value is None:
@@ -1797,6 +1798,7 @@ class IngestionPipeline:
             payload.setdefault("study_options", [])
             payload.setdefault("deadlines", [])
             payload.setdefault("requirements", [])
+            payload.setdefault("tuition_fees", [])
             payload.setdefault("extra_metadata", {})
 
             try:
