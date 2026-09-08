@@ -325,8 +325,37 @@ class AnalyzeRequest(BaseModel):
         return _require_concrete_page_type(value)
 
 
+_TUITION_SCOPES = {"all", "local", "non_local"}
+_TUITION_STUDY_MODES = {"FullTime", "PartTime", "Hybrid", "Unknown"}
+_TUITION_BASES = {"per_programme", "per_annum", "per_semester", "per_credit"}
+
+
+def _normalize_enum_field(value: Optional[str], allowed: set, field_name: str) -> Optional[str]:
+    """Trim/case-fold *value* and match it against *allowed* case-insensitively.
+
+    ``None`` passes straight through (the filter is simply not applied).
+    Matching is case-insensitive because callers (MCP clients especially)
+    are inconsistent about case; the stored/canonical casing in ``allowed``
+    is what's returned, not the caller's casing.
+    """
+    if value is None:
+        return None
+    normalized = str(value).strip()
+    for candidate in allowed:
+        if normalized.lower() == candidate.lower():
+            return candidate
+    raise ValueError(f"{field_name} must be one of: {', '.join(sorted(allowed))}")
+
+
 class QueryRequest(BaseModel):
-    """Query parameters for ``GET /programs``."""
+    """Query parameters for ``GET /programs`` and the MCP ``db_query`` tool.
+
+    Validates the four tuition filter fields so a bad value surfaces as a
+    ``pydantic.ValidationError`` naming the field, instead of a ``ValueError``
+    raised deep inside ``query_programs``'s SQL filter construction (REST's
+    own ``Query(...)`` ``Literal`` types already do this at the HTTP layer;
+    this gives the MCP tool the same guarantee).
+    """
 
     univ_slug: str = Field(description="University slug")
     year: Optional[int] = Field(default=None, description="Academic year filter")
@@ -339,8 +368,23 @@ class QueryRequest(BaseModel):
         description="per_programme (default) | per_annum | per_semester | per_credit",
     )
     tuition_max: Optional[float] = Field(
-        default=None, description="inclusive upper bound on one fee row"
+        default=None, ge=0, description="inclusive upper bound on one fee row"
     )
+
+    @field_validator("tuition_scope")
+    @classmethod
+    def _validate_tuition_scope(cls, value: Optional[str]) -> Optional[str]:
+        return _normalize_enum_field(value, _TUITION_SCOPES, "tuition_scope")
+
+    @field_validator("tuition_study_mode")
+    @classmethod
+    def _validate_tuition_study_mode(cls, value: Optional[str]) -> Optional[str]:
+        return _normalize_enum_field(value, _TUITION_STUDY_MODES, "tuition_study_mode")
+
+    @field_validator("tuition_basis")
+    @classmethod
+    def _validate_tuition_basis(cls, value: Optional[str]) -> Optional[str]:
+        return _normalize_enum_field(value, _TUITION_BASES, "tuition_basis")
 
 
 class ProgramPatchRequest(BaseModel):

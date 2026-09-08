@@ -60,6 +60,7 @@ from src.api.schemas import (
     IngestionJobResponse,
     IngestionResumeRequest,
     ClientInfoResponse,
+    QueryRequest,
 )
 from src.api.task_manager import TaskManager, TaskState
 from src.core.feature_flags import is_agent_enabled_env
@@ -2582,9 +2583,16 @@ try:
         Returns:
             List of program dicts.
         """
-        programs = query_programs(univ_slug=univ_slug, year=year, tuition_scope=tuition_scope,
-                                  tuition_study_mode=tuition_study_mode, tuition_basis=tuition_basis,
-                                  tuition_max=tuition_max)
+        # Routed through QueryRequest so a bad filter value surfaces as a
+        # pydantic.ValidationError naming the field (MCP turns it into a tool
+        # error) instead of a ValueError raised deep inside query_programs's
+        # SQL filter construction, or a silently-ignored unknown study mode.
+        req = QueryRequest(
+            univ_slug=univ_slug, year=year, tuition_scope=tuition_scope,
+            tuition_study_mode=tuition_study_mode, tuition_basis=tuition_basis,
+            tuition_max=tuition_max,
+        )
+        programs = query_programs(**req.model_dump())
         return [p.model_dump() for p in programs]
 
     @mcp.tool(name="runtime_status")
