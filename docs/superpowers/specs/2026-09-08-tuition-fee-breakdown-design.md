@@ -88,7 +88,7 @@ warning is logged so the vocabulary can be extended.
 (`SqlEnum(..., values_callable=_enum_values)`): native enum type on Postgres,
 string on SQLite; both verified.
 
-**Migration** `20260907_0011_program_tuition_fee`: creates the table, its
+**Migration** `20260908_0011_program_tuition_fee`: creates the table, its
 unique constraint and indexes, and the two enum types on Postgres. Nothing
 else. `downgrade` drops them.
 
@@ -221,7 +221,9 @@ Run `--limit` crawls on CUHK MA in Anthropology (FT 198,000 / PT 99,000 per
 annum) and EdUHK MA Educational Psychology (Local 47,000 / Non-local 198,000
 per annum). Expect two detail rows each with the right scope and mode, and
 headline values of **198,000** for both: CUHK via `all → FullTime →
-per_annum × 1 year (derived)`, EdUHK via `non_local`. Then run the CUHK
+per_annum × 1 year (derived)`, EdUHK via `non_local → FullTime → per_annum ×
+1 year (derived)`. If either page's study option carries no duration, the
+per-annum figure is used unconverted and the headline is still 198,000. Then run the CUHK
 taught-programme index (138 programmes) in full.
 
 ## Out of scope
