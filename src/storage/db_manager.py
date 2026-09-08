@@ -6,7 +6,7 @@ import hashlib
 import threading
 from datetime import datetime, timezone
 from dataclasses import dataclass, field
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from typing import Any, Optional, Tuple, List, Dict
 
 from sqlalchemy import event, inspect as sa_inspect
@@ -556,8 +556,16 @@ class DatabaseManager:
             except ValueError:
                 logger.warning("Skipping tuition row with unknown currency: %r", item)
                 continue
+            try:
+                amount = Decimal(str(item["amount"]))
+            except (InvalidOperation, ValueError, TypeError):
+                logger.warning("Skipping tuition row with unparseable amount: %r", item)
+                continue
+            if amount <= 0:
+                logger.warning("Skipping tuition row with a non-positive amount: %r", item)
+                continue
             fields = {
-                "amount": Decimal(str(item["amount"])),
+                "amount": amount,
                 "currency": currency,
                 "scope_label": (str(item.get("scope_label") or "").strip() or None),
                 "credits": int(item["credits"]) if str(item.get("credits") or "").isdigit() else None,

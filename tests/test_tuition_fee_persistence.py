@@ -80,3 +80,30 @@ class TestTuitionFeeSync:
         self.dm.delete_program_snapshot(p.id)
         with Session(self.engine) as s:
             assert s.exec(select(ProgramTuitionFee)).all() == []
+
+    def test_unparseable_amount_is_skipped_not_a_crash(self) -> None:
+        """An external ingest (e.g. re-imported export data) can hand back an
+        amount string decimal.Decimal can't parse (I3); that one row must be
+        skipped with a warning, not blow up the whole upsert."""
+        good = _row(99000, mode="PartTime")
+        bad = {**_row(0, mode="FullTime"), "amount": "HK$198,000"}
+        p = self._upsert([bad, good])
+        rows = self._rows(p.id)
+        assert len(rows) == 1
+        assert int(rows[0].amount) == 99000
+
+    def test_zero_amount_is_skipped_as_extraction_noise(self) -> None:
+        good = _row(99000, mode="PartTime")
+        zero = _row(0, mode="FullTime")
+        p = self._upsert([zero, good])
+        rows = self._rows(p.id)
+        assert len(rows) == 1
+        assert int(rows[0].amount) == 99000
+
+    def test_negative_amount_is_skipped_too(self) -> None:
+        good = _row(99000, mode="PartTime")
+        negative = _row(-5, mode="FullTime")
+        p = self._upsert([negative, good])
+        rows = self._rows(p.id)
+        assert len(rows) == 1
+        assert int(rows[0].amount) == 99000
