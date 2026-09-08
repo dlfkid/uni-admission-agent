@@ -21,7 +21,6 @@ from src.agents.cleaner_agent import (
     ParsedRequirement,
     ChunkParseResult,
     _merge_parsed_data,
-    _reconcile_per_credit_tuition,
     _load_prompt,
     MAX_DETAIL_CHARS,
     CHUNK_OVERLAP_RATIO,
@@ -162,7 +161,7 @@ def test_clean_markdown_rolling_chunks() -> None:
     chunk_result = json.dumps({
         "data": {
             "faculty": "Faculty of Science",
-            "tuition": {"amount": "200000", "currency": "HKD"},
+            "tuition_fees": [{"amount": "200000", "currency": "HKD", "basis": "per_programme"}],
             "study_options": [{"mode": "FullTime", "duration_months": 24}],
             "deadlines": [],
         },
@@ -207,7 +206,7 @@ def test_clean_markdown_rolling_merge_across_chunks() -> None:
             text = json.dumps({
                 "data": {
                     "faculty": None,
-                    "tuition": {"amount": "150000", "currency": "HKD"},
+                    "tuition_fees": [{"amount": "150000", "currency": "HKD", "basis": "per_programme"}],
                     "study_options": [{"mode": "PartTime", "duration_months": 24}],
                     "deadlines": [],
                 },
@@ -603,43 +602,6 @@ def test_merge_collapses_near_verbatim_paraphrase() -> None:
     merged = _merge_parsed_data(ParsedProgramData(requirements=[a, b]), ParsedProgramData())
     assert len(merged.requirements) == 1
     assert merged.requirements[0].requirement_text == b.requirement_text
-
-
-# ── _reconcile_per_credit_tuition ───────────────────────────────────
-
-
-def _mk_tuition(amount) -> ParsedProgramData:
-    return ParsedProgramData(tuition=ParsedTuition(amount=Decimal(str(amount)), currency=CurrencyCode.HKD))
-
-
-def test_reconcile_per_credit_multiplies_by_credits() -> None:
-    """Per-credit-only page: amount is the per-credit rate -> compute total."""
-    p = _mk_tuition(8200)
-    md = "STUDY MODE Full-time CREDIT REQUIRED 30 Tuition Fee HK$8,200 per credit for local students"
-    _reconcile_per_credit_tuition(p, md, "u")
-    assert p.tuition.amount == Decimal("246000")
-
-
-def test_reconcile_leaves_per_programme_total_untouched() -> None:
-    """When a per-programme total is present, the extracted amount is trusted."""
-    p = _mk_tuition(424800)
-    md = "Tuition Fee HK$424,800 per programme (HK$11,800 per credit for 36 credits) CREDIT REQUIRED 43"
-    _reconcile_per_credit_tuition(p, md, "u")
-    assert p.tuition.amount == Decimal("424800")
-
-
-def test_reconcile_no_credit_count_leaves_amount() -> None:
-    """Per-credit rate but no credit count on page -> cannot compute, leave as-is."""
-    p = _mk_tuition(9500)
-    _reconcile_per_credit_tuition(p, "Tuition Fee HK$9,500 per credit for local students", "u")
-    assert p.tuition.amount == Decimal("9500")
-
-
-def test_reconcile_ignores_non_matching_amount() -> None:
-    """A normal total that doesn't equal any per-credit rate is never rewritten."""
-    p = _mk_tuition(300000)
-    _reconcile_per_credit_tuition(p, "HK$9,500 per credit CREDIT REQUIRED 30", "u")
-    assert p.tuition.amount == Decimal("300000")
 
 
 def test_single_pass_path_dedups_and_drops_null_deadline() -> None:

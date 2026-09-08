@@ -13,14 +13,18 @@ from src.agents.cleaner_agent import (
     LLMCleanerAgent,
     ParsedProgramData,
     ParsedDeadline,
-    ParsedTuition,
+    ParsedTuitionFee,
 )
-from src.models.admission import CurrencyCode
+from src.models.admission import CurrencyCode, TuitionBasis
 
 
 def _good_parsed() -> ParsedProgramData:
+    # The LLM now reports fees, not the headline directly — clean_markdown
+    # derives ``tuition`` from ``tuition_fees`` in code.
     return ParsedProgramData(
-        tuition=ParsedTuition(amount=Decimal("100000"), currency=CurrencyCode.HKD),
+        tuition_fees=[ParsedTuitionFee(
+            amount=Decimal("100000"), currency=CurrencyCode.HKD, basis=TuitionBasis.PER_PROGRAMME,
+        )],
     )
 
 

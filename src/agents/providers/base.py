@@ -4,11 +4,23 @@ LLM Provider base types and abstract base class.
 
 import logging
 from abc import ABC, abstractmethod
-from typing import Type
+from typing import Any, Dict, Type
 
 from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
+
+
+def llm_json_schema(schema: Type[BaseModel]) -> Dict[str, Any]:
+    """Build the JSON schema shown to the LLM in the system prompt.
+
+    Uses ``mode="serialization"`` (not the default ``"validation"``) so fields
+    marked ``Field(..., exclude=True)`` — internal bookkeeping the LLM must
+    never see or fill in, e.g. ``ParsedTuitionFee.applicant_scope`` and
+    ``.is_derived`` — are dropped from the schema, not just from
+    ``model_dump()``. The default mode ignores ``exclude`` entirely.
+    """
+    return schema.model_json_schema(mode="serialization")
 
 
 class LLMResponse(BaseModel):
