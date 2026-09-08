@@ -40,3 +40,22 @@ def test_fee_rows_are_exported_as_a_json_string_column() -> None:
     assert {r["study_mode"] for r in rows} == {"FullTime", "PartTime"}
     assert rows[0]["basis"] == "per_annum"
     DatabaseManager._instance = None
+
+
+def test_program_without_fee_rows_exports_an_empty_json_array() -> None:
+    DatabaseManager._instance = None
+    engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False})
+    _attach_sqlite_pragmas(engine); SQLModel.metadata.create_all(engine)
+    dm = DatabaseManager(); dm.engine = engine
+    with Session(engine) as s:
+        s.add(University(name="CUHK", slug="cuhk")); s.commit()
+    dm.upsert_program({
+        "name_en": "MA with No Fee Rows", "academic_year": 2027, "source_url": "https://x/b",
+    }, "cuhk", enable_auto_translation=False)
+
+    buf = io.BytesIO()
+    assert ExcelExporter(output_stream=buf).export_data("cuhk", 2027) == 1
+    buf.seek(0)
+    df = pd.read_excel(buf)
+    assert df.loc[0, "Tuition Fees (JSON)"] == "[]"
+    DatabaseManager._instance = None

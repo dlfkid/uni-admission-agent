@@ -3,13 +3,13 @@ import logging
 from typing import Optional, IO
 import pandas as pd
 from sqlmodel import select, col, desc
+from src.storage.db_helpers import tuition_fee_dicts
 from src.storage.db_manager import DatabaseManager
 from src.models.admission import University, Program
 from src.models.requirement import (
     ProgramStudyOption,
     ProgramDeadline,
     ProgramRequirement,
-    ProgramTuitionFee,
     SubjectDim,
     ExamDim,
     FrameworkDim,
@@ -121,22 +121,8 @@ class ExcelExporter:
                     .where(ProgramDeadline.program_id == p.id)
                     .order_by(col(ProgramDeadline.cutoff_date), col(ProgramDeadline.id))
                 ).all()
-                fee_rows = session.exec(
-                    select(ProgramTuitionFee)
-                    .where(ProgramTuitionFee.program_id == p.id)
-                    .order_by(col(ProgramTuitionFee.applicant_scope), col(ProgramTuitionFee.study_mode),
-                              col(ProgramTuitionFee.basis), col(ProgramTuitionFee.id))
-                ).all()
                 tuition_fees_json = json.dumps(
-                    [
-                        {
-                            "amount": float(f.amount), "currency": f.currency.value if f.currency else None,
-                            "basis": f.basis.value, "study_mode": f.study_mode.value,
-                            "applicant_scope": f.applicant_scope.value, "scope_label": f.scope_label,
-                            "credits": f.credits, "is_derived": f.is_derived, "source_text": f.source_text,
-                        }
-                        for f in fee_rows
-                    ],
+                    tuition_fee_dicts(session, p.id),
                     ensure_ascii=False,
                 )
                 latest_requirement_version = session.exec(

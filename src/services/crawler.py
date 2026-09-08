@@ -52,7 +52,7 @@ from src.services.crawl_strategy.discovery import (
 )
 from src.services.ingestion_pipeline import IngestionPipeline
 from src.services.subject_taxonomy import get_subject_taxonomy_service
-from src.storage.db_helpers import parse_study_mode
+from src.storage.db_helpers import parse_study_mode, tuition_fee_dicts
 from src.storage.db_manager import DatabaseManager, ProgramDeleteScope
 from src.storage.exporter import ExcelExporter
 from src.storage.importer import ExcelImporter
@@ -1073,21 +1073,7 @@ def query_programs(
                 .where(ProgramDeadline.program_id == program.id)
                 .order_by(col(ProgramDeadline.cutoff_date), col(ProgramDeadline.id))
             ).all()
-            fee_rows = session.exec(
-                select(ProgramTuitionFee)
-                .where(ProgramTuitionFee.program_id == program.id)
-                .order_by(col(ProgramTuitionFee.applicant_scope), col(ProgramTuitionFee.study_mode),
-                          col(ProgramTuitionFee.basis), col(ProgramTuitionFee.id))
-            ).all()
-            tuition_fees = [
-                {
-                    "amount": float(f.amount), "currency": f.currency.value if f.currency else None,
-                    "basis": f.basis.value, "study_mode": f.study_mode.value,
-                    "applicant_scope": f.applicant_scope.value, "scope_label": f.scope_label,
-                    "credits": f.credits, "is_derived": f.is_derived, "source_text": f.source_text,
-                }
-                for f in fee_rows
-            ]
+            tuition_fees = tuition_fee_dicts(session, program.id)
             latest_requirement_version = session.exec(
                 select(RequirementVersion)
                 .where(RequirementVersion.program_id == program.id)
