@@ -220,10 +220,12 @@ unchanged: a manual edit changes the coarse value only.
 Run `--limit` crawls on CUHK MA in Anthropology (FT 198,000 / PT 99,000 per
 annum) and EdUHK MA Educational Psychology (Local 47,000 / Non-local 198,000
 per annum). Expect two detail rows each with the right scope and mode, and
-headline values of **198,000** for both: CUHK via `all → FullTime →
-per_annum × 1 year (derived)`, EdUHK via `non_local → FullTime → per_annum ×
-1 year (derived)`. If either page's study option carries no duration, the
-per-annum figure is used unconverted and the headline is still 198,000. Then run the CUHK
+headline values of **198,000** for CUHK (`all → FullTime → per_annum`, a
+1-year programme, used as-is) and **396,000** for EdUHK (`non_local → FullTime
+→ per_annum 198,000 × 2 years`, derived: the page states a two-year normative
+full-time period, and the derived row is stored with `is_derived=true`). If a
+page's study option carries no duration, the per-annum figure is used
+unconverted. Then run the CUHK
 taught-programme index (138 programmes) in full.
 
 ## Out of scope
