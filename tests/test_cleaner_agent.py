@@ -66,9 +66,13 @@ def test_cleaner_agent_creates_default_router() -> None:
 
 
 def test_clean_row_success() -> None:
+    """clean_row now finalizes the headline itself (C1): the old `tuition`
+    field the LLM might set is always overwritten by code, derived from
+    `tuition_fees` — see src/agents/cleaner_agent.py::_finalize_parsed and
+    spec §2.1 ("anything the LLM puts there is overwritten")."""
     parsed_json = json.dumps({
         "faculty": "Faculty of Engineering",
-        "tuition": {"amount": "350000", "currency": "HKD"},
+        "tuition_fees": [{"amount": "350000", "currency": "HKD", "basis": "per_programme"}],
         "study_options": [{"mode": "FullTime", "duration_months": 12}],
         "deadlines": [{"description": "Main Round", "cutoff_date": "2025-12-31T00:00:00"}],
     })
