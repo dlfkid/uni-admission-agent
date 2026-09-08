@@ -1,11 +1,14 @@
 """The cleaner copies every fee the page states and derives the headline in code."""
 
+import json
 from decimal import Decimal
 from unittest.mock import patch
 
 from src.agents.cleaner_agent import (
-    LLMCleanerAgent, ParsedProgramData, ParsedStudyOption, ParsedTuitionFee, _normalize_parsed_data,
+    ChunkParseResult, LLMCleanerAgent, ParsedProgramBatch, ParsedProgramData, ParsedStudyOption,
+    ParsedTuitionFee, _normalize_parsed_data,
 )
+from src.agents.providers.base import LLMResponse
 from src.models.admission import CurrencyCode, StudyMode, TuitionBasis, TuitionScope
 
 
@@ -82,3 +85,60 @@ def test_the_prompt_asks_for_every_fee_not_a_choice() -> None:
     assert "one row per" in text.lower() or "one entry per" in text.lower()
     assert "extract the TOTAL" not in text
     assert "living" in text.lower() and "deposit" in text.lower()
+
+
+def test_default_schema_hides_computed_fee_fields() -> None:
+    """Gemini (and anything else handed the raw class) sees model_json_schema()'s
+    default mode, so the computed fields must be absent there too, not just under
+    mode="serialization". Scoped to ParsedTuitionFee's own $defs entry — some other
+    model (ParsedRequirement) legitimately has an unrelated field also named
+    applicant_scope, so a whole-schema substring check would false-positive."""
+    for schema_cls in (ParsedProgramData, ChunkParseResult, ParsedProgramBatch):
+        schema = schema_cls.model_json_schema()
+        fee_def = schema["$defs"]["ParsedTuitionFee"]
+        dumped = json.dumps(fee_def)
+        assert "applicant_scope" not in dumped, schema_cls.__name__
+        assert "is_derived" not in dumped, schema_cls.__name__
+
+
+def test_llm_supplied_computed_fields_are_ignored() -> None:
+    """An LLM must never be able to set applicant_scope/is_derived directly —
+    applicant_scope is always recomputed from scope_label, and is_derived always
+    defaults to False for anything the constructor receives as a dict."""
+    fee = ParsedTuitionFee.model_validate({
+        "amount": 1, "currency": "HKD", "basis": "per_annum",
+        "scope_label": "Non-local", "is_derived": True, "applicant_scope": "local",
+    })
+    assert fee.is_derived is False
+    assert fee.applicant_scope is TuitionScope.NON_LOCAL
+
+
+def test_amount_schema_still_advertises_a_number() -> None:
+    """Pins that ParsedTuition's schema is the pre-86a9b2a validation-mode shape
+    (anyOf number/decimal-string), not the stricter serialization-mode string
+    the reverted llm_json_schema() helper produced."""
+    from src.agents.cleaner_agent import ParsedTuition
+    amount_schema = ParsedTuition.model_json_schema()["properties"]["amount"]
+    assert "number" in json.dumps(amount_schema)
+
+
+def test_clean_row_prompt_asks_for_every_fee_not_a_choice() -> None:
+    """clean_row builds its own inline prompt (not clean_chunk.txt); make sure the
+    controller-mandated rewrite of that prompt is actually in place and stays."""
+    captured = {}
+
+    class _FakeRouter:
+        def generate(self, prompt, schema):
+            captured["prompt"] = prompt
+            return LLMResponse(text=schema().model_dump_json(), model="fake")
+
+    agent = LLMCleanerAgent.__new__(LLMCleanerAgent)
+    agent.router = _FakeRouter()
+
+    agent.clean_row({"Tuition Fee": "HK$ 350,000"})
+
+    prompt = captured["prompt"].lower()
+    assert "one entry per" in prompt
+    assert "living" in prompt
+    assert "deposit" in prompt
+    assert "extract the total" not in prompt

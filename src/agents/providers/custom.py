@@ -10,7 +10,7 @@ from typing import Optional, Type
 from pydantic import BaseModel
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception
 
-from .base import LLMProvider, LLMResponse, RateLimitError, is_retryable, llm_json_schema
+from .base import LLMProvider, LLMResponse, RateLimitError, is_retryable
 
 logger = logging.getLogger(__name__)
 
@@ -55,7 +55,7 @@ class CustomLLMProvider(LLMProvider):
         from openai import RateLimitError as OpenAIRateLimitError, APIStatusError
 
         # Build system message with JSON schema instruction
-        schema_json = json.dumps(llm_json_schema(schema), indent=2)
+        schema_json = json.dumps(schema.model_json_schema(), indent=2)
         system_msg = (
             "You are a data extraction assistant. "
             "Return ONLY valid JSON matching this schema:\n"

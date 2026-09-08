@@ -13,6 +13,7 @@ from typing import Dict, List, Optional, Any
 from datetime import datetime
 from decimal import Decimal
 from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic.json_schema import SkipJsonSchema
 
 from src.agents.factory import RouterAgent, create_router
 from src.agents.tuition_headline import derive_headline_tuition, normalize_applicant_scope
@@ -91,12 +92,27 @@ class ParsedTuitionFee(BaseModel):
                                   description="FullTime / PartTime / Hybrid; Unknown if the page does not say")
     scope_label: Optional[str] = Field(default=None,
                                        description="The page's own wording for who pays this: 'Local', 'Non-local Students', 'International, including EU'. Null if not distinguished")
-    applicant_scope: TuitionScope = Field(default=TuitionScope.ALL, exclude=True)
+    applicant_scope: SkipJsonSchema[TuitionScope] = Field(default=TuitionScope.ALL, exclude=True)
     credits: Optional[int] = Field(default=None, description="Credit count, per_credit rows only")
     source_text: Optional[str] = Field(default=None, max_length=300, description="The sentence on the page")
-    is_derived: bool = Field(default=False, exclude=True)
+    is_derived: SkipJsonSchema[bool] = Field(default=False, exclude=True)
 
     _parse_amount = field_validator("amount", mode="before")(_coerce_amount)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _strip_llm_supplied_computed_fields(cls, data: object) -> object:
+        """An LLM must never be able to supply the computed fields directly.
+
+        ``applicant_scope`` and ``is_derived`` are hidden from the schema via
+        ``SkipJsonSchema``, but a model can still hallucinate the keys anyway;
+        drop them so they can't short-circuit ``_scope_from_label`` below.
+        Code that constructs derived rows sets these attributes *after*
+        construction (see ``clean_markdown``), not through this constructor.
+        """
+        if isinstance(data, dict):
+            data = {k: v for k, v in data.items() if k not in ("applicant_scope", "is_derived")}
+        return data
 
     @model_validator(mode="after")
     def _scope_from_label(self) -> "ParsedTuitionFee":
@@ -532,11 +548,15 @@ class LLMCleanerAgent:
             [(opt.mode, opt.duration_months) for opt in parsed.study_options],
         )
         for row in headline.derived:
+            # is_derived/applicant_scope are computed fields the constructor can't
+            # accept as input (see _strip_llm_supplied_computed_fields) — set them
+            # as attributes after construction instead.
             parsed.tuition_fees.append(ParsedTuitionFee(
                 amount=row.amount, currency=row.currency, basis=row.basis,
                 study_mode=row.study_mode, scope_label=None, credits=None,
-                source_text=row.source_text, is_derived=True,
+                source_text=row.source_text,
             ))
+            parsed.tuition_fees[-1].is_derived = True
             parsed.tuition_fees[-1].applicant_scope = row.applicant_scope
         parsed.tuition = (
             ParsedTuition(amount=headline.amount, currency=headline.currency)

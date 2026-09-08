@@ -10,7 +10,7 @@ from typing import Optional, Type, List, Any
 from pydantic import BaseModel
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception
 
-from .base import LLMProvider, LLMResponse, RateLimitError, is_retryable, llm_json_schema
+from .base import LLMProvider, LLMResponse, RateLimitError, is_retryable
 
 try:
     from volcenginesdkarkruntime import Ark  # type: ignore
@@ -111,7 +111,7 @@ class VolcEngineProvider(LLMProvider):
         3. 从返回值中提取文本和 token 用量
         """
         # --- 构建 system message，包含 JSON Schema 指令 ---
-        schema_json = json.dumps(llm_json_schema(schema), indent=2)
+        schema_json = json.dumps(schema.model_json_schema(), indent=2)
         system_msg = (
             "You are a data extraction assistant. "
             "Return ONLY valid JSON matching this schema:\n"
