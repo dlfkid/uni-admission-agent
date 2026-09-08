@@ -330,6 +330,17 @@ class QueryRequest(BaseModel):
 
     univ_slug: str = Field(description="University slug")
     year: Optional[int] = Field(default=None, description="Academic year filter")
+    tuition_scope: Optional[str] = Field(default=None, description="all | local | non_local")
+    tuition_study_mode: Optional[str] = Field(
+        default=None, description="FullTime | PartTime | Hybrid | Unknown"
+    )
+    tuition_basis: Optional[str] = Field(
+        default=None,
+        description="per_programme (default) | per_annum | per_semester | per_credit",
+    )
+    tuition_max: Optional[float] = Field(
+        default=None, description="inclusive upper bound on one fee row"
+    )
 
 
 class ProgramPatchRequest(BaseModel):
@@ -535,6 +546,7 @@ class ProgramResponse(BaseModel):
     deadlines: list = Field(default_factory=list)
     requirements: list = Field(default_factory=list)
     requirement_version: Optional[Dict[str, Any]] = None
+    tuition_fees: list = Field(default_factory=list)
     source_url: Optional[str] = None
 
 

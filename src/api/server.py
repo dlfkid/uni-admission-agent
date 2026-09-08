@@ -22,7 +22,7 @@ import shutil
 import threading
 import uuid
 from pathlib import Path
-from typing import List, Optional, Dict, Any
+from typing import List, Literal, Optional, Dict, Any
 from io import StringIO
 
 from contextlib import asynccontextmanager
@@ -1504,9 +1504,15 @@ async def api_status() -> StatusResponse:
 async def api_programs(
     univ_slug: str = Query(..., description="University slug"),
     year: Optional[int] = Query(None, description="Academic year filter"),
+    tuition_scope: Optional[Literal["all", "local", "non_local"]] = Query(None),
+    tuition_study_mode: Optional[Literal["FullTime", "PartTime", "Hybrid", "Unknown"]] = Query(None),
+    tuition_basis: Optional[Literal["per_programme", "per_annum", "per_semester", "per_credit"]] = Query(None),
+    tuition_max: Optional[float] = Query(None, ge=0, description="Keep programmes with one fee row at or below this"),
 ) -> List[ProgramResponse]:
-    """Query programs for a university."""
-    programs = query_programs(univ_slug=univ_slug, year=year)
+    """Query programs for a university. Tuition filters must all hold on the same fee row."""
+    programs = query_programs(univ_slug=univ_slug, year=year, tuition_scope=tuition_scope,
+                              tuition_study_mode=tuition_study_mode, tuition_basis=tuition_basis,
+                              tuition_max=tuition_max)
     return [ProgramResponse(**p.model_dump()) for p in programs]
 
 
@@ -2555,6 +2561,10 @@ try:
     def mcp_db_query(
         univ_slug: str,
         year: Optional[int] = None,
+        tuition_scope: Optional[str] = None,
+        tuition_study_mode: Optional[str] = None,
+        tuition_basis: Optional[str] = None,
+        tuition_max: Optional[float] = None,
     ) -> list:
         """Query programs for a university from the database.
 
@@ -2564,11 +2574,17 @@ try:
         Args:
             univ_slug: University identifier (e.g. "hku").
             year: Optional academic year filter. If omitted, returns all years.
+            tuition_scope: all | local | non_local
+            tuition_study_mode: FullTime | PartTime | Hybrid | Unknown
+            tuition_basis: per_programme (default) | per_annum | per_semester | per_credit
+            tuition_max: inclusive upper bound on one fee row
 
         Returns:
             List of program dicts.
         """
-        programs = query_programs(univ_slug=univ_slug, year=year)
+        programs = query_programs(univ_slug=univ_slug, year=year, tuition_scope=tuition_scope,
+                                  tuition_study_mode=tuition_study_mode, tuition_basis=tuition_basis,
+                                  tuition_max=tuition_max)
         return [p.model_dump() for p in programs]
 
     @mcp.tool(name="runtime_status")

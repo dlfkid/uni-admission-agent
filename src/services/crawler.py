@@ -16,6 +16,7 @@ import asyncio
 import importlib
 import logging
 import uuid
+from decimal import Decimal
 from types import SimpleNamespace
 from typing import Any, Callable, Optional, List
 
@@ -23,11 +24,12 @@ from pydantic import BaseModel, Field
 from sqlmodel import select, func, col, desc
 
 from src.core.environment import ensure_ready
-from src.models.admission import University, Program, ProgramCatalog
+from src.models.admission import University, Program, ProgramCatalog, TuitionBasis, TuitionScope
 from src.models.requirement import (
     ProgramStudyOption,
     ProgramDeadline,
     ProgramRequirement,
+    ProgramTuitionFee,
     SubjectDim,
     ExamDim,
     FrameworkDim,
@@ -50,6 +52,7 @@ from src.services.crawl_strategy.discovery import (
 )
 from src.services.ingestion_pipeline import IngestionPipeline
 from src.services.subject_taxonomy import get_subject_taxonomy_service
+from src.storage.db_helpers import parse_study_mode
 from src.storage.db_manager import DatabaseManager, ProgramDeleteScope
 from src.storage.exporter import ExcelExporter
 from src.storage.importer import ExcelImporter
@@ -138,6 +141,7 @@ class ProgramSummary(BaseModel):
     deadlines: list = Field(default_factory=list)
     requirements: list = Field(default_factory=list)
     requirement_version: Optional[dict] = None
+    tuition_fees: list = Field(default_factory=list)
     source_url: Optional[str] = None
 
 
@@ -1003,15 +1007,27 @@ def get_db_status() -> StatusResult:
 def query_programs(
     univ_slug: str,
     year: Optional[int] = None,
+    *,
+    tuition_scope: Optional[str] = None,
+    tuition_study_mode: Optional[str] = None,
+    tuition_basis: Optional[str] = None,
+    tuition_max: Optional[float] = None,
 ) -> List[ProgramSummary]:
     """Query programs for a university, optionally filtered by year.
 
     Args:
         univ_slug: University identifier.
         year: Optional academic year filter.
+        tuition_scope: Optional tuition applicant scope filter (all | local | non_local).
+        tuition_study_mode: Optional tuition study mode filter.
+        tuition_basis: Optional tuition basis filter; defaults to per_programme
+            when any tuition filter is given.
+        tuition_max: Optional inclusive upper bound on one fee row's amount.
 
     Returns:
         List of ProgramSummary objects.
+
+    All given tuition filters must hold on the same fee row (EXISTS subquery).
     """
     db = DatabaseManager()
     with db.get_session() as session:
@@ -1030,6 +1046,19 @@ def query_programs(
         if year is not None:
             stmt = stmt.where(Program.academic_year == year)
 
+        if any(v is not None for v in (tuition_scope, tuition_study_mode, tuition_basis, tuition_max)):
+            fee = ProgramTuitionFee
+            conditions = [fee.program_id == Program.id]
+            basis = TuitionBasis((tuition_basis or "per_programme").strip().lower())
+            conditions.append(fee.basis == basis)
+            if tuition_scope is not None:
+                conditions.append(fee.applicant_scope == TuitionScope(tuition_scope.strip().lower()))
+            if tuition_study_mode is not None:
+                conditions.append(fee.study_mode == parse_study_mode(tuition_study_mode))
+            if tuition_max is not None:
+                conditions.append(fee.amount <= Decimal(str(tuition_max)))
+            stmt = stmt.where(select(fee.id).where(*conditions).exists())
+
         rows = session.exec(stmt).all()
         out: List[ProgramSummary] = []
 
@@ -1044,6 +1073,21 @@ def query_programs(
                 .where(ProgramDeadline.program_id == program.id)
                 .order_by(col(ProgramDeadline.cutoff_date), col(ProgramDeadline.id))
             ).all()
+            fee_rows = session.exec(
+                select(ProgramTuitionFee)
+                .where(ProgramTuitionFee.program_id == program.id)
+                .order_by(col(ProgramTuitionFee.applicant_scope), col(ProgramTuitionFee.study_mode),
+                          col(ProgramTuitionFee.basis), col(ProgramTuitionFee.id))
+            ).all()
+            tuition_fees = [
+                {
+                    "amount": float(f.amount), "currency": f.currency.value if f.currency else None,
+                    "basis": f.basis.value, "study_mode": f.study_mode.value,
+                    "applicant_scope": f.applicant_scope.value, "scope_label": f.scope_label,
+                    "credits": f.credits, "is_derived": f.is_derived, "source_text": f.source_text,
+                }
+                for f in fee_rows
+            ]
             latest_requirement_version = session.exec(
                 select(RequirementVersion)
                 .where(RequirementVersion.program_id == program.id)
@@ -1174,6 +1218,7 @@ def query_programs(
                     deadlines=deadlines,
                     requirements=requirements,
                     requirement_version=requirement_version,
+                    tuition_fees=tuition_fees,
                     source_url=source_url,
                 )
             )
