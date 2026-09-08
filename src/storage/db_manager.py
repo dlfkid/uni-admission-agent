@@ -6,6 +6,7 @@ import hashlib
 import threading
 from datetime import datetime, timezone
 from dataclasses import dataclass, field
+from decimal import Decimal
 from typing import Any, Optional, Tuple, List, Dict
 
 from sqlalchemy import event, inspect as sa_inspect
@@ -20,6 +21,8 @@ from src.models.admission import (
     Program,
     ProgramCatalog,
     CurrencyCode,
+    TuitionBasis,
+    TuitionScope,
 )
 from src.models.requirement import (
     SubjectDim,
@@ -30,6 +33,7 @@ from src.models.requirement import (
     ProgramStudyOption,
     ProgramDeadline,
     ProgramRequirement,
+    ProgramTuitionFee,
     RequirementCategory,
     StudyMode,
 )
@@ -507,6 +511,73 @@ class DatabaseManager:
                 )
             )
 
+    def _sync_tuition_fee_records(
+        self,
+        session: Session,
+        program_id: int,
+        payload: list[dict[str, Any]],
+    ) -> None:
+        """Make the fee rows match *payload* — insert, update, delete stale.
+
+        Same shape as _sync_study_option_records: the page is the source of
+        truth for the current academic year, so rows it no longer states go.
+        """
+        def key_of(row: ProgramTuitionFee) -> tuple:
+            return (row.study_mode, row.applicant_scope, row.basis)
+
+        existing = session.exec(
+            select(ProgramTuitionFee).where(ProgramTuitionFee.program_id == program_id)
+        ).all()
+        existing_by_key: dict[tuple, ProgramTuitionFee] = {}
+        for row in existing:
+            if key_of(row) in existing_by_key:
+                session.delete(row)
+                continue
+            existing_by_key[key_of(row)] = row
+
+        payload_by_key: dict[tuple, dict[str, Any]] = {}
+        for item in payload:
+            if not isinstance(item, dict) or item.get("amount") in (None, ""):
+                continue
+            try:
+                basis = TuitionBasis(str(item.get("basis") or "").strip().lower())
+                scope = TuitionScope(str(item.get("applicant_scope") or "all").strip().lower())
+            except ValueError:
+                logger.warning("Skipping tuition row with unknown basis/scope: %r", item)
+                continue
+            key = (parse_study_mode(item.get("study_mode")), scope, basis)
+            payload_by_key.setdefault(key, item)
+
+        now = datetime.now(timezone.utc)
+        for key, item in payload_by_key.items():
+            mode, scope, basis = key
+            try:
+                currency = CurrencyCode(str(item.get("currency") or "").upper())
+            except ValueError:
+                logger.warning("Skipping tuition row with unknown currency: %r", item)
+                continue
+            fields = {
+                "amount": Decimal(str(item["amount"])),
+                "currency": currency,
+                "scope_label": (str(item.get("scope_label") or "").strip() or None),
+                "credits": int(item["credits"]) if str(item.get("credits") or "").isdigit() else None,
+                "is_derived": bool(item.get("is_derived")),
+                "source_text": (str(item.get("source_text") or "").strip()[:300] or None),
+                "updated_at": now,
+            }
+            row = existing_by_key.get(key)
+            if row is not None:
+                for name, value in fields.items():
+                    setattr(row, name, value)
+                session.add(row)
+                continue
+            session.add(ProgramTuitionFee(program_id=program_id, study_mode=mode,
+                                          applicant_scope=scope, basis=basis, **fields))
+
+        for key, row in existing_by_key.items():
+            if key not in payload_by_key:
+                session.delete(row)
+
     def _upsert_subject_dim(self, session: Session, subject_name: Optional[str]) -> Optional[SubjectDim]:
         normalized_name = self._normalize_dim_key(subject_name, "subject")
         if not normalized_name:
@@ -832,6 +903,12 @@ class DatabaseManager:
             for row in deadline_rows:
                 session.delete(row)
 
+            fee_rows = session.exec(
+                select(ProgramTuitionFee).where(ProgramTuitionFee.program_id == program.id)
+            ).all()
+            for row in fee_rows:
+                session.delete(row)
+
             session.delete(program)
             session.flush()
 
@@ -926,6 +1003,13 @@ class DatabaseManager:
             for row in session.exec(
                 select(ProgramDeadline).where(
                     col(ProgramDeadline.program_id).in_(program_ids)
+                )
+            ).all():
+                session.delete(row)
+
+            for row in session.exec(
+                select(ProgramTuitionFee).where(
+                    col(ProgramTuitionFee.program_id).in_(program_ids)
                 )
             ).all():
                 session.delete(row)
@@ -1237,6 +1321,11 @@ class DatabaseManager:
             if "deadlines" in full_data:
                 self._sync_deadline_records(
                     session, program.id, full_data.get("deadlines") or []
+                )
+
+            if "tuition_fees" in full_data:
+                self._sync_tuition_fee_records(
+                    session, program.id, full_data.get("tuition_fees") or []
                 )
 
             if "requirements" in full_data:

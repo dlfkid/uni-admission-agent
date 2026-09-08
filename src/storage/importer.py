@@ -122,6 +122,13 @@ class ExcelImporter:
             if parsed.tuition:
                 program_data["tuition_amount"] = parsed.tuition.amount
                 program_data["currency"] = parsed.tuition.currency
+            if parsed.tuition_fees:
+                program_data["tuition_fees"] = [
+                    {**fee.model_dump(mode="json"),
+                     "applicant_scope": fee.applicant_scope.value,
+                     "is_derived": fee.is_derived}
+                    for fee in parsed.tuition_fees
+                ]
             if parsed.study_options:
                 program_data["study_options"] = [
                     opt.model_dump(mode="json") for opt in parsed.study_options
@@ -284,6 +291,11 @@ class ExcelImporter:
             if amount:
                 data["tuition_amount"] = amount
                 data["currency"] = currency
+                data.setdefault("tuition_fees", [{
+                    "amount": amount, "currency": currency.value, "basis": "per_programme",
+                    "study_mode": "Unknown", "applicant_scope": "all", "scope_label": None,
+                    "credits": None, "is_derived": False, "source_text": str(data["_tuition_raw"])[:300],
+                }])
 
         if "_duration_raw" in data:
             options = DataCleaner.parse_study_options(data["_duration_raw"])
@@ -372,6 +384,14 @@ class ExcelImporter:
                             if "tuition_amount" not in data and res.tuition:
                                 data["tuition_amount"] = res.tuition.amount
                                 data["currency"] = res.tuition.currency
+
+                            if "tuition_fees" not in data and res.tuition_fees:
+                                data["tuition_fees"] = [
+                                    {**fee.model_dump(mode="json"),
+                                     "applicant_scope": fee.applicant_scope.value,
+                                     "is_derived": fee.is_derived}
+                                    for fee in res.tuition_fees
+                                ]
 
                             if "study_options" not in data and res.study_options:
                                 data["study_options"] = [
