@@ -516,6 +516,7 @@ async def crawl_url(
     crawl_all: bool = False,
     discovery: Optional[DiscoveryResult] = None,
     skip_existing: bool = False,
+    page_delay: Optional[float] = None,
 ) -> CrawlResult:
     """Crawl a university admission page and import structured data.
 
@@ -656,6 +657,7 @@ async def crawl_url(
         selected_urls=selected_urls,
         selected_link_texts=selected_link_texts,
         max_detail_pages=(None if crawl_all else limit),
+        page_delay=page_delay,
         browser_automation_enabled=browser_automation_enabled,
         detail_pages_batch=detail_pages_batch,
         batch_index=batch_index,

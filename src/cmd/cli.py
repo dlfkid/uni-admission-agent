@@ -569,6 +569,9 @@ def crawl(
     skip_existing: bool = typer.Option(
         False, "--skip-existing",
         help="跳过本校本学年已入库的课程，只抓新的——用于接着上次继续（已入库的不会刷新）。"),
+    page_delay: Optional[float] = typer.Option(
+        None, "--page-delay", min=0.0,
+        help="详情页之间的最小间隔（秒，按起始时间计）。站点对连续请求限流时用它放慢节奏；不传则保持默认。"),
     verbose: bool = typer.Option(False, "--verbose", "-v"),
 ) -> None:
     """Crawl a URL and import admission data."""
@@ -640,6 +643,7 @@ def crawl(
                 limit=limit,
                 crawl_all=crawl_all,
                 skip_existing=skip_existing,
+                page_delay=page_delay,
             )
         )
         typer.echo(f"✅ Crawl complete: {result.imported_count} programs imported")

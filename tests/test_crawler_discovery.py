@@ -103,6 +103,7 @@ async def test_unmatched_discovery_falls_back_unchanged(run_new_job_spy, monkeyp
         "selected_urls": None,
         "selected_link_texts": None,
         "max_detail_pages": None,
+        "page_delay": None,
         "browser_automation_enabled": False,
         "detail_pages_batch": None,
         "batch_index": None,

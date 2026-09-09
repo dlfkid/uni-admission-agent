@@ -2,6 +2,7 @@ from __future__ import annotations
 # pylint: disable=too-many-lines
 
 import asyncio
+import time
 import hashlib
 import json
 import logging
@@ -288,6 +289,7 @@ class IngestionPipeline:
         selected_sibling_urls: Optional[Dict[str, List[str]]] = None,
         index_markdown: Optional[str] = None,
         max_detail_pages: Optional[int] = None,
+        page_delay: Optional[float] = None,
         browser_automation_enabled: bool = False,
         detail_pages_batch: Optional[List[Dict[str, Any]]] = None,
         batch_index: Optional[int] = None,
@@ -323,6 +325,7 @@ class IngestionPipeline:
             },
             "index_markdown": index_markdown or "",
             "max_detail_pages": max_detail_pages,
+            "page_delay": page_delay,
             "browser_automation_enabled": bool(browser_automation_enabled),
             "detail_pages_batch": list(detail_pages_batch or []),
             "batch_index": batch_index,
@@ -747,6 +750,8 @@ class IngestionPipeline:
         selected_urls = [u for u in (request_payload.get("selected_urls") or []) if u]
         # Caller-supplied cap on how many index-discovered detail pages to fetch
         # (CLI --limit). None means unbounded (CLI --all or unset).
+        _raw_page_delay = request_payload.get("page_delay")
+        page_delay = float(_raw_page_delay) if _raw_page_delay not in (None, "") else None
         _raw_max_details = request_payload.get("max_detail_pages")
         # `is not None` (not truthiness): treat --limit 0 as an explicit cap of 0,
         # not as "unbounded" (0 is falsy). None stays unbounded.
@@ -1081,6 +1086,7 @@ class IngestionPipeline:
                 batch_index=batch_index,
                 batch_total=batch_total,
                 supplement_url_re=supplement_url_re,
+                page_delay=page_delay,
             )
             _append_pages(pages, depth=0, from_browser=False)
             failed_urls.extend(batch_failed)
@@ -1149,6 +1155,7 @@ class IngestionPipeline:
                         batch_index=batch_index,
                         batch_total=batch_total,
                         supplement_url_re=supplement_url_re,
+                        page_delay=page_delay,
                     )
                     _append_pages(pages, depth=1, from_browser=False)
                     failed_urls.extend(batch_failed)
@@ -1209,6 +1216,7 @@ class IngestionPipeline:
                         batch_index=batch_index,
                         batch_total=batch_total,
                         supplement_url_re=supplement_url_re,
+                        page_delay=page_delay,
                     )
                     _append_pages(pages, depth=1, from_browser=False)
                     failed_urls.extend(batch_failed)
@@ -1258,6 +1266,7 @@ class IngestionPipeline:
                 batch_index=batch_index,
                 batch_total=batch_total,
                 supplement_url_re=supplement_url_re,
+                page_delay=page_delay,
             )
             _append_pages(pages, depth=next_depth, from_browser=False)
             failed_urls.extend(batch_failed)
@@ -2428,12 +2437,20 @@ class IngestionPipeline:
         batch_index: Optional[int] = None,
         batch_total: Optional[int] = None,
         supplement_url_re: Optional[str] = None,
+        page_delay: Optional[float] = None,
     ) -> tuple[List[CrawlPageResult], List[str]]:
-        """Crawl URLs and infer failures from missing success rows."""
+        """Crawl URLs and infer failures from missing success rows.
+
+        ``page_delay`` is a minimum interval, in seconds, between the starts
+        of consecutive fetches — the pace knob for hosts that refuse a burst
+        (CUHK's Graduate School refuses after ~18 requests at the default
+        pace). None keeps the default behaviour exactly.
+        """
         if not urls:
             return [], []
         total = len(urls)
         pages: List[CrawlPageResult] = []
+        last_fetch_started: Optional[float] = None
         failed_urls: List[str] = []
 
         def _emit_progress(status: str, current: int, url: str) -> None:
@@ -2458,6 +2475,11 @@ class IngestionPipeline:
             )
 
         for idx, url in enumerate(urls, start=1):
+            if page_delay and last_fetch_started is not None:
+                remaining = page_delay - (time.monotonic() - last_fetch_started)
+                if remaining > 0:
+                    await asyncio.sleep(remaining)
+            last_fetch_started = time.monotonic()
             _emit_progress("started", idx, url)
             logger.info("[FetchRaw:%s] Crawling %d/%d: %s", phase, idx, total, url)
 

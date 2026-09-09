@@ -234,7 +234,7 @@ address for hours (CUHK's Graduate School did, 2026-09-09).
 |---|---|---|
 | 1. Probe | `adm-agent crawl --name <slug> --year <Y> --url <index> --limit 1` | Does the engine handle this site at all? Check the stored fields. |
 | 2. Canary | `... --limit 20` | Does the host keep answering under sustained fetching? Wait a few minutes after it finishes. |
-| 3. The rest | `... --all --skip-existing` | Only programmes not yet stored for this university and year are fetched; the 21 from above are not re-crawled. |
+| 3. The rest | `... --all --skip-existing --page-delay 10` | Only programmes not yet stored for this university and year are fetched; the 21 from above are not re-crawled. `--page-delay N` keeps at least N seconds between the starts of consecutive detail fetches — use it when the canary showed the host refusing connections mid-run (CUHK refuses after ~18 pages at the default pace). |
 
 `--skip-existing` compares each discovered detail URL against the programmes
 already stored for the same slug and year and drops the ones present, before
