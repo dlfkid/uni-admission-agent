@@ -74,6 +74,7 @@ from src.services.migrations import (
     run_db_migrations,
 )
 from src.services.repair import RepairError, run_auto_repair
+from src.services.job_reaper import reap_stale_jobs
 from src.services.subject_taxonomy import (
     bootstrap_subject_taxonomy,
     get_subject_taxonomy_service,
@@ -300,6 +301,33 @@ def _abort_db(headline: str, detail: str, remedy: str) -> None:
     raise typer.Exit(code=1)
 
 
+
+def _install_sigterm_as_interrupt() -> None:
+    """Make `kill`/`pkill` (SIGTERM) behave like Ctrl-C for a running crawl.
+
+    A bare SIGTERM tears the process down with the job row still RUNNING —
+    exactly the zombie the stale-job reaper exists to clean up hours later.
+    Raising KeyboardInterrupt from the handler makes asyncio.run cancel the
+    main task on its way out, so the pipeline's _run_job sees the
+    cancellation and writes CANCELLED before the process exits.
+
+    Why KeyboardInterrupt and not re-raising SIGINT: a process started in the
+    background from a non-interactive shell (``cmd &``, daemons, some task
+    runners) has SIGINT set to ignore, so Python never installs its default
+    interrupt handler and asyncio never installs its own; a re-raised SIGINT
+    is then silently dropped and the crawl runs on. Verified both ways on
+    2026-09-09 — the first live kill test ran to completion for exactly this
+    reason.
+    """
+    def _handler(_signum, _frame):
+        raise KeyboardInterrupt
+
+    try:
+        signal.signal(signal.SIGTERM, _handler)
+    except (ValueError, OSError):  # not the main thread / unsupported platform
+        pass
+
+
 def _init_db(verbose: bool = False) -> None:
     """Ensure database is initialised and schema is migrated.
 
@@ -366,6 +394,20 @@ def _init_db(verbose: bool = False) -> None:
             str(e),
             "Run: adm-agent db-version   to see where the schema stands.",
         )
+
+    # Jobs whose process died (Ctrl-C after our handler, pkill, a crash, a
+    # sleeping laptop) sit at RUNNING forever with no heartbeat. Every process
+    # start reaps them so the job list tells the truth. Non-fatal: a failed
+    # reap only leaves stale rows, which is the state we were in anyway.
+    try:
+        reaped = reap_stale_jobs()
+        if reaped:
+            typer.echo(
+                f"ℹ️  Marked {len(reaped)} crawl job(s) as failed: their process ended "
+                f"without finishing ({', '.join(reaped)}). Use 'adm-agent ingestion-resume <job>' to continue one."
+            )
+    except Exception as e:  # pylint: disable=broad-except
+        typer.echo(f"⚠️  Could not check for stale crawl jobs: {e}", err=True)
 
     try:
         bootstrap_subject_taxonomy()
@@ -574,6 +616,7 @@ def crawl(
     if export_md:
         typer.echo(f"  Export MD: enabled → {export_path}")
     
+    _install_sigterm_as_interrupt()
     try:
         result = asyncio.run(
             crawl_url(
@@ -756,6 +799,7 @@ def ingestion_resume_cmd(
         typer.echo(f"❌ Job not found: {job_id}", err=True)
         raise typer.Exit(code=1)
 
+    _install_sigterm_as_interrupt()
     try:
         result = asyncio.run(
             resume_crawl_job(

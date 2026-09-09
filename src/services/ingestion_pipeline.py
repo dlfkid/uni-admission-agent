@@ -247,6 +247,30 @@ class IngestionPipeline:
         self.db_manager = db_manager or DatabaseManager()
         self.stage_max_retries = max(0, int(stage_max_retries))
         self.taxonomy_service = get_subject_taxonomy_service()
+        # The job this instance is currently running; _touch_job() heartbeats it.
+        self._active_job_uid: Optional[str] = None
+
+    def _touch_job(self) -> None:
+        """Refresh the active job's updated_at — the heartbeat the stale-job
+        reaper (src/services/job_reaper.py) reads. Called once per fetched
+        page, extracted programme and persisted programme, so a job whose
+        updated_at is minutes old has no process behind it. No-op without an
+        active job (stages are also driven directly by tests)."""
+        job_uid = self._active_job_uid
+        if not job_uid:
+            return
+        try:
+            with self.db_manager.get_session() as session:
+                job = session.exec(
+                    select(IngestionJob).where(IngestionJob.job_uid == job_uid)
+                ).first()
+                if job is None:
+                    return
+                job.updated_at = _utc_now()
+                session.add(job)
+                session.commit()
+        except Exception:  # pylint: disable=broad-except
+            logger.debug("heartbeat for job %s failed", job_uid, exc_info=True)
 
     async def run_new_job(
         self,
@@ -442,6 +466,7 @@ class IngestionPipeline:
             }
 
         self._mark_job_running(job_uid, start_stage)
+        self._active_job_uid = job_uid
         self._emit_event(
             event_callback,
             "job_started",
@@ -509,6 +534,19 @@ class IngestionPipeline:
                 },
             )
             raise
+        except (asyncio.CancelledError, KeyboardInterrupt):
+            # The process is being interrupted (Ctrl-C, SIGTERM mapped to
+            # SIGINT by the CLI). Without this the row stayed RUNNING forever;
+            # CANCELLED says a person stopped it, unlike the reaper's FAILED.
+            stage_name = self._current_stage_name(job_uid)
+            self._mark_job_terminal_error(
+                job_uid,
+                f"cancelled: the process was interrupted during stage {stage_name}. "
+                "Resume it with: adm-agent ingestion-resume <job_uid>",
+                IngestionJobStatus.CANCELLED,
+            )
+            self._fail_live_tasks(job_uid, "cancelled with its job: the process was interrupted")
+            raise
         except Exception as exc:
             self._mark_job_terminal_error(job_uid, str(exc), IngestionJobStatus.FAILED)
             self._emit_event(
@@ -520,6 +558,8 @@ class IngestionPipeline:
                 },
             )
             raise
+        finally:
+            self._active_job_uid = None
 
     async def _run_stage(
         self,
@@ -1370,6 +1410,7 @@ class IngestionPipeline:
         # row K-1's).
         row_states: List[Dict[str, Any]] = []
         for row in raw_pages:
+            self._touch_job()
             row_markdown = str(row.get("markdown") or "")
             row_html_raw = row.get("html")
             row_html = str(row_html_raw or "")
@@ -1839,6 +1880,7 @@ class IngestionPipeline:
         taxonomy_learn_records: List[Dict[str, Any]] = []
 
         for item in validated_programs:
+            self._touch_job()
             item_dict = dict(item)
             verdict = evaluate_extraction(item_dict)
             if not verdict.passed:
@@ -2430,6 +2472,7 @@ class IngestionPipeline:
             else:
                 failed_urls.append(url)
                 _emit_progress("failed", idx, url)
+            self._touch_job()
 
         return pages, failed_urls
 
@@ -2833,6 +2876,46 @@ class IngestionPipeline:
             callback(event_type, _json_safe(payload))
         except Exception as exc:  # pragma: no cover - defensive callback isolation
             logger.warning("Ingestion event callback failed: %s", exc)
+
+    def _current_stage_name(self, job_uid: str) -> str:
+        """The stage actually in flight: the RUNNING task's, falling back to the
+        job row's current_stage (which is only rewritten at job start)."""
+        try:
+            with self.db_manager.get_session() as session:
+                job = session.exec(
+                    select(IngestionJob).where(IngestionJob.job_uid == job_uid)
+                ).first()
+                if job is None:
+                    return "unknown"
+                running = session.exec(
+                    select(IngestionTask).where(
+                        IngestionTask.job_id == job.id,
+                        IngestionTask.state == IngestionTaskState.RUNNING,
+                    )
+                ).first()
+                if running is not None and running.stage is not None:
+                    return running.stage.value
+                return job.current_stage.value if job.current_stage else "unknown"
+        except Exception:  # pylint: disable=broad-except
+            return "unknown"
+
+    def _fail_live_tasks(self, job_uid: str, reason: str) -> None:
+        """A terminal job must not keep RUNNING tasks: fail them with *reason*."""
+        with self.db_manager.get_session() as session:
+            job = session.exec(
+                select(IngestionJob).where(IngestionJob.job_uid == job_uid)
+            ).first()
+            if job is None:
+                return
+            for task in session.exec(
+                select(IngestionTask).where(IngestionTask.job_id == job.id)
+            ).all():
+                if task.state in (IngestionTaskState.RUNNING, IngestionTaskState.PENDING,
+                                  IngestionTaskState.RETRY_SCHEDULED):
+                    task.state = IngestionTaskState.FAILED
+                    task.error_message = reason
+                    session.add(task)
+            session.commit()
 
     def _mark_job_running(self, job_uid: str, stage: IngestionStage) -> None:
         now = _utc_now()

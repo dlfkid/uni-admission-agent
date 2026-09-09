@@ -88,6 +88,7 @@ from src.services.crawler import (
 from src.agent_runtime.review_selection import parse_selected_indices
 from src.agent_runtime.review_service import run_agent_review_confirmation
 from src.services.ingestion_pipeline import IngestionPipeline
+from src.services.job_reaper import reap_stale_jobs
 from src.services.subject_taxonomy import bootstrap_subject_taxonomy
 from src.storage.db_manager import DatabaseManager
 
@@ -293,6 +294,12 @@ async def lifespan(app: FastAPI):
         logger.info("Database initialised")
     except Exception as e:
         logger.warning("Database init warning: %s", e)
+    try:
+        # Jobs whose process died sit at RUNNING with no heartbeat; reap them
+        # so GET /ingestion/jobs does not show crawls that stopped days ago.
+        reap_stale_jobs()
+    except Exception as e:  # pylint: disable=broad-except
+        logger.warning("Stale ingestion job reap failed: %s", e)
     yield
 
 app = FastAPI(
