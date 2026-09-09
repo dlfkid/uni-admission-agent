@@ -1057,3 +1057,49 @@ def test_extract_structured_quarantines_silent_failures(monkeypatch) -> None:
         == "https://study.ed.ac.uk/programmes/undergraduate/189"
     )
     assert kwargs["program_data"]["academic_year"] == 2026
+
+
+def test_persist_versioned_reconciles_bare_faculty_against_the_batch() -> None:
+    """One CUHK crawl wrote 'Faculty of Social Science' for 27 programmes and a
+    bare 'Social Science' for two more, splitting one unit in two. The bare
+    form adopts its siblings' spelling before anything is written."""
+    mock_db = MagicMock()
+    mock_db.upsert_program.side_effect = lambda *_a, **_k: (MagicMock(), True)
+    pipeline = IngestionPipeline(db_manager=mock_db)
+
+    context = {
+        "validated_programs": [
+            {"name_en": "MSSc in Social Work", "academic_year": 2027,
+             "faculty": "Social Science", "tuition_amount": 100},
+            {"name_en": "MA in Sociology", "academic_year": 2027,
+             "faculty": "Faculty of Social Science", "tuition_amount": 100},
+        ],
+        "validated_hash": "abc123",
+    }
+
+    pipeline._stage_persist_versioned({"univ_slug": "cuhk"}, context)
+
+    written = [call.args[0]["faculty"] for call in mock_db.upsert_program.call_args_list]
+    assert written == ["Faculty of Social Science", "Faculty of Social Science"]
+
+
+def test_persist_versioned_leaves_a_faculty_with_no_sibling_alone() -> None:
+    """Nothing to reconcile against means nothing is invented — the correct
+    unit word belongs to the university, not to English."""
+    mock_db = MagicMock()
+    mock_db.upsert_program.side_effect = lambda *_a, **_k: (MagicMock(), True)
+    pipeline = IngestionPipeline(db_manager=mock_db)
+
+    context = {
+        "validated_programs": [
+            {"name_en": "MA Politics", "academic_year": 2026,
+             "faculty": "Arts, Humanities and Cultures", "tuition_amount": 100},
+        ],
+        "validated_hash": "abc123",
+    }
+
+    pipeline._stage_persist_versioned({"univ_slug": "leeds"}, context)
+
+    assert mock_db.upsert_program.call_args_list[0].args[0]["faculty"] == (
+        "Arts, Humanities and Cultures"
+    )

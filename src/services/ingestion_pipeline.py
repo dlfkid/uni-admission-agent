@@ -33,6 +33,7 @@ from src.scrapers.link_parser import (
 )
 from src.scrapers.page_processor import extract_program_data_from_page
 from src.scrapers.scout import run_scout
+from src.services.faculty_naming import canonicalize_faculty
 from src.services.program_name_resolution import resolve_program_name
 from src.services.quality_gate import evaluate_extraction
 from src.services.thin_page_supplement import (
@@ -1893,6 +1894,19 @@ class IngestionPipeline:
         if not univ_slug:
             raise ValueError("univ_slug is required for persist_versioned")
 
+        # Faculty spelling is whatever extraction returned, and one crawl can
+        # return both 'Faculty of Social Science' and a bare 'Social Science'
+        # for the same unit — which splits it in two wherever the field is
+        # grouped on. Reconcile against the batch's own spellings before
+        # anything is written. Batch-scoped on purpose: a bare name in an
+        # incremental crawl whose prefixed siblings are not in this batch is
+        # left alone rather than guessed at.
+        known_faculties = {
+            str(item.get("faculty")).strip()
+            for item in validated_programs
+            if item.get("faculty") and str(item.get("faculty")).strip()
+        }
+
         persisted_count = 0
         created_count = 0
         updated_count = 0
@@ -1904,6 +1918,13 @@ class IngestionPipeline:
         for item in validated_programs:
             self._touch_job()
             item_dict = dict(item)
+            canonical_faculty = canonicalize_faculty(item_dict.get("faculty"), known_faculties)
+            if canonical_faculty != item_dict.get("faculty"):
+                logger.info(
+                    "Faculty %r normalised to %r (sibling spelling in this batch)",
+                    item_dict.get("faculty"), canonical_faculty,
+                )
+                item_dict["faculty"] = canonical_faculty
             verdict = evaluate_extraction(item_dict)
             if not verdict.passed:
                 reason_value = verdict.reason.value if verdict.reason else "unknown"
