@@ -547,6 +547,71 @@ export function initPreviewFlow(deps: PreviewFlowDeps): void {
                 card.appendChild(details);
             }
 
+            if (p.tuition_fees?.length) {
+                const details = document.createElement("details");
+                // Same wrapper as deadlines and requirements: one divider, one
+                // summary style, one expandable list across all three.
+                details.className = "program-card-deadlines program-fees";
+                const summary = document.createElement("summary");
+                summary.textContent = `${p.tuition_fees.length} fee line${p.tuition_fees.length > 1 ? "s" : ""}`;
+                details.appendChild(summary);
+
+                const ul = document.createElement("ul");
+                ul.className = "deadline-list";
+                for (const fee of p.tuition_fees) {
+                    const li = document.createElement("li");
+                    li.className = "deadline-item";
+
+                    // Key column: the two axes the row is filed under. The
+                    // normalised scope goes here rather than scope_label
+                    // because this column does not shrink and a label like
+                    // "UGC-funded places and Distinguished Scholarship places
+                    // for local students" would crowd out the figure.
+                    const whoEl = document.createElement("span");
+                    whoEl.className = "dl-round";
+                    const mode = fee.study_mode === "Unknown" ? "any mode" : fee.study_mode;
+                    whoEl.textContent = `${fee.applicant_scope.replace(/_/g, "-")} · ${mode}`;
+                    li.appendChild(whoEl);
+
+                    const amountEl = document.createElement("span");
+                    amountEl.className = "dl-date";
+                    const basis = fee.basis.replace(/^per_/, "per ");
+                    const credits = fee.credits ? ` × ${fee.credits} credits` : "";
+                    amountEl.textContent =
+                        `${fee.currency ?? ""} ${Number(fee.amount).toLocaleString()} / ${basis}${credits}`;
+                    li.appendChild(amountEl);
+
+                    if (fee.is_derived) {
+                        // This figure was computed from another row, not read
+                        // off the page. Saying so keeps the headline honest.
+                        const derivedEl = document.createElement("span");
+                        derivedEl.className = "fee-derived";
+                        derivedEl.textContent = "derived";
+                        li.appendChild(derivedEl);
+                    }
+
+                    // The page's own wording — the evidence behind the row.
+                    // Was tooltip-only before, which made it invisible to
+                    // anyone reading rather than hovering.
+                    // The badge above already says "derived"; the derivation's
+                    // own source_text opens with the same word, so drop that
+                    // opener and keep the arithmetic, which is the useful part.
+                    const evidence = (fee.source_text || fee.scope_label || "")
+                        .replace(/^derived:\s*/i, "");
+                    if (evidence) {
+                        const evidenceEl = document.createElement("span");
+                        evidenceEl.className = "fee-source";
+                        evidenceEl.textContent = evidence;
+                        evidenceEl.title = evidence;
+                        li.appendChild(evidenceEl);
+                    }
+
+                    ul.appendChild(li);
+                }
+                details.appendChild(ul);
+                card.appendChild(details);
+            }
+
             if (p.source_url) {
                 const a = document.createElement("a");
                 a.className = "program-card-url";

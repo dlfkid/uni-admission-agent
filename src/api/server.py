@@ -22,7 +22,7 @@ import shutil
 import threading
 import uuid
 from pathlib import Path
-from typing import List, Optional, Dict, Any
+from typing import List, Literal, Optional, Dict, Any
 from io import StringIO
 
 from contextlib import asynccontextmanager
@@ -60,6 +60,7 @@ from src.api.schemas import (
     IngestionJobResponse,
     IngestionResumeRequest,
     ClientInfoResponse,
+    QueryRequest,
 )
 from src.api.task_manager import TaskManager, TaskState
 from src.core.feature_flags import is_agent_enabled_env
@@ -87,6 +88,7 @@ from src.services.crawler import (
 from src.agent_runtime.review_selection import parse_selected_indices
 from src.agent_runtime.review_service import run_agent_review_confirmation
 from src.services.ingestion_pipeline import IngestionPipeline
+from src.services.job_reaper import reap_stale_jobs
 from src.services.subject_taxonomy import bootstrap_subject_taxonomy
 from src.storage.db_manager import DatabaseManager
 
@@ -292,6 +294,12 @@ async def lifespan(app: FastAPI):
         logger.info("Database initialised")
     except Exception as e:
         logger.warning("Database init warning: %s", e)
+    try:
+        # Jobs whose process died sit at RUNNING with no heartbeat; reap them
+        # so GET /ingestion/jobs does not show crawls that stopped days ago.
+        reap_stale_jobs()
+    except Exception as e:  # pylint: disable=broad-except
+        logger.warning("Stale ingestion job reap failed: %s", e)
     yield
 
 app = FastAPI(
@@ -1504,9 +1512,15 @@ async def api_status() -> StatusResponse:
 async def api_programs(
     univ_slug: str = Query(..., description="University slug"),
     year: Optional[int] = Query(None, description="Academic year filter"),
+    tuition_scope: Optional[Literal["all", "local", "non_local"]] = Query(None),
+    tuition_study_mode: Optional[Literal["FullTime", "PartTime", "Hybrid", "Unknown"]] = Query(None),
+    tuition_basis: Optional[Literal["per_programme", "per_annum", "per_semester", "per_credit"]] = Query(None),
+    tuition_max: Optional[float] = Query(None, ge=0, description="Keep programmes with one fee row at or below this"),
 ) -> List[ProgramResponse]:
-    """Query programs for a university."""
-    programs = query_programs(univ_slug=univ_slug, year=year)
+    """Query programs for a university. Tuition filters must all hold on the same fee row."""
+    programs = query_programs(univ_slug=univ_slug, year=year, tuition_scope=tuition_scope,
+                              tuition_study_mode=tuition_study_mode, tuition_basis=tuition_basis,
+                              tuition_max=tuition_max)
     return [ProgramResponse(**p.model_dump()) for p in programs]
 
 
@@ -2555,6 +2569,10 @@ try:
     def mcp_db_query(
         univ_slug: str,
         year: Optional[int] = None,
+        tuition_scope: Optional[str] = None,
+        tuition_study_mode: Optional[str] = None,
+        tuition_basis: Optional[str] = None,
+        tuition_max: Optional[float] = None,
     ) -> list:
         """Query programs for a university from the database.
 
@@ -2564,11 +2582,24 @@ try:
         Args:
             univ_slug: University identifier (e.g. "hku").
             year: Optional academic year filter. If omitted, returns all years.
+            tuition_scope: all | local | non_local
+            tuition_study_mode: FullTime | PartTime | Hybrid | Unknown
+            tuition_basis: per_programme (default) | per_annum | per_semester | per_credit
+            tuition_max: inclusive upper bound on one fee row
 
         Returns:
             List of program dicts.
         """
-        programs = query_programs(univ_slug=univ_slug, year=year)
+        # Routed through QueryRequest so a bad filter value surfaces as a
+        # pydantic.ValidationError naming the field (MCP turns it into a tool
+        # error) instead of a ValueError raised deep inside query_programs's
+        # SQL filter construction, or a silently-ignored unknown study mode.
+        req = QueryRequest(
+            univ_slug=univ_slug, year=year, tuition_scope=tuition_scope,
+            tuition_study_mode=tuition_study_mode, tuition_basis=tuition_basis,
+            tuition_max=tuition_max,
+        )
+        programs = query_programs(**req.model_dump())
         return [p.model_dump() for p in programs]
 
     @mcp.tool(name="runtime_status")

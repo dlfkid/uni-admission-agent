@@ -4,8 +4,10 @@ from pathlib import Path
 from typing import Any, Optional
 
 from dotenv import find_dotenv, load_dotenv
+from sqlmodel import Session, col, select
 
 from src.models.admission import StudyMode
+from src.models.requirement import ProgramTuitionFee
 
 
 def _load_env_file(env_file: str) -> bool:
@@ -160,6 +162,39 @@ def parse_study_mode(value: Any) -> StudyMode:
     if text_value in {"hybrid", "mixed", "blended"}:
         return StudyMode.HYBRID
     return StudyMode.UNKNOWN
+
+
+def tuition_fee_dicts(session: Session, program_id: int) -> list[dict[str, Any]]:
+    """The programme's fee rows as the nine-key dicts every read surface emits.
+
+    One definition for the API (query_programs), the Excel export and anything
+    else that lists fees, so a renamed field or changed conversion cannot drift
+    between surfaces. Ordered by scope, mode, basis, id — deterministic.
+    """
+    fee_rows = session.exec(
+        select(ProgramTuitionFee)
+        .where(ProgramTuitionFee.program_id == program_id)
+        .order_by(
+            col(ProgramTuitionFee.applicant_scope),
+            col(ProgramTuitionFee.study_mode),
+            col(ProgramTuitionFee.basis),
+            col(ProgramTuitionFee.id),
+        )
+    ).all()
+    return [
+        {
+            "amount": float(f.amount),
+            "currency": f.currency.value if f.currency else None,
+            "basis": f.basis.value,
+            "study_mode": f.study_mode.value,
+            "applicant_scope": f.applicant_scope.value,
+            "scope_label": f.scope_label,
+            "credits": f.credits,
+            "is_derived": f.is_derived,
+            "source_text": f.source_text,
+        }
+        for f in fee_rows
+    ]
 
 
 def parse_datetime(value: Any) -> Optional[datetime]:

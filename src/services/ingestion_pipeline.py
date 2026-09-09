@@ -2,6 +2,7 @@ from __future__ import annotations
 # pylint: disable=too-many-lines
 
 import asyncio
+import time
 import hashlib
 import json
 import logging
@@ -22,6 +23,7 @@ from src.models.ingestion import (
     IngestionTaskState,
 )
 from src.models.scraper_models import CrawlPageResult
+from src.scrapers.errors import HostRefusedError
 from src.scrapers.helpers import build_url_name_signal, extract_program_name, is_noise_program_name
 from src.scrapers.engine import AdmissionScraper
 from src.scrapers.link_parser import (
@@ -31,6 +33,7 @@ from src.scrapers.link_parser import (
 )
 from src.scrapers.page_processor import extract_program_data_from_page
 from src.scrapers.scout import run_scout
+from src.services.faculty_naming import canonicalize_faculty
 from src.services.program_name_resolution import resolve_program_name
 from src.services.quality_gate import evaluate_extraction
 from src.services.thin_page_supplement import (
@@ -205,6 +208,7 @@ class ValidatedProgramPayload(BaseModel):
     study_options: List[Dict[str, Any]] = Field(default_factory=list)
     deadlines: List[Dict[str, Any]] = Field(default_factory=list)
     requirements: List[Dict[str, Any]] = Field(default_factory=list)
+    tuition_fees: List[Dict[str, Any]] = Field(default_factory=list)
     extra_metadata: Dict[str, Any] = Field(default_factory=dict)
     source_url: Optional[str] = None
     is_active: Optional[bool] = None
@@ -225,7 +229,7 @@ class ValidatedProgramPayload(BaseModel):
             raise ValueError("academic_year must be positive")
         return int(value)
 
-    @field_validator("study_options", "deadlines", "requirements", mode="before")
+    @field_validator("study_options", "deadlines", "requirements", "tuition_fees", mode="before")
     @classmethod
     def _coerce_list(cls, value: Any) -> list:
         if value is None:
@@ -246,6 +250,30 @@ class IngestionPipeline:
         self.db_manager = db_manager or DatabaseManager()
         self.stage_max_retries = max(0, int(stage_max_retries))
         self.taxonomy_service = get_subject_taxonomy_service()
+        # The job this instance is currently running; _touch_job() heartbeats it.
+        self._active_job_uid: Optional[str] = None
+
+    def _touch_job(self) -> None:
+        """Refresh the active job's updated_at — the heartbeat the stale-job
+        reaper (src/services/job_reaper.py) reads. Called once per fetched
+        page, extracted programme and persisted programme, so a job whose
+        updated_at is minutes old has no process behind it. No-op without an
+        active job (stages are also driven directly by tests)."""
+        job_uid = self._active_job_uid
+        if not job_uid:
+            return
+        try:
+            with self.db_manager.get_session() as session:
+                job = session.exec(
+                    select(IngestionJob).where(IngestionJob.job_uid == job_uid)
+                ).first()
+                if job is None:
+                    return
+                job.updated_at = _utc_now()
+                session.add(job)
+                session.commit()
+        except Exception:  # pylint: disable=broad-except
+            logger.debug("heartbeat for job %s failed", job_uid, exc_info=True)
 
     async def run_new_job(
         self,
@@ -263,6 +291,7 @@ class IngestionPipeline:
         selected_sibling_urls: Optional[Dict[str, List[str]]] = None,
         index_markdown: Optional[str] = None,
         max_detail_pages: Optional[int] = None,
+        page_delay: Optional[float] = None,
         browser_automation_enabled: bool = False,
         detail_pages_batch: Optional[List[Dict[str, Any]]] = None,
         batch_index: Optional[int] = None,
@@ -298,6 +327,7 @@ class IngestionPipeline:
             },
             "index_markdown": index_markdown or "",
             "max_detail_pages": max_detail_pages,
+            "page_delay": page_delay,
             "browser_automation_enabled": bool(browser_automation_enabled),
             "detail_pages_batch": list(detail_pages_batch or []),
             "batch_index": batch_index,
@@ -441,6 +471,7 @@ class IngestionPipeline:
             }
 
         self._mark_job_running(job_uid, start_stage)
+        self._active_job_uid = job_uid
         self._emit_event(
             event_callback,
             "job_started",
@@ -508,6 +539,19 @@ class IngestionPipeline:
                 },
             )
             raise
+        except (asyncio.CancelledError, KeyboardInterrupt):
+            # The process is being interrupted (Ctrl-C, SIGTERM mapped to
+            # SIGINT by the CLI). Without this the row stayed RUNNING forever;
+            # CANCELLED says a person stopped it, unlike the reaper's FAILED.
+            stage_name = self._current_stage_name(job_uid)
+            self._mark_job_terminal_error(
+                job_uid,
+                f"cancelled: the process was interrupted during stage {stage_name}. "
+                "Resume it with: adm-agent ingestion-resume <job_uid>",
+                IngestionJobStatus.CANCELLED,
+            )
+            self._fail_live_tasks(job_uid, "cancelled with its job: the process was interrupted")
+            raise
         except Exception as exc:
             self._mark_job_terminal_error(job_uid, str(exc), IngestionJobStatus.FAILED)
             self._emit_event(
@@ -519,6 +563,8 @@ class IngestionPipeline:
                 },
             )
             raise
+        finally:
+            self._active_job_uid = None
 
     async def _run_stage(
         self,
@@ -579,6 +625,18 @@ class IngestionPipeline:
                 self._mark_task_success(task.id, stage_output)
                 self._append_stage_trace(context, stage, "SUCCEEDED", attempt_no)
                 return _json_safe(stage_output)
+            except HostRefusedError as exc:
+                # The host is refusing connections. Retrying the stage would
+                # knock again and lengthen the block, so the task and the job
+                # fail now; _run_job writes the message on the job row.
+                self._mark_task_terminal_failure(task.id, str(exc))
+                self._append_stage_trace(context, stage, "FAILED", attempt_no, str(exc))
+                self._emit_event(
+                    event_callback,
+                    "host_refused",
+                    {"job_uid": job_uid, "stage": stage.value, "host": exc.host, "url": exc.url},
+                )
+                raise
             except Exception as exc:
                 failure = self._mark_task_failure(task.id, str(exc))
                 self._append_stage_trace(
@@ -706,6 +764,8 @@ class IngestionPipeline:
         selected_urls = [u for u in (request_payload.get("selected_urls") or []) if u]
         # Caller-supplied cap on how many index-discovered detail pages to fetch
         # (CLI --limit). None means unbounded (CLI --all or unset).
+        _raw_page_delay = request_payload.get("page_delay")
+        page_delay = float(_raw_page_delay) if _raw_page_delay not in (None, "") else None
         _raw_max_details = request_payload.get("max_detail_pages")
         # `is not None` (not truthiness): treat --limit 0 as an explicit cap of 0,
         # not as "unbounded" (0 is falsy). None stays unbounded.
@@ -1040,6 +1100,7 @@ class IngestionPipeline:
                 batch_index=batch_index,
                 batch_total=batch_total,
                 supplement_url_re=supplement_url_re,
+                page_delay=page_delay,
             )
             _append_pages(pages, depth=0, from_browser=False)
             failed_urls.extend(batch_failed)
@@ -1108,6 +1169,7 @@ class IngestionPipeline:
                         batch_index=batch_index,
                         batch_total=batch_total,
                         supplement_url_re=supplement_url_re,
+                        page_delay=page_delay,
                     )
                     _append_pages(pages, depth=1, from_browser=False)
                     failed_urls.extend(batch_failed)
@@ -1168,6 +1230,7 @@ class IngestionPipeline:
                         batch_index=batch_index,
                         batch_total=batch_total,
                         supplement_url_re=supplement_url_re,
+                        page_delay=page_delay,
                     )
                     _append_pages(pages, depth=1, from_browser=False)
                     failed_urls.extend(batch_failed)
@@ -1217,6 +1280,7 @@ class IngestionPipeline:
                 batch_index=batch_index,
                 batch_total=batch_total,
                 supplement_url_re=supplement_url_re,
+                page_delay=page_delay,
             )
             _append_pages(pages, depth=next_depth, from_browser=False)
             failed_urls.extend(batch_failed)
@@ -1369,6 +1433,7 @@ class IngestionPipeline:
         # row K-1's).
         row_states: List[Dict[str, Any]] = []
         for row in raw_pages:
+            self._touch_job()
             row_markdown = str(row.get("markdown") or "")
             row_html_raw = row.get("html")
             row_html = str(row_html_raw or "")
@@ -1797,6 +1862,7 @@ class IngestionPipeline:
             payload.setdefault("study_options", [])
             payload.setdefault("deadlines", [])
             payload.setdefault("requirements", [])
+            payload.setdefault("tuition_fees", [])
             payload.setdefault("extra_metadata", {})
 
             try:
@@ -1828,6 +1894,19 @@ class IngestionPipeline:
         if not univ_slug:
             raise ValueError("univ_slug is required for persist_versioned")
 
+        # Faculty spelling is whatever extraction returned, and one crawl can
+        # return both 'Faculty of Social Science' and a bare 'Social Science'
+        # for the same unit — which splits it in two wherever the field is
+        # grouped on. Reconcile against the batch's own spellings before
+        # anything is written. Batch-scoped on purpose: a bare name in an
+        # incremental crawl whose prefixed siblings are not in this batch is
+        # left alone rather than guessed at.
+        known_faculties = {
+            str(item.get("faculty")).strip()
+            for item in validated_programs
+            if item.get("faculty") and str(item.get("faculty")).strip()
+        }
+
         persisted_count = 0
         created_count = 0
         updated_count = 0
@@ -1837,7 +1916,15 @@ class IngestionPipeline:
         taxonomy_learn_records: List[Dict[str, Any]] = []
 
         for item in validated_programs:
+            self._touch_job()
             item_dict = dict(item)
+            canonical_faculty = canonicalize_faculty(item_dict.get("faculty"), known_faculties)
+            if canonical_faculty != item_dict.get("faculty"):
+                logger.info(
+                    "Faculty %r normalised to %r (sibling spelling in this batch)",
+                    item_dict.get("faculty"), canonical_faculty,
+                )
+                item_dict["faculty"] = canonical_faculty
             verdict = evaluate_extraction(item_dict)
             if not verdict.passed:
                 reason_value = verdict.reason.value if verdict.reason else "unknown"
@@ -2384,12 +2471,20 @@ class IngestionPipeline:
         batch_index: Optional[int] = None,
         batch_total: Optional[int] = None,
         supplement_url_re: Optional[str] = None,
+        page_delay: Optional[float] = None,
     ) -> tuple[List[CrawlPageResult], List[str]]:
-        """Crawl URLs and infer failures from missing success rows."""
+        """Crawl URLs and infer failures from missing success rows.
+
+        ``page_delay`` is a minimum interval, in seconds, between the starts
+        of consecutive fetches — the pace knob for hosts that refuse a burst
+        (CUHK's Graduate School refuses after ~18 requests at the default
+        pace). None keeps the default behaviour exactly.
+        """
         if not urls:
             return [], []
         total = len(urls)
         pages: List[CrawlPageResult] = []
+        last_fetch_started: Optional[float] = None
         failed_urls: List[str] = []
 
         def _emit_progress(status: str, current: int, url: str) -> None:
@@ -2414,6 +2509,11 @@ class IngestionPipeline:
             )
 
         for idx, url in enumerate(urls, start=1):
+            if page_delay and last_fetch_started is not None:
+                remaining = page_delay - (time.monotonic() - last_fetch_started)
+                if remaining > 0:
+                    await asyncio.sleep(remaining)
+            last_fetch_started = time.monotonic()
             _emit_progress("started", idx, url)
             logger.info("[FetchRaw:%s] Crawling %d/%d: %s", phase, idx, total, url)
 
@@ -2428,6 +2528,7 @@ class IngestionPipeline:
             else:
                 failed_urls.append(url)
                 _emit_progress("failed", idx, url)
+            self._touch_job()
 
         return pages, failed_urls
 
@@ -2737,6 +2838,22 @@ class IngestionPipeline:
             session.add(task)
             session.commit()
 
+    def _mark_task_terminal_failure(self, task_id: Optional[int], error_message: str) -> None:
+        """Fail a task with no retry scheduled (a refused host must not be knocked again)."""
+        if task_id is None:
+            return
+        now = _utc_now()
+        with self.db_manager.get_session() as session:
+            task = session.get(IngestionTask, task_id)
+            if not task:
+                return
+            task.state = IngestionTaskState.FAILED
+            task.error_message = error_message
+            task.finished_at = now
+            task.updated_at = now
+            session.add(task)
+            session.commit()
+
     def _mark_task_failure(self, task_id: Optional[int], error_message: str) -> Dict[str, Any]:
         if task_id is None:
             return {
@@ -2831,6 +2948,46 @@ class IngestionPipeline:
             callback(event_type, _json_safe(payload))
         except Exception as exc:  # pragma: no cover - defensive callback isolation
             logger.warning("Ingestion event callback failed: %s", exc)
+
+    def _current_stage_name(self, job_uid: str) -> str:
+        """The stage actually in flight: the RUNNING task's, falling back to the
+        job row's current_stage (which is only rewritten at job start)."""
+        try:
+            with self.db_manager.get_session() as session:
+                job = session.exec(
+                    select(IngestionJob).where(IngestionJob.job_uid == job_uid)
+                ).first()
+                if job is None:
+                    return "unknown"
+                running = session.exec(
+                    select(IngestionTask).where(
+                        IngestionTask.job_id == job.id,
+                        IngestionTask.state == IngestionTaskState.RUNNING,
+                    )
+                ).first()
+                if running is not None and running.stage is not None:
+                    return running.stage.value
+                return job.current_stage.value if job.current_stage else "unknown"
+        except Exception:  # pylint: disable=broad-except
+            return "unknown"
+
+    def _fail_live_tasks(self, job_uid: str, reason: str) -> None:
+        """A terminal job must not keep RUNNING tasks: fail them with *reason*."""
+        with self.db_manager.get_session() as session:
+            job = session.exec(
+                select(IngestionJob).where(IngestionJob.job_uid == job_uid)
+            ).first()
+            if job is None:
+                return
+            for task in session.exec(
+                select(IngestionTask).where(IngestionTask.job_id == job.id)
+            ).all():
+                if task.state in (IngestionTaskState.RUNNING, IngestionTaskState.PENDING,
+                                  IngestionTaskState.RETRY_SCHEDULED):
+                    task.state = IngestionTaskState.FAILED
+                    task.error_message = reason
+                    session.add(task)
+            session.commit()
 
     def _mark_job_running(self, job_uid: str, stage: IngestionStage) -> None:
         now = _utc_now()

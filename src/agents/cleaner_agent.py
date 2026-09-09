@@ -12,11 +12,13 @@ from typing import Dict, List, Optional, Any
 
 from datetime import datetime
 from decimal import Decimal
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic.json_schema import SkipJsonSchema
 
 from src.agents.factory import RouterAgent, create_router
+from src.agents.tuition_headline import derive_headline_tuition, normalize_applicant_scope
 from src.core.paths import get_prompts_dir
-from src.models.admission import CurrencyCode, StudyMode
+from src.models.admission import CurrencyCode, StudyMode, TuitionBasis, TuitionScope
 
 logger = logging.getLogger(__name__)
 
@@ -38,44 +40,85 @@ def _load_prompt(filename: str) -> str:
 # --- Pydantic Schemas for Structured Output ---
 
 
+def _coerce_amount(v: object) -> object:
+    """Parse shorthand formats like '14k', '1.5m', '350K' into Decimal.
+
+    LLMs sometimes return abbreviated amounts. Convert to full numbers:
+    - '14k' or '14K' → 14000
+    - '1.5m' or '1.5M' → 1500000
+    - '350,000' → 350000 (strip commas)
+    """
+    if not isinstance(v, str):
+        return v
+
+    # Remove commas and spaces
+    v_clean = v.replace(",", "").replace(" ", "").strip()
+
+    # Handle 'k' or 'K' suffix (thousands)
+    if v_clean.lower().endswith("k"):
+        try:
+            base = float(v_clean[:-1])
+            return Decimal(str(base * 1000))
+        except (ValueError, TypeError):
+            pass
+
+    # Handle 'm' or 'M' suffix (millions)
+    if v_clean.lower().endswith("m"):
+        try:
+            base = float(v_clean[:-1])
+            return Decimal(str(base * 1_000_000))
+        except (ValueError, TypeError):
+            pass
+
+    # Return cleaned string for normal Decimal parsing
+    return v_clean
+
+
 class ParsedTuition(BaseModel):
     amount: Decimal = Field(..., description="Tuition amount in numbers, e.g., 350000.00")
     currency: CurrencyCode = Field(..., description="Currency code, e.g., HKD, USD")
 
-    @field_validator("amount", mode="before")
+    _parse_amount = field_validator("amount", mode="before")(_coerce_amount)
+
+
+class ParsedTuitionFee(BaseModel):
+    """One tuition figure exactly as the page states it. The LLM copies; code
+    normalises the applicant wording and derives the headline."""
+
+    amount: Decimal = Field(..., description="Amount as a number, e.g. 198000")
+    currency: CurrencyCode = Field(..., description="ISO code: HKD, GBP, USD, ...")
+    basis: TuitionBasis = Field(..., description="per_programme | per_annum | per_semester | per_credit")
+    study_mode: StudyMode = Field(default=StudyMode.UNKNOWN,
+                                  description="FullTime / PartTime / Hybrid; Unknown if the page does not say")
+    scope_label: Optional[str] = Field(default=None,
+                                       description="The page's own wording for who pays this: 'Local', 'Non-local Students', 'International, including EU'. Null if not distinguished")
+    applicant_scope: SkipJsonSchema[TuitionScope] = Field(default=TuitionScope.ALL, exclude=True)
+    credits: Optional[int] = Field(default=None, description="Credit count, per_credit rows only")
+    source_text: Optional[str] = Field(default=None, max_length=300, description="The sentence on the page")
+    is_derived: SkipJsonSchema[bool] = Field(default=False, exclude=True)
+
+    _parse_amount = field_validator("amount", mode="before")(_coerce_amount)
+
+    @model_validator(mode="before")
     @classmethod
-    def _parse_amount(cls, v: object) -> object:
-        """Parse shorthand formats like '14k', '1.5m', '350K' into Decimal.
-        
-        LLMs sometimes return abbreviated amounts. Convert to full numbers:
-        - '14k' or '14K' → 14000
-        - '1.5m' or '1.5M' → 1500000
-        - '350,000' → 350000 (strip commas)
+    def _strip_llm_supplied_computed_fields(cls, data: object) -> object:
+        """An LLM must never be able to supply the computed fields directly.
+
+        ``applicant_scope`` and ``is_derived`` are hidden from the schema via
+        ``SkipJsonSchema``, but a model can still hallucinate the keys anyway;
+        drop them so they can't short-circuit ``_scope_from_label`` below.
+        Code that constructs derived rows sets these attributes *after*
+        construction (see ``clean_markdown``), not through this constructor.
         """
-        if not isinstance(v, str):
-            return v
-        
-        # Remove commas and spaces
-        v_clean = v.replace(",", "").replace(" ", "").strip()
-        
-        # Handle 'k' or 'K' suffix (thousands)
-        if v_clean.lower().endswith("k"):
-            try:
-                base = float(v_clean[:-1])
-                return Decimal(str(base * 1000))
-            except (ValueError, TypeError):
-                pass
-        
-        # Handle 'm' or 'M' suffix (millions)
-        if v_clean.lower().endswith("m"):
-            try:
-                base = float(v_clean[:-1])
-                return Decimal(str(base * 1_000_000))
-            except (ValueError, TypeError):
-                pass
-        
-        # Return cleaned string for normal Decimal parsing
-        return v_clean
+        if isinstance(data, dict):
+            data = {k: v for k, v in data.items() if k not in ("applicant_scope", "is_derived")}
+        return data
+
+    @model_validator(mode="after")
+    def _scope_from_label(self) -> "ParsedTuitionFee":
+        if not self.is_derived:
+            self.applicant_scope = normalize_applicant_scope(self.scope_label)
+        return self
 
 
 class ParsedStudyOption(BaseModel):
@@ -105,11 +148,13 @@ class ParsedRequirement(BaseModel):
 class ParsedProgramData(BaseModel):
     faculty: Optional[str] = Field(default=None, description="Top-level academic unit (Faculty, School, or College). e.g., 'Faculty of Engineering'.")
     tuition: Optional[ParsedTuition] = Field(default=None, description="Tuition fee structure")
+    tuition_fees: List[ParsedTuitionFee] = Field(default_factory=list,
+                                                 description="Every tuition figure stated on the page, one per statement")
     study_options: List[ParsedStudyOption] = Field(default_factory=list, description="List of study options")
     deadlines: List[ParsedDeadline] = Field(default_factory=list, description="List of application deadlines")
     requirements: List[ParsedRequirement] = Field(default_factory=list, description="Subject-level admission requirements")
 
-    @field_validator("study_options", "deadlines", "requirements", mode="before")
+    @field_validator("tuition_fees", "study_options", "deadlines", "requirements", mode="before")
     @classmethod
     def _none_to_list(cls, v: object) -> object:
         """LLMs sometimes return ``null`` for list fields; coerce to ``[]``."""
@@ -177,8 +222,11 @@ def _normalize_parsed_data(parsed: ParsedProgramData) -> ParsedProgramData:
 
     Runs on BOTH the single-pass and rolling-chunk paths (via ``clean_markdown``),
     so dedup and null-date dropping behave identically regardless of page size.
-    Preserves scalar fields (faculty, tuition) untouched.
+    Preserves the ``faculty`` scalar untouched; ``tuition`` is set by
+    ``clean_markdown`` after normalisation, from the derived headline.
 
+    - tuition_fees: dedup by (study_mode, applicant_scope, basis), keeping the
+      row with the longer source_text as the better evidence.
     - study_options: dedup by (mode, duration).
     - deadlines: dedup by cutoff date; drop entries with no date (they carry no
       actionable info and are almost always a duplicate artifact of a dated round).
@@ -191,6 +239,14 @@ def _normalize_parsed_data(parsed: ParsedProgramData) -> ParsedProgramData:
 
     def _loose(text: Optional[str]) -> str:
         return " ".join(re.sub(r"[^a-z0-9]+", " ", str(text or "").lower()).split())
+
+    # Tuition fees: key on (mode, scope, basis); keep the longer evidence.
+    fees_by_key: dict = {}
+    for fee in parsed.tuition_fees:
+        key = (fee.study_mode, fee.applicant_scope, fee.basis)
+        kept = fees_by_key.get(key)
+        if kept is None or len(fee.source_text or "") > len(kept.source_text or ""):
+            fees_by_key[key] = fee
 
     # Study options: key on (mode, duration).
     dedup_options: List[ParsedStudyOption] = []
@@ -320,10 +376,56 @@ def _normalize_parsed_data(parsed: ParsedProgramData) -> ParsedProgramData:
     return ParsedProgramData(
         faculty=parsed.faculty,
         tuition=parsed.tuition,
+        tuition_fees=list(fees_by_key.values()),
         study_options=dedup_options,
         deadlines=dedup_deadlines,
         requirements=dedup_requirements,
     )
+
+
+def _finalize_parsed(parsed: ParsedProgramData) -> ParsedProgramData:
+    """Normalise tuition_fees, derive the headline, and set parsed.tuition.
+
+    Every extraction path must call this before returning: ``clean_markdown``
+    (rolling-chunk and single-pass) and ``clean_row`` (the PDF import path,
+    which never goes through ``clean_markdown`` and reads ``parsed.tuition``
+    directly — see ``src/storage/importer.py::_import_pdf``).
+
+    Idempotent: a derived row is appended only if no row already carries its
+    ``(study_mode, applicant_scope, basis)`` key, so calling this twice on an
+    already-finalized result (e.g. clean_row's finalisation followed by
+    clean_markdown's, when _parse_single_pass -> clean_row is the underlying
+    call) does not duplicate the derived row.
+    """
+    parsed = _normalize_parsed_data(parsed)
+    headline = derive_headline_tuition(
+        parsed.tuition_fees,
+        [(opt.mode, opt.duration_months) for opt in parsed.study_options],
+    )
+    existing_keys = {
+        (fee.study_mode, fee.applicant_scope, fee.basis) for fee in parsed.tuition_fees
+    }
+    for row in headline.derived:
+        key = (row.study_mode, row.applicant_scope, row.basis)
+        if key in existing_keys:
+            continue
+        # is_derived/applicant_scope are computed fields the constructor can't
+        # accept as input (see _strip_llm_supplied_computed_fields) — set them
+        # as attributes after construction instead.
+        derived_fee = ParsedTuitionFee(
+            amount=row.amount, currency=row.currency, basis=row.basis,
+            study_mode=row.study_mode, scope_label=None, credits=None,
+            source_text=row.source_text,
+        )
+        derived_fee.is_derived = True
+        derived_fee.applicant_scope = row.applicant_scope
+        parsed.tuition_fees.append(derived_fee)
+        existing_keys.add(key)
+    parsed.tuition = (
+        ParsedTuition(amount=headline.amount, currency=headline.currency)
+        if headline.amount is not None else None
+    )
+    return parsed
 
 
 def _merge_parsed_data(
@@ -338,66 +440,12 @@ def _merge_parsed_data(
     combined = ParsedProgramData(
         faculty=new.faculty if new.faculty else existing.faculty,
         tuition=new.tuition if new.tuition else existing.tuition,
+        tuition_fees=list(existing.tuition_fees) + list(new.tuition_fees),
         study_options=list(existing.study_options) + list(new.study_options),
         deadlines=list(existing.deadlines) + list(new.deadlines),
         requirements=list(existing.requirements) + list(new.requirements),
     )
     return _normalize_parsed_data(combined)
-
-
-_PER_CREDIT_RE = re.compile(r"HK\$?\s*([\d,]+(?:\.\d+)?)\s*per\s*credit", re.IGNORECASE)
-_PER_PROGRAMME_RE = re.compile(r"HK\$?\s*([\d,]+(?:\.\d+)?)\s*per\s*programme", re.IGNORECASE)
-_CREDIT_COUNT_RE = re.compile(
-    r"(?:Minimum\s+No\.?\s+of\s+)?[Cc]redits?\s+[Rr]equired\s*[:\-]?\s*\n?\s*(\d{1,3})",
-    re.IGNORECASE,
-)
-
-
-def _reconcile_per_credit_tuition(
-    parsed: Optional["ParsedProgramData"], markdown: str, source_url: str = "",
-) -> None:
-    """Fix tuition that is actually a per-credit rate stored as the programme total.
-
-    Some pages list only "HK$X per credit" with no per-programme total; the LLM then
-    puts the per-credit rate into ``tuition.amount``, which reads as an absurdly cheap
-    whole-programme fee (e.g. HK$8,200 for an MSc). When the page gives a per-credit
-    rate, NO per-programme total, and a credit count, compute the total in code
-    (per_credit x credits) — deterministic arithmetic the LLM does unreliably.
-
-    Mutates ``parsed.tuition.amount`` in place. No-op when a per-programme total is
-    present (already correct) or the signals are missing.
-    """
-    if parsed is None or not parsed.tuition or parsed.tuition.amount is None:
-        return
-    if _PER_PROGRAMME_RE.search(markdown):
-        return  # a real programme total exists; trust the extracted amount
-
-    per_credit_matches = [
-        Decimal(m.group(1).replace(",", "")) for m in _PER_CREDIT_RE.finditer(markdown)
-    ]
-    if not per_credit_matches:
-        return
-
-    amount = Decimal(parsed.tuition.amount)
-    # Only act when the stored amount IS one of the per-credit rates on the page.
-    if not any(abs(amount - pc) < 1 for pc in per_credit_matches):
-        return
-
-    credit_match = _CREDIT_COUNT_RE.search(markdown)
-    if not credit_match:
-        logger.warning(
-            "Per-credit tuition %s found for %s but no credit count — leaving as-is",
-            amount, source_url,
-        )
-        return
-
-    credits = int(credit_match.group(1))
-    total = amount * credits
-    logger.info(
-        "Reconciled per-credit tuition for %s: HK$%s/credit x %d credits = %s",
-        source_url, amount, credits, total,
-    )
-    parsed.tuition.amount = total
 
 
 # --- Agent Class ---
@@ -470,7 +518,18 @@ class LLMCleanerAgent:
            - Look for text containing 'Faculty of...', 'School of...', 'College of...'.
            - If a program is in 'Department of Computer Science' under 'Faculty of Engineering', return 'Faculty of Engineering'.
            - If not explicitly mentioned, infer from context or set to null.
-        2. **Tuition**: Extract numeric amount and currency. Handle "per year" or total logic if implied.
+        2. **Tuition fees** (`tuition_fees`): copy EVERY tuition figure stated, one entry per
+           statement. Do not merge, choose between, or convert figures — code does that.
+           For each entry give: amount (number), currency code, basis
+           (per_programme | per_annum | per_semester | per_credit), the study mode it applies
+           to (FullTime / PartTime / Hybrid, or Unknown if not stated), the source's own
+           wording for who pays it in scope_label (e.g. "Local", "Non-local Students"; null if
+           not distinguished), credits for per_credit rows only, and the source sentence in
+           source_text.
+           - EXCLUDE living costs, accommodation, application fees, deposits, confirmation
+             fees, credit-transfer fees and scholarship amounts. None of these is tuition.
+           - If no figure is stated, return an empty list. Do not guess. Leave the old
+             `tuition` field null; it is filled in by code.
         3. **Study Options**: Convert descriptions like "1 year FT / 2 years PT" into a list of options with mode and months.
         4. **Deadlines**: Extract dates and descriptions.
            - Output ALL valid deadlines found, sorted chronologically.
@@ -493,7 +552,7 @@ class LLMCleanerAgent:
                 return None
 
             parsed_data = ParsedProgramData.model_validate_json(response.text)
-            return parsed_data
+            return _finalize_parsed(parsed_data)
 
         except Exception as e:
             logger.error("LLM Parsing Failed: %s", e)
@@ -524,12 +583,14 @@ class LLMCleanerAgent:
         else:
             parsed = self._parse_rolling_chunks(markdown, source_url, name_hints, academic_year)
 
-        _reconcile_per_credit_tuition(parsed, markdown, source_url)
-        # Dedup/null-date normalization runs on BOTH paths here (not just inside the
-        # chunk merge) so behavior is uniform regardless of page size.
-        if parsed is not None:
-            parsed = _normalize_parsed_data(parsed)
-        return parsed
+        if parsed is None:
+            return None
+        # Dedup/null-date normalization and headline derivation run on BOTH paths
+        # here (not just inside the chunk merge) so behavior is uniform regardless
+        # of page size. _finalize_parsed is idempotent, so it's safe even when the
+        # underlying call already went through clean_row (which finalizes too, for
+        # the PDF-import path that calls clean_row directly).
+        return _finalize_parsed(parsed)
 
     # ------------------------------------------------------------------ #
     #  Self-critique retry                                                #
@@ -734,6 +795,7 @@ class LLMCleanerAgent:
         # Check if we got any meaningful data
         if (
             not accumulated.tuition
+            and not accumulated.tuition_fees
             and not accumulated.study_options
             and not accumulated.deadlines
             and not accumulated.requirements

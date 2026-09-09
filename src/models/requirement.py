@@ -1,11 +1,12 @@
 from typing import Optional, List, Dict, Any
 from datetime import datetime, timezone
+from decimal import Decimal
 from enum import Enum
 
-from sqlalchemy import JSON, UniqueConstraint, Column, Enum as SqlEnum
+from sqlalchemy import JSON, UniqueConstraint, Column, Enum as SqlEnum, Index, Numeric
 from sqlmodel import SQLModel, Field, Relationship
 
-from src.models.admission import StudyMode
+from src.models.admission import StudyMode, TuitionBasis, TuitionScope, CurrencyCode
 
 
 def _utc_now() -> datetime:
@@ -34,6 +35,15 @@ REQUIREMENT_CATEGORY_ENUM = SqlEnum(
     RequirementCategory,
     name="requirementcategory",
     values_callable=_enum_values,
+)
+TUITION_BASIS_ENUM = SqlEnum(TuitionBasis, name="tuitionbasis", values_callable=_enum_values)
+TUITION_SCOPE_ENUM = SqlEnum(TuitionScope, name="tuitionscope", values_callable=_enum_values)
+# Postgres never had a native `currencycode` enum type (Program.currency has
+# always been a plain sa.String(16) column, per the initial migration); keep
+# it that way here too — native_enum=False stores it as VARCHAR(16) while
+# reads still come back as CurrencyCode members.
+CURRENCY_CODE_ENUM = SqlEnum(
+    CurrencyCode, name="currencycode", native_enum=False, length=16, values_callable=_enum_values,
 )
 
 
@@ -162,6 +172,51 @@ class ProgramDeadline(SQLModel, table=True):
 
     program_id: int = Field(foreign_key="program.id", index=True)
     program: "Program" = Relationship(back_populates="deadline_records")
+
+
+class ProgramTuitionFee(SQLModel, table=True):
+    """One tuition figure as the page states it.
+
+    A programme page rarely publishes a single fee: CUHK prices by study mode,
+    EdUHK and the UK universities by applicant scope, PolyU gives a programme
+    total and a per-credit rate. Each such statement is one row here; the
+    coarse Program.tuition_amount is derived from these rows in code
+    (src/agents/tuition_headline.py). Synced by (mode, scope, basis) on
+    re-crawl, like program_study_option — not versioned.
+    """
+
+    __tablename__ = "program_tuition_fee"
+    __table_args__ = (
+        UniqueConstraint(
+            "program_id", "study_mode", "applicant_scope", "basis",
+            name="uq_program_tuition_fee",
+        ),
+        Index(
+            "ix_program_tuition_fee_filter",
+            "applicant_scope", "study_mode", "basis", "amount",
+        ),
+    )
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    amount: Decimal = Field(sa_column=Column(Numeric(12, 2), nullable=False))
+    currency: CurrencyCode = Field(sa_column=Column(CURRENCY_CODE_ENUM, nullable=False))
+    basis: TuitionBasis = Field(sa_column=Column(TUITION_BASIS_ENUM, nullable=False, index=True))
+    study_mode: StudyMode = Field(
+        default=StudyMode.UNKNOWN,
+        sa_column=Column(STUDY_MODE_ENUM, nullable=False, index=True),
+    )
+    applicant_scope: TuitionScope = Field(
+        default=TuitionScope.ALL,
+        sa_column=Column(TUITION_SCOPE_ENUM, nullable=False, index=True),
+    )
+    scope_label: Optional[str] = Field(default=None)
+    credits: Optional[int] = Field(default=None)
+    is_derived: bool = Field(default=False)
+    source_text: Optional[str] = Field(default=None, max_length=300)
+    updated_at: datetime = Field(default_factory=_utc_now)
+
+    program_id: int = Field(foreign_key="program.id", index=True)
+    program: "Program" = Relationship(back_populates="tuition_fee_records")
 
 
 class ProgramRequirement(SQLModel, table=True):

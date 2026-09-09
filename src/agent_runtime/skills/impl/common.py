@@ -597,7 +597,10 @@ def _auto_fetch_and_extract(
             url=page.url,
         )
 
-        for key in ("faculty", "tuition_amount", "currency", "study_options", "deadlines", "requirements"):
+        for key in (
+            "faculty", "tuition_amount", "currency", "study_options", "deadlines",
+            "requirements", "tuition_fees",
+        ):
             if result.get(key) is not None:
                 program_data[key] = result[key]
 

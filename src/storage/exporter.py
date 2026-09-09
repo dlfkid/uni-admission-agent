@@ -1,7 +1,9 @@
+import json
 import logging
 from typing import Optional, IO
 import pandas as pd
 from sqlmodel import select, col, desc
+from src.storage.db_helpers import tuition_fee_dicts
 from src.storage.db_manager import DatabaseManager
 from src.models.admission import University, Program
 from src.models.requirement import (
@@ -119,6 +121,10 @@ class ExcelExporter:
                     .where(ProgramDeadline.program_id == p.id)
                     .order_by(col(ProgramDeadline.cutoff_date), col(ProgramDeadline.id))
                 ).all()
+                tuition_fees_json = json.dumps(
+                    tuition_fee_dicts(session, p.id),
+                    ensure_ascii=False,
+                )
                 latest_requirement_version = session.exec(
                     select(RequirementVersion)
                     .where(RequirementVersion.program_id == p.id)
@@ -209,6 +215,7 @@ class ExcelExporter:
                     "Faculty": p.faculty or "",
                     "Tuition": float(p.tuition_amount) if p.tuition_amount else "",
                     "Currency": p.currency.value if p.currency else "",
+                    "Tuition Fees (JSON)": tuition_fees_json,
                     "Study Options": _format_study_options(study_options),
                     "Deadlines": _format_deadlines(deadlines),
                     "Subject Requirements": _format_requirements(requirements),

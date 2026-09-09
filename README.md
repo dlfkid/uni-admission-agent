@@ -154,6 +154,8 @@ AGENT_RUNTIME=pydanticai
 | `uni-admission serve-stop` | Stop foreground or daemon server |
 | `uni-admission crawl --name <slug> --year <Y> --url <url>` | Crawl a URL and import admission data |
 | `uni-admission crawl --name hku --year 2026 --url <url> --continue 2` | Extra LLM scouting depth |
+| `uni-admission crawl --name <slug> --year <Y> --url <url> --all --skip-existing` | Crawl only programmes not yet stored for that slug/year (continue a partial crawl; stored ones are not refreshed) |
+| `uni-admission crawl ... --page-delay 10` | Keep ≥10 s between detail-page fetches for hosts that throttle bursts (default pace unchanged without it) |
 | `uni-admission crawl-index <url> [--limit N \| --all]` | Deterministic index harvest (see below) |
 | `uni-admission import --name <slug> --year <Y> --file <xlsx>` | Import from Excel (`--llm` for LLM fallback) |
 | `uni-admission export --name <slug> --output <file> [--year Y]` | Export to Excel |

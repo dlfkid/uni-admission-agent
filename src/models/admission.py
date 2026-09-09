@@ -24,6 +24,22 @@ class StudyMode(str, Enum):
     HYBRID = "Hybrid"
     UNKNOWN = "Unknown"
 
+
+class TuitionBasis(str, Enum):
+    """What one tuition figure is charged per."""
+    PER_PROGRAMME = "per_programme"
+    PER_ANNUM = "per_annum"
+    PER_SEMESTER = "per_semester"
+    PER_CREDIT = "per_credit"
+
+
+class TuitionScope(str, Enum):
+    """Which applicants one tuition figure applies to. Three values so it can
+    be filtered; the page's own wording is kept separately in scope_label."""
+    ALL = "all"
+    LOCAL = "local"
+    NON_LOCAL = "non_local"
+
 class University(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     name: str = Field(index=True, unique=True)
@@ -107,6 +123,7 @@ class Program(SQLModel, table=True):
 
     # Normalized child records
     study_option_records: List["ProgramStudyOption"] = Relationship(back_populates="program")
+    tuition_fee_records: List["ProgramTuitionFee"] = Relationship(back_populates="program")
     deadline_records: List["ProgramDeadline"] = Relationship(back_populates="program")
     requirement_records: List["ProgramRequirement"] = Relationship(back_populates="program")
     requirement_versions: List["RequirementVersion"] = Relationship(back_populates="program")

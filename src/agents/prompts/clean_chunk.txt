@@ -20,14 +20,22 @@ boundary (e.g., a label here whose value was in the previous chunk).
    - Look for text containing "Faculty of...", "School of...", "College of...".
    - If a program is in the "Department of Computer Science" under the "Faculty of Engineering", the faculty value should be "Faculty of Engineering".
    - If not explicitly mentioned, infer from context or set to null.
-2. **Tuition**: Extract the numeric amount and currency.
-   - When a total programme fee and a per-credit fee are both shown
-     (e.g., "Tuition Fee HK$424,800 per programme (HK$11,800 per credit for 36 credits)"),
-     extract the TOTAL per-programme amount (424800), NOT the per-credit figure.
-   - If only a per-credit fee and a credit count are given, multiply them for the total.
-   - If only a per-year fee is shown, extract that amount.
-   - Ignore unrelated charges such as credit-transfer fees, application fees, or deposits.
-   - Capture the currency code (e.g., HKD, GBP, USD).
+2. **Tuition fees** (`tuition_fees`): copy EVERY tuition figure on the page, one entry per
+   statement. Do not merge, choose between, or convert figures — code does that.
+   For each entry give: amount (number), currency code, basis
+   (per_programme | per_annum | per_semester | per_credit), the study mode it applies to
+   (FullTime / PartTime / Hybrid, or Unknown if the page does not say), the page's own
+   wording for who pays it in scope_label (e.g. "Local", "Non-local Students",
+   "International, including EU"; null if not distinguished), credits for per_credit
+   rows only, and the sentence it came from in source_text.
+   - "HK$495,000 per programme (HK$16,500 per credit for 30 credits)" → TWO entries:
+     495000 per_programme, and 16500 per_credit with credits=30.
+   - "Full-time HK$198,000 per annum / Part-time HK$99,000 per annum" → two entries with
+     study_mode FullTime and PartTime.
+   - EXCLUDE living costs, accommodation, application fees, deposits, confirmation fees,
+     credit-transfer fees and scholarship amounts. None of these is tuition.
+   - If the page only links to a fee schedule and states no figure, return an empty list.
+     Do not guess. Leave the old `tuition` field null; it is filled in by code.
 3. **Study Options**: Extract study modes (FullTime, PartTime, Hybrid) and duration in months.
 4. **Deadlines**: Extract application deadlines with dates and round types (Early, Main, Extended).
    - "Round 1" -> Early, "Round 2"/Normal -> Main, "Clearing" -> Extended.

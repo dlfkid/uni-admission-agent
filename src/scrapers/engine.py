@@ -13,7 +13,9 @@ from pathlib import Path
 from typing import Dict, List, Optional, Set, cast
 
 from crawl4ai import AsyncWebCrawler, BrowserConfig, CrawlerRunConfig, CacheMode, CrawlResult
-from tenacity import retry, stop_after_attempt, wait_exponential, RetryError
+from tenacity import retry, retry_if_not_exception_type, stop_after_attempt, wait_exponential, RetryError
+
+from src.scrapers.errors import HostRefusedError, is_connection_refused
 
 from src.agents.cleaner_agent import LLMCleanerAgent
 from src.agents.factory import RouterAgent, create_router
@@ -146,7 +148,8 @@ class AdmissionScraper:
         self._export_md: bool = False
         self._export_path: Optional[str] = None
 
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=2, min=4, max=90))
+    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=2, min=4, max=90),
+           retry=retry_if_not_exception_type(HostRefusedError))
     async def crawl_page(self, url: str) -> CrawlPageResult:
         """Crawl a single URL and return its content as Markdown."""
         logger.info("Crawling: %s", url)
@@ -161,6 +164,11 @@ class AdmissionScraper:
 
             if not result.success:
                 error_msg = result.error_message or "Unknown crawl error"
+                if is_connection_refused(RuntimeError(error_msg)):
+                    # The host is refusing us. Not retried (see the decorator),
+                    # not skipped by callers: the whole run stops here.
+                    logger.error("Host refused connection for %s — stopping the run", url)
+                    raise HostRefusedError(url, detail=error_msg)
                 logger.error("Crawl failed for %s: %s", url, error_msg)
                 raise ScraperError(f"Failed to crawl {url}: {error_msg}")
 
@@ -476,6 +484,10 @@ class AdmissionScraper:
                     ))
                 else:
                     page_results.append(await self.crawl_page(link))
+            # HostRefusedError is neither a RetryError (tenacity re-raises it
+            # unwrapped) nor a ScraperError, so it passes through these
+            # handlers untouched: a refusal ends the run rather than being
+            # skipped like a broken page — skipping on would knock again.
             except RetryError as exc:
                 logger.warning("Skipping %s after retries: %s", link, _unwrap_retry_error(exc))
                 self._failed_urls.append(link)

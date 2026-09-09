@@ -325,6 +325,14 @@ def extract_program_data_from_page(
             program_data["tuition_amount"] = parsed.tuition.amount
             program_data["currency"] = parsed.tuition.currency
 
+        if parsed.tuition_fees:
+            program_data["tuition_fees"] = [
+                {**fee.model_dump(mode="json"),
+                 "applicant_scope": fee.applicant_scope.value,
+                 "is_derived": fee.is_derived}
+                for fee in parsed.tuition_fees
+            ]
+
         if parsed.study_options:
             program_data["study_options"] = [
                 opt.model_dump(mode="json")

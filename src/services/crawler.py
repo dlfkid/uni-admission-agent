@@ -16,6 +16,7 @@ import asyncio
 import importlib
 import logging
 import uuid
+from decimal import Decimal
 from types import SimpleNamespace
 from typing import Any, Callable, Optional, List
 
@@ -23,11 +24,12 @@ from pydantic import BaseModel, Field
 from sqlmodel import select, func, col, desc
 
 from src.core.environment import ensure_ready
-from src.models.admission import University, Program, ProgramCatalog
+from src.models.admission import University, Program, ProgramCatalog, TuitionBasis, TuitionScope
 from src.models.requirement import (
     ProgramStudyOption,
     ProgramDeadline,
     ProgramRequirement,
+    ProgramTuitionFee,
     SubjectDim,
     ExamDim,
     FrameworkDim,
@@ -50,6 +52,7 @@ from src.services.crawl_strategy.discovery import (
 )
 from src.services.ingestion_pipeline import IngestionPipeline
 from src.services.subject_taxonomy import get_subject_taxonomy_service
+from src.storage.db_helpers import _canonical_source_url, parse_study_mode, tuition_fee_dicts
 from src.storage.db_manager import DatabaseManager, ProgramDeleteScope
 from src.storage.exporter import ExcelExporter
 from src.storage.importer import ExcelImporter
@@ -92,6 +95,10 @@ class CrawlResult(BaseModel):
     unresolved_urls: List[dict[str, Any]] = Field(
         default_factory=list,
         description="URLs skipped due to unresolved program names",
+    )
+    skipped_existing: int = Field(
+        default=0,
+        description="Detail URLs dropped by --skip-existing because the programme was already stored",
     )
 
 
@@ -138,6 +145,7 @@ class ProgramSummary(BaseModel):
     deadlines: list = Field(default_factory=list)
     requirements: list = Field(default_factory=list)
     requirement_version: Optional[dict] = None
+    tuition_fees: list = Field(default_factory=list)
     source_url: Optional[str] = None
 
 
@@ -441,12 +449,45 @@ async def crawl_selected_detail_urls_via_client(
     }
 
 
+def partition_existing_urls(
+    urls: list[str], univ_slug: str, year: int
+) -> tuple[list[str], list[str]]:
+    """Split *urls* into (not yet stored, already stored) for one university/year.
+
+    "Stored" means a ``program`` row for that university and academic year
+    whose ``source_url`` is the same page — compared on the canonical form
+    (scheme, lowercased host, path without trailing slash; no query or
+    fragment), because the stored value is the URL as crawled and discovery
+    may hand back the same page with a trailing slash or tracking query.
+    Order is preserved. An unknown university stores nothing, so everything
+    is fresh.
+    """
+    db = DatabaseManager()
+    with db.get_session() as session:
+        uni = session.exec(select(University).where(University.slug == univ_slug)).first()
+        if uni is None:
+            return list(urls), []
+        stored = {
+            _canonical_source_url(row)
+            for row in session.exec(
+                select(Program.source_url).where(
+                    Program.university_id == uni.id, Program.academic_year == year
+                )
+            ).all()
+            if row
+        }
+    stored.discard("")
+    fresh = [u for u in urls if _canonical_source_url(u) not in stored]
+    skipped = [u for u in urls if _canonical_source_url(u) in stored]
+    return fresh, skipped
+
+
 async def crawl_url(
     url: str,
     univ_slug: str,
     year: int,
     continue_depth: int = 0,
-    page_type_hint: str = "auto",
+    page_type_hint: str = "index",
     export_md: bool = False,
     export_path: Optional[str] = None,
     html_content: Optional[str] = None,
@@ -474,6 +515,8 @@ async def crawl_url(
     limit: Optional[int] = None,
     crawl_all: bool = False,
     discovery: Optional[DiscoveryResult] = None,
+    skip_existing: bool = False,
+    page_delay: Optional[float] = None,
 ) -> CrawlResult:
     """Crawl a university admission page and import structured data.
 
@@ -577,6 +620,30 @@ async def crawl_url(
                 "pages_fetched": discovery.pages_fetched,
             })
 
+    # --skip-existing: continue where an earlier crawl left off. Drop detail
+    # URLs whose programme is already stored for this university and year
+    # before any page is fetched or LLM call made. If nothing is left, say so
+    # rather than starting a job with an empty list — that would fall into the
+    # LLM index-analysis branch and re-fetch the index.
+    skipped_existing = 0
+    if skip_existing and selected_urls:
+        fresh, skipped = partition_existing_urls(list(selected_urls), univ_slug, year)
+        skipped_existing = len(skipped)
+        logger.info(
+            "skip-existing: %d of %d discovered programmes already stored for %s/%d; %d left to crawl",
+            skipped_existing, len(selected_urls), univ_slug, year, len(fresh))
+        if progress_callback:
+            progress_callback("skip_existing", {"skipped": skipped_existing, "remaining": len(fresh)})
+        selected_urls = fresh
+        if selected_link_texts:
+            selected_link_texts = {u: t for u, t in selected_link_texts.items() if u in set(fresh)}
+        if not fresh:
+            return CrawlResult(
+                imported_count=0, univ_slug=univ_slug, year=year,
+                resolved_browser_provider=resolved_browser_provider,
+                client_id_used=client_id_used, skipped_existing=skipped_existing,
+            )
+
     pipeline = IngestionPipeline()
     result = await pipeline.run_new_job(
         url=url,
@@ -590,6 +657,7 @@ async def crawl_url(
         selected_urls=selected_urls,
         selected_link_texts=selected_link_texts,
         max_detail_pages=(None if crawl_all else limit),
+        page_delay=page_delay,
         browser_automation_enabled=browser_automation_enabled,
         detail_pages_batch=detail_pages_batch,
         batch_index=batch_index,
@@ -654,6 +722,7 @@ async def crawl_url(
         review_token=review_token,
         review_items=review_items,
         unresolved_urls=unresolved_urls,
+        skipped_existing=skipped_existing,
     )
 
 
@@ -1003,15 +1072,27 @@ def get_db_status() -> StatusResult:
 def query_programs(
     univ_slug: str,
     year: Optional[int] = None,
+    *,
+    tuition_scope: Optional[str] = None,
+    tuition_study_mode: Optional[str] = None,
+    tuition_basis: Optional[str] = None,
+    tuition_max: Optional[float] = None,
 ) -> List[ProgramSummary]:
     """Query programs for a university, optionally filtered by year.
 
     Args:
         univ_slug: University identifier.
         year: Optional academic year filter.
+        tuition_scope: Optional tuition applicant scope filter (all | local | non_local).
+        tuition_study_mode: Optional tuition study mode filter.
+        tuition_basis: Optional tuition basis filter; defaults to per_programme
+            when any tuition filter is given.
+        tuition_max: Optional inclusive upper bound on one fee row's amount.
 
     Returns:
         List of ProgramSummary objects.
+
+    All given tuition filters must hold on the same fee row (EXISTS subquery).
     """
     db = DatabaseManager()
     with db.get_session() as session:
@@ -1030,6 +1111,19 @@ def query_programs(
         if year is not None:
             stmt = stmt.where(Program.academic_year == year)
 
+        if any(v is not None for v in (tuition_scope, tuition_study_mode, tuition_basis, tuition_max)):
+            fee = ProgramTuitionFee
+            conditions = [fee.program_id == Program.id]
+            basis = TuitionBasis((tuition_basis or "per_programme").strip().lower())
+            conditions.append(fee.basis == basis)
+            if tuition_scope is not None:
+                conditions.append(fee.applicant_scope == TuitionScope(tuition_scope.strip().lower()))
+            if tuition_study_mode is not None:
+                conditions.append(fee.study_mode == parse_study_mode(tuition_study_mode))
+            if tuition_max is not None:
+                conditions.append(fee.amount <= Decimal(str(tuition_max)))
+            stmt = stmt.where(select(fee.id).where(*conditions).exists())
+
         rows = session.exec(stmt).all()
         out: List[ProgramSummary] = []
 
@@ -1044,6 +1138,7 @@ def query_programs(
                 .where(ProgramDeadline.program_id == program.id)
                 .order_by(col(ProgramDeadline.cutoff_date), col(ProgramDeadline.id))
             ).all()
+            tuition_fees = tuition_fee_dicts(session, program.id)
             latest_requirement_version = session.exec(
                 select(RequirementVersion)
                 .where(RequirementVersion.program_id == program.id)
@@ -1174,6 +1269,7 @@ def query_programs(
                     deadlines=deadlines,
                     requirements=requirements,
                     requirement_version=requirement_version,
+                    tuition_fees=tuition_fees,
                     source_url=source_url,
                 )
             )
