@@ -267,7 +267,10 @@ class TestSigtermEndsTheJobAsCancelled(_Base):
 
     @pytest.mark.parametrize("sigint_ignored", [False, True])
     def test_sigterm_during_a_worker_thread_stage(self, monkeypatch, sigint_ignored) -> None:
-        import os, signal, threading, time
+        import os
+        import signal
+        import threading
+        import time
         from src.cmd import cli
 
         class SlowScraper(_fake_scraper_class({})):
