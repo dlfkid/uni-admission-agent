@@ -13,12 +13,51 @@
         <header class="app-header">
             <div class="app-title"><span class="glyph">🎓</span> UniAdmission</div>
             <div class="header-actions">
-                <button id="preview-btn" class="icon-btn" title="Preview Database">👁</button>
                 <button id="export-btn" class="icon-btn" title="Export to Excel">📥</button>
                 <button id="config-btn" class="icon-btn" title="Configure .env">⚙️</button>
             </div>
         </header>
 
+        <!-- Top-level surface switch. Browse is a first-class page, not a
+             modal over the crawl form; the crawl form is the other tab. -->
+        <nav class="tab-bar" role="tablist">
+            <button id="tab-btn-browse" class="tab-btn" role="tab"
+                    aria-controls="pane-browse" data-pane="pane-browse">Browse</button>
+            <button id="tab-btn-crawl" class="tab-btn" role="tab"
+                    aria-controls="pane-crawl" data-pane="pane-crawl">Crawl</button>
+        </nav>
+
+        <!-- BROWSE PANE — what's already in the database -->
+        <div id="pane-browse" class="tab-pane" role="tabpanel" aria-labelledby="tab-btn-browse">
+            <div class="preview-filters">
+                <div class="preview-filter-row">
+                    <div class="preview-field">
+                        <label for="preview-slug">University</label>
+                        <div class="autocomplete-wrapper">
+                            <input id="preview-slug" type="text" placeholder="e.g. hku" autocomplete="off" />
+                            <ul id="preview-slug-dropdown" class="slug-dropdown hidden"></ul>
+                        </div>
+                    </div>
+                    <div class="preview-field">
+                        <label for="preview-year">Year</label>
+                        <input id="preview-year" type="number" placeholder="All" />
+                    </div>
+                    <button id="preview-search-btn" class="primary-btn preview-search-btn">Search</button>
+                </div>
+                <div id="preview-summary" class="preview-summary hidden">
+                    <span id="preview-count-badge" class="preview-count-badge">0 programs</span>
+                    <span id="browse-cache-note" class="browse-cache-note hidden"></span>
+                    <button id="browse-refresh-btn" class="browse-refresh-btn hidden">Refresh</button>
+                </div>
+            </div>
+
+            <div id="preview-list" class="preview-list">
+                <div class="preview-empty">Select a university and click Search</div>
+            </div>
+        </div>
+
+        <!-- CRAWL PANE -->
+        <div id="pane-crawl" class="tab-pane">
         <!-- INPUT FORM MODE -->
         <div id="input-section">
             <div class="group-block">
@@ -216,6 +255,9 @@
             <button id="continue-btn" type="button" class="primary-btn hidden">Continue</button>
         </div>
 
+        </div><!-- /#pane-crawl -->
+
+        <!-- Shared by both panes, so it sits outside them. -->
         <div id="status" class="status hidden"></div>
     </div>
 
@@ -286,40 +328,6 @@
 
             <div class="modal-actions">
                 <button id="do-export-btn" class="primary-btn">📥 Export</button>
-            </div>
-        </div>
-    </div>
-
-    <!-- PREVIEW MODAL -->
-    <div id="preview-modal" class="modal hidden">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h2>Database Preview</h2>
-                <button id="close-preview-btn" class="close-btn">&times;</button>
-            </div>
-
-            <div class="preview-filters">
-                <div class="preview-filter-row">
-                    <div class="preview-field">
-                        <label for="preview-slug">University</label>
-                        <div class="autocomplete-wrapper">
-                            <input id="preview-slug" type="text" placeholder="e.g. hku" autocomplete="off" />
-                            <ul id="preview-slug-dropdown" class="slug-dropdown hidden"></ul>
-                        </div>
-                    </div>
-                    <div class="preview-field">
-                        <label for="preview-year">Year</label>
-                        <input id="preview-year" type="number" placeholder="All" />
-                    </div>
-                    <button id="preview-search-btn" class="primary-btn preview-search-btn">Search</button>
-                </div>
-                <div id="preview-summary" class="preview-summary hidden">
-                    <span id="preview-count-badge" class="preview-count-badge">0 programs</span>
-                </div>
-            </div>
-
-            <div id="preview-list" class="preview-list">
-                <div class="preview-empty">Select a university and click Search</div>
             </div>
         </div>
     </div>

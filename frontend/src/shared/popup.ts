@@ -21,7 +21,8 @@ import {
     browserSourceStatus,
     closeConfigBtn,
     closeExportBtn,
-    closePreviewBtn,
+    browseCacheNote,
+    browseRefreshBtn,
     closePreviewEditBtn,
     configBtn,
     configModal,
@@ -44,7 +45,6 @@ import {
     pageTypeSelect,
     preflightLogConsole,
     preflightLogSection,
-    previewBtn,
     previewCountBadge,
     previewEditCancelBtn,
     previewEditCurrencyInput,
@@ -60,7 +60,6 @@ import {
     previewEditStudyOptionsInput,
     previewEditTuitionInput,
     previewList,
-    previewModal,
     previewSearchBtn,
     previewSlugDropdown,
     previewSlugInput,
@@ -70,9 +69,13 @@ import {
     progressText,
     saveConfigBtn,
     sendBtn,
+    paneBrowse,
+    paneCrawl,
     slugInput,
     statusDiv,
     stopBtn,
+    tabBtnBrowse,
+    tabBtnCrawl,
     taskIdDisplay,
     taxonomyEnabledCheckbox,
     taxonomyHighThresholdInput,
@@ -100,6 +103,8 @@ import {
     initSlugAutocomplete,
 } from "./popup/slugAutocomplete";
 import { initCrawlFlow } from "./popup/crawlFlow";
+import { initTabs } from "./popup/tabs";
+import type { TabsController } from "./popup/tabs";
 import { applyPlatformBodyClass, isExtensionContext } from "./platform";
 import type { BrowserProvider, ClientInfo, TaskInfo } from "./popup/types";
 
@@ -111,6 +116,7 @@ const API_BASE = "http://localhost:8910";
 
 let currentWindowId: number | null = null;
 let monitorFlow: ReturnType<typeof initMonitorFlow> | null = null;
+let tabsController: TabsController | null = null;
 let serverAgentEnabled = false;  // Whether server currently allows the default agent path
 let connectedClients: ClientInfo[] = [];
 
@@ -275,6 +281,10 @@ function initBrowserSourceListeners(): void {
 }
 
 function switchView(view: "input" | "link-selection" | "monitor") {
+    // These three are all stages *within* the crawl pane. Moving between
+    // them while Browse is on screen would change nothing the user can see,
+    // so bring the pane forward first.
+    tabsController?.activate("crawl");
     inputSection.classList.add("hidden");
     linkSelectionSection.classList.add("hidden");
     monitorSection.classList.add("hidden");
@@ -469,6 +479,16 @@ async function init() {
 //  Module wiring
 // ---------------------------------------------------------------------------
 
+tabsController = initTabs({
+    browseBtn: tabBtnBrowse,
+    crawlBtn: tabBtnCrawl,
+    browsePane: paneBrowse,
+    crawlPane: paneCrawl,
+    // See tabs.ts: the extension popup opens on the thing it is uniquely
+    // good at, the web UI opens on the thing done most often.
+    defaultTab: isExtensionContext ? "crawl" : "browse",
+});
+
 monitorFlow = initMonitorFlow({
     apiBase: API_BASE,
     showStatus,
@@ -534,10 +554,8 @@ initPreviewFlow({
     showStatus,
     getUniversities: getCachedUniversities,
     sourceSlugInput: slugInput,
-    sourceYearInput: yearInput,
-    previewBtn,
-    previewModal,
-    closePreviewBtn,
+    browseCacheNote,
+    browseRefreshBtn,
     previewSlugInput,
     previewSlugDropdown,
     previewYearInput,

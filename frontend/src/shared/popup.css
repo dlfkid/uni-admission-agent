@@ -95,6 +95,51 @@ body {
   border-bottom: 1px solid var(--divider);
 }
 
+/* ---------------------------------------------------------------------
+ * Tab bar — the top-level Browse / Crawl switch
+ *
+ * The bar and the header stay put; each pane owns its own scrolling, so
+ * switching tabs never scrolls the chrome away.
+ * --------------------------------------------------------------------- */
+
+.tab-bar {
+  display: flex;
+  gap: 2px;
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--divider);
+}
+
+.tab-btn {
+  width: auto;
+  background: transparent;
+  color: var(--text-muted);
+  border-radius: 0;
+  border-bottom: 2px solid transparent;
+  padding: 8px 14px;
+  font-size: 13px;
+  font-weight: 600;
+  /* The 2px active underline sits ON the bar's 1px border. */
+  margin-bottom: -1px;
+}
+.tab-btn:hover { color: var(--text); }
+.tab-btn:active { transform: none; }
+.tab-btn.active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+
+.tab-pane {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  /* Without this a flex child refuses to shrink below its content, and the
+     pane's own overflow-y never engages. */
+  min-height: 0;
+}
+/* .container's gap used to separate these sections directly; they are one
+   level deeper now, so the pane reproduces it. */
+#pane-crawl { gap: 16px; }
+
 .app-title {
   display: flex;
   align-items: center;
@@ -756,20 +801,62 @@ button:active { transform: scale(0.97); }
  * Preview modal
  * --------------------------------------------------------------------- */
 
-.preview-filters { padding: 12px 16px; border-bottom: 1px solid var(--divider); flex-shrink: 0; }
-.preview-filter-row { display: flex; gap: 10px; align-items: flex-end; }
+/* No modal padding to sit inside any more — .container supplies the page
+   margin, so these only keep their vertical rhythm. */
+.preview-filters { padding: 0 0 12px; border-bottom: 1px solid var(--divider); flex-shrink: 0; }
+/* Wraps because the extension popup is ~400px: two 150px-min fields plus
+   the button do not fit on one line there, and without wrapping the button
+   is clipped off the right edge. On the web UI there is room and nothing
+   wraps. */
+.preview-filter-row { display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap; }
 .preview-field { flex: 1; min-width: 150px; }
-.preview-search-btn { padding: 10px 16px !important; white-space: nowrap; flex-shrink: 0; width: auto !important; min-width: 80px; }
+.preview-search-btn {
+  padding: 10px 16px !important;
+  white-space: nowrap;
+  flex-shrink: 0;
+  width: auto !important;
+  min-width: 80px;
+}
+/* The extension popup (~400px) cannot fit both fields and the button on one
+   line, so the row wraps there and the button takes the second line whole.
+   flex-grow is NOT used for this: it would also stretch the button across
+   half the row on the roomy web UI, where nothing wraps. */
+@media (max-width: 480px) {
+  .preview-search-btn { flex-basis: 100%; }
+}
 
 .preview-summary {
   display: flex;
   align-items: center;
+  gap: 8px;
   margin-top: 10px;
   padding-top: 8px;
   border-top: 1px solid var(--divider);
 }
 
-.preview-list { flex: 1; overflow-y: auto; padding: 12px 16px; display: flex; flex-direction: column; gap: 8px; }
+/* Shown only when the rows on screen came from the cache, so the page never
+   presents stale numbers as live ones. */
+.browse-cache-note { font-size: 11px; color: var(--text-muted); }
+.browse-refresh-btn {
+  width: auto;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 3px 10px;
+  border-radius: 6px;
+  background: var(--control-bg);
+  color: var(--text);
+}
+.browse-refresh-btn:hover { filter: brightness(0.95); }
+
+.preview-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 12px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
 .preview-empty { text-align: center; color: var(--text-muted); padding: 40px 20px; font-size: 13px; }
 
 /* ---------------------------------------------------------------------
