@@ -31,6 +31,37 @@ def test_undistinguished_is_all(label) -> None:
     assert normalize_applicant_scope(label) is TuitionScope.ALL
 
 
+@pytest.mark.parametrize("label", [
+    "Self-financed places", "self-financed students", "Self-funded",
+    "UGC-funded places", "Government-funded places", "自資",
+])
+def test_funding_nature_wordings_are_all_and_do_not_warn(label: str, caplog) -> None:
+    """Funding nature is a different axis from applicant scope.
+
+    HK pages price a programme by whether the place is UGC-funded or
+    self-financed — a distinction that says nothing about who may apply, and
+    self-financed places are open to local and non-local alike. ALL is the
+    right answer, so the warning that flags extendable vocabulary must not
+    fire: it would report a defect on correctly handled input. CUHK 2027
+    produced six such warnings across two wordings.
+    """
+    with caplog.at_level("WARNING"):
+        assert normalize_applicant_scope(label) is TuitionScope.ALL
+    assert "Unrecognised" not in caplog.text
+
+
+@pytest.mark.parametrize("label,expected", [
+    ("UGC-funded local students", TuitionScope.LOCAL),
+    ("UGC-funded places and Distinguished Scholarship places for local students", TuitionScope.LOCAL),
+    ("UGC-funded places and Distinguished Scholarship places for non-local students", TuitionScope.NON_LOCAL),
+    ("self-financed non-local students", TuitionScope.NON_LOCAL),
+])
+def test_scope_keyword_beats_funding_nature(label: str, expected: TuitionScope) -> None:
+    """A label carrying both axes keeps its scope; funding nature is only the
+    fallback for labels that carry no scope at all."""
+    assert normalize_applicant_scope(label) is expected
+
+
 def test_unknown_wording_maps_to_all_and_warns(caplog) -> None:
     with caplog.at_level("WARNING"):
         assert normalize_applicant_scope("Martian residents") is TuitionScope.ALL

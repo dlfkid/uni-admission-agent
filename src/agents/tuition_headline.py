@@ -27,6 +27,17 @@ _BOTH_RE = re.compile(r"\b(local|home|uk)\b.{0,12}\b(and|&|/)\b.{0,12}\b(non-?lo
 _NON_LOCAL_RE = re.compile(r"non-?local|international|overseas|\bEU\b|非本地|國際|国际", re.I)
 _LOCAL_RE = re.compile(r"\blocal\b|\bhome\b|\bUK\b|domestic|本地", re.I)
 _UK_EU_RE = re.compile(r"\b(UK|Home)\s*(/|and|&)\s*EU\b", re.I)
+# Funding nature — a DIFFERENT axis from applicant scope. HK pages price a
+# programme by whether the place is UGC-funded or self-financed; a
+# self-financed place is open to local and non-local alike, so such a label
+# carries no scope information and ALL is the correct reading. Checked only
+# after the scope keywords, because a label can state both axes at once
+# ("UGC-funded local students" is LOCAL).
+_FUNDING_NATURE_RE = re.compile(
+    r"self[-\s]?financ|self[-\s]?fund|UGC[-\s]?fund|government[-\s]?fund"
+    r"|publicly[-\s]?fund|自資|自资|資助|资助",
+    re.I,
+)
 
 
 def normalize_applicant_scope(label: Optional[str]) -> TuitionScope:
@@ -35,8 +46,10 @@ def normalize_applicant_scope(label: Optional[str]) -> TuitionScope:
     Order matters: an explicit both-scopes phrase is ALL; the pre-Brexit
     "UK/EU" or "Home/EU" pairing is one home band (LOCAL); any non-local
     keyword is NON_LOCAL (bare "EU" included — UK pages now price EU with
-    International); any local keyword is LOCAL. Anything else is ALL with a
-    warning so the vocabulary can be extended.
+    International); any local keyword is LOCAL. A label that states only
+    funding nature (self-financed / UGC-funded) is ALL without a warning —
+    that axis is orthogonal to scope, so ALL is right rather than unhandled.
+    Anything else is ALL with a warning so the vocabulary can be extended.
     """
     text = " ".join(str(label or "").split())
     if not text:
@@ -49,6 +62,8 @@ def normalize_applicant_scope(label: Optional[str]) -> TuitionScope:
         return TuitionScope.NON_LOCAL
     if _LOCAL_RE.search(text):
         return TuitionScope.LOCAL
+    if _FUNDING_NATURE_RE.search(text):
+        return TuitionScope.ALL
     logger.warning("Unrecognised tuition applicant wording %r — stored as scope=all", text)
     return TuitionScope.ALL
 
