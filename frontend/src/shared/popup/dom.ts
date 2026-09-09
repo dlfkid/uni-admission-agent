@@ -55,9 +55,13 @@ export const exportYearInput = document.getElementById("export-year") as HTMLInp
 export const doExportBtn = document.getElementById("do-export-btn") as HTMLButtonElement;
 
 // Preview
-export const previewBtn = document.getElementById("preview-btn") as HTMLButtonElement;
-export const previewModal = document.getElementById("preview-modal") as HTMLDivElement;
-export const closePreviewBtn = document.getElementById("close-preview-btn") as HTMLButtonElement;
+// Browse is a tab pane now, not a modal — no open button, no close button.
+export const tabBtnBrowse = document.getElementById("tab-btn-browse") as HTMLButtonElement;
+export const tabBtnCrawl = document.getElementById("tab-btn-crawl") as HTMLButtonElement;
+export const paneBrowse = document.getElementById("pane-browse") as HTMLDivElement;
+export const paneCrawl = document.getElementById("pane-crawl") as HTMLDivElement;
+export const browseCacheNote = document.getElementById("browse-cache-note") as HTMLSpanElement;
+export const browseRefreshBtn = document.getElementById("browse-refresh-btn") as HTMLButtonElement;
 export const previewSlugInput = document.getElementById("preview-slug") as HTMLInputElement;
 export const previewSlugDropdown = document.getElementById("preview-slug-dropdown") as HTMLUListElement;
 export const previewYearInput = document.getElementById("preview-year") as HTMLInputElement;
