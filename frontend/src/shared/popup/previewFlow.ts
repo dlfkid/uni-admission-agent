@@ -5,10 +5,8 @@ interface PreviewFlowDeps {
     showStatus: ShowStatusFn;
     getUniversities: () => UniversityOption[];
     sourceSlugInput: HTMLInputElement;
-    sourceYearInput: HTMLInputElement;
-    previewBtn: HTMLButtonElement;
-    previewModal: HTMLDivElement;
-    closePreviewBtn: HTMLButtonElement;
+    browseCacheNote: HTMLSpanElement;
+    browseRefreshBtn: HTMLButtonElement;
     previewSlugInput: HTMLInputElement;
     previewSlugDropdown: HTMLUListElement;
     previewYearInput: HTMLInputElement;
@@ -99,10 +97,8 @@ export function initPreviewFlow(deps: PreviewFlowDeps): void {
         showStatus,
         getUniversities,
         sourceSlugInput,
-        sourceYearInput,
-        previewBtn,
-        previewModal,
-        closePreviewBtn,
+        browseCacheNote,
+        browseRefreshBtn,
         previewSlugInput,
         previewSlugDropdown,
         previewYearInput,
@@ -631,6 +627,93 @@ export function initPreviewFlow(deps: PreviewFlowDeps): void {
         }
     }
 
+    // -----------------------------------------------------------------
+    //  Last-result cache
+    //
+    //  Browse is the landing page, so a reload used to mean staring at
+    //  "Select a university and click Search" and re-running the query by
+    //  hand. The rows are cached instead and rendered immediately, with the
+    //  time they were fetched shown next to the count and a Refresh button
+    //  beside it: the page never silently presents stale numbers as live
+    //  ones, and getting fresh ones is one click.
+    //
+    //  Deliberately NOT re-queried in the background on open. The point is
+    //  to not hit the API on every reload; a background refresh would keep
+    //  hitting it and only save the waiting.
+    // -----------------------------------------------------------------
+    const BROWSE_CACHE_KEY = "browse_last_result";
+    // localStorage gives about 5MB per origin. One university-year runs
+    // ~0.5MB of JSON and all years of a big one ~1MB, so this leaves room
+    // for the other preferences while refusing a payload big enough to
+    // threaten them. Over the cap we simply don't cache — the feature
+    // degrades to the old behaviour rather than breaking.
+    const BROWSE_CACHE_MAX_BYTES = 2_000_000;
+
+    interface BrowseCache {
+        slug: string;
+        year: string;
+        fetchedAt: number;
+        programs: ProgramRecord[];
+    }
+
+    function readBrowseCache(): BrowseCache | null {
+        try {
+            const raw = localStorage.getItem(BROWSE_CACHE_KEY);
+            if (!raw) return null;
+            const parsed = JSON.parse(raw) as BrowseCache;
+            if (!parsed || typeof parsed.slug !== "string" || !Array.isArray(parsed.programs)) {
+                return null;
+            }
+            return parsed;
+        } catch {
+            // Corrupt or unreadable (private mode, cleared storage): behave
+            // as if there were no cache at all.
+            return null;
+        }
+    }
+
+    function writeBrowseCache(cache: BrowseCache): void {
+        try {
+            const serialized = JSON.stringify(cache);
+            if (serialized.length > BROWSE_CACHE_MAX_BYTES) {
+                localStorage.removeItem(BROWSE_CACHE_KEY);
+                return;
+            }
+            localStorage.setItem(BROWSE_CACHE_KEY, serialized);
+        } catch {
+            // Quota or a storage-blocking browser. Not worth surfacing:
+            // the results on screen are already correct.
+        }
+    }
+
+    function showCacheNote(fetchedAt: number | null): void {
+        if (fetchedAt === null) {
+            browseCacheNote.classList.add("hidden");
+            browseRefreshBtn.classList.add("hidden");
+            return;
+        }
+        const when = new Date(fetchedAt);
+        const today = new Date();
+        const sameDay = when.toDateString() === today.toDateString();
+        const stamp = sameDay
+            ? when.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+            : when.toLocaleString();
+        browseCacheNote.textContent = `cached ${stamp}`;
+        browseCacheNote.classList.remove("hidden");
+        browseRefreshBtn.classList.remove("hidden");
+    }
+
+    /** Render the cached rows, if any, without touching the network. */
+    function restoreCachedBrowseResults(): void {
+        const cache = readBrowseCache();
+        if (!cache) return;
+        previewSlugInput.value = cache.slug;
+        previewYearInput.value = cache.year;
+        previewPrograms = cache.programs;
+        renderPreviewResults(previewPrograms);
+        showCacheNote(cache.fetchedAt);
+    }
+
     async function loadPreview() {
         const slug = previewSlugInput.value.trim();
         if (!slug) {
@@ -652,6 +735,15 @@ export function initPreviewFlow(deps: PreviewFlowDeps): void {
             }
             previewPrograms = (await res.json()) as ProgramRecord[];
             renderPreviewResults(previewPrograms);
+            // These rows ARE live as of now, so no cache note — but store
+            // them so the next reload starts here.
+            showCacheNote(null);
+            writeBrowseCache({
+                slug,
+                year: yearStr,
+                fetchedAt: Date.now(),
+                programs: previewPrograms,
+            });
         } catch (err) {
             previewList.innerHTML = `<div class="preview-empty" style="color:var(--error)">${String(err)}</div>`;
             previewSummary.classList.add("hidden");
@@ -661,16 +753,8 @@ export function initPreviewFlow(deps: PreviewFlowDeps): void {
         }
     }
 
-    previewBtn.addEventListener("click", () => {
-        previewSlugInput.value = sourceSlugInput.value.trim();
-        previewYearInput.value = sourceYearInput.value.trim();
-        previewModal.classList.remove("hidden");
-        previewSlugInput.focus();
-    });
-
-    closePreviewBtn.addEventListener("click", () => {
-        previewModal.classList.add("hidden");
-        closeEditModal();
+    browseRefreshBtn.addEventListener("click", () => {
+        void loadPreview();
     });
 
     closePreviewEditBtn.addEventListener("click", () => {
@@ -703,4 +787,18 @@ export function initPreviewFlow(deps: PreviewFlowDeps): void {
     });
 
     initPreviewSlugAutocomplete();
+
+    // An empty Browse pane seeds its university from the crawl form, so a
+    // user who came to look at what they just crawled does not retype it.
+    //
+    // The YEAR is deliberately NOT seeded. The crawl form defaults to the
+    // current year, and inheriting that silently narrows Browse to one year
+    // — which is how a CUHK 2027 crawl came to look like it had produced no
+    // tuition breakdown at all: the pane was showing the 226 rows from 2026.
+    // Left empty, the field means "all years", and both show up together.
+    if (!previewSlugInput.value.trim()) {
+        previewSlugInput.value = sourceSlugInput.value.trim();
+    }
+
+    restoreCachedBrowseResults();
 }
