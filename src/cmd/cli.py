@@ -566,6 +566,9 @@ def crawl(
         None, "--limit", help="只爬取 index 页发现的前 N 门课程（含详情入库）。"),
     crawl_all: bool = typer.Option(
         False, "--all", help="爬取发现的全部课程（有安全上限）。"),
+    skip_existing: bool = typer.Option(
+        False, "--skip-existing",
+        help="跳过本校本学年已入库的课程，只抓新的——用于接着上次继续（已入库的不会刷新）。"),
     verbose: bool = typer.Option(False, "--verbose", "-v"),
 ) -> None:
     """Crawl a URL and import admission data."""
@@ -636,9 +639,15 @@ def crawl(
                 candidate_taxonomy_filter_top_k=candidate_taxonomy_filter_top_k,
                 limit=limit,
                 crawl_all=crawl_all,
+                skip_existing=skip_existing,
             )
         )
         typer.echo(f"✅ Crawl complete: {result.imported_count} programs imported")
+        if result.skipped_existing:
+            typer.echo(
+                f"   ↷ {result.skipped_existing} programme(s) already stored for {name}/{year} "
+                "were skipped (--skip-existing); run without the flag to refresh them."
+            )
         tracker.log_summary()
     except Exception as e:
         logger.exception("Crawl failed: %s", e)

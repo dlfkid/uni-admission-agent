@@ -224,5 +224,31 @@ The result JSON carries `pages_fetched` and `stopped_reason`
 (`reached_limit` / `exhausted` / `unusable` / `safety_cap`).
 Relay `message_for_user` verbatim — it already explains why crawling stopped.
 
+### Ramp a new university; continue instead of re-crawling
+
+Fire a probe before a batch, and a batch before the full run — a university
+host that sees a hundred requests from a new address in one go may refuse the
+address for hours (CUHK's Graduate School did, 2026-09-09).
+
+| Step | Command | Why |
+|---|---|---|
+| 1. Probe | `adm-agent crawl --name <slug> --year <Y> --url <index> --limit 1` | Does the engine handle this site at all? Check the stored fields. |
+| 2. Canary | `... --limit 20` | Does the host keep answering under sustained fetching? Wait a few minutes after it finishes. |
+| 3. The rest | `... --all --skip-existing` | Only programmes not yet stored for this university and year are fetched; the 21 from above are not re-crawled. |
+
+`--skip-existing` compares each discovered detail URL against the programmes
+already stored for the same slug and year and drops the ones present, before
+any page is fetched or LLM call made. It does **not** refresh stored
+programmes — run without the flag when the point is to re-read pages that
+may have changed. When every discovered programme is already stored the
+command reports that and starts no job.
+
+If a full run is interrupted (Ctrl-C, `kill`, a crash), its job is marked
+`CANCELLED` or, once its heartbeat is ten minutes old, `FAILED`, and the
+message names the stage. `adm-agent ingestion-resume <job_uid>` continues
+that job from the stage it was in — it reuses the pages already fetched, so
+prefer it over a fresh `--skip-existing` run when the interruption happened
+before anything was stored (persistence is the last stage).
+
 - NUS (`study.nus.edu.sg`) returns its **full** programme catalogue via its
   Salesforce Apex API (`api×json_api`), not just the ~10 rendered on screen.

@@ -52,7 +52,7 @@ from src.services.crawl_strategy.discovery import (
 )
 from src.services.ingestion_pipeline import IngestionPipeline
 from src.services.subject_taxonomy import get_subject_taxonomy_service
-from src.storage.db_helpers import parse_study_mode, tuition_fee_dicts
+from src.storage.db_helpers import _canonical_source_url, parse_study_mode, tuition_fee_dicts
 from src.storage.db_manager import DatabaseManager, ProgramDeleteScope
 from src.storage.exporter import ExcelExporter
 from src.storage.importer import ExcelImporter
@@ -95,6 +95,10 @@ class CrawlResult(BaseModel):
     unresolved_urls: List[dict[str, Any]] = Field(
         default_factory=list,
         description="URLs skipped due to unresolved program names",
+    )
+    skipped_existing: int = Field(
+        default=0,
+        description="Detail URLs dropped by --skip-existing because the programme was already stored",
     )
 
 
@@ -445,12 +449,45 @@ async def crawl_selected_detail_urls_via_client(
     }
 
 
+def partition_existing_urls(
+    urls: list[str], univ_slug: str, year: int
+) -> tuple[list[str], list[str]]:
+    """Split *urls* into (not yet stored, already stored) for one university/year.
+
+    "Stored" means a ``program`` row for that university and academic year
+    whose ``source_url`` is the same page — compared on the canonical form
+    (scheme, lowercased host, path without trailing slash; no query or
+    fragment), because the stored value is the URL as crawled and discovery
+    may hand back the same page with a trailing slash or tracking query.
+    Order is preserved. An unknown university stores nothing, so everything
+    is fresh.
+    """
+    db = DatabaseManager()
+    with db.get_session() as session:
+        uni = session.exec(select(University).where(University.slug == univ_slug)).first()
+        if uni is None:
+            return list(urls), []
+        stored = {
+            _canonical_source_url(row)
+            for row in session.exec(
+                select(Program.source_url).where(
+                    Program.university_id == uni.id, Program.academic_year == year
+                )
+            ).all()
+            if row
+        }
+    stored.discard("")
+    fresh = [u for u in urls if _canonical_source_url(u) not in stored]
+    skipped = [u for u in urls if _canonical_source_url(u) in stored]
+    return fresh, skipped
+
+
 async def crawl_url(
     url: str,
     univ_slug: str,
     year: int,
     continue_depth: int = 0,
-    page_type_hint: str = "auto",
+    page_type_hint: str = "index",
     export_md: bool = False,
     export_path: Optional[str] = None,
     html_content: Optional[str] = None,
@@ -478,6 +515,7 @@ async def crawl_url(
     limit: Optional[int] = None,
     crawl_all: bool = False,
     discovery: Optional[DiscoveryResult] = None,
+    skip_existing: bool = False,
 ) -> CrawlResult:
     """Crawl a university admission page and import structured data.
 
@@ -581,6 +619,30 @@ async def crawl_url(
                 "pages_fetched": discovery.pages_fetched,
             })
 
+    # --skip-existing: continue where an earlier crawl left off. Drop detail
+    # URLs whose programme is already stored for this university and year
+    # before any page is fetched or LLM call made. If nothing is left, say so
+    # rather than starting a job with an empty list — that would fall into the
+    # LLM index-analysis branch and re-fetch the index.
+    skipped_existing = 0
+    if skip_existing and selected_urls:
+        fresh, skipped = partition_existing_urls(list(selected_urls), univ_slug, year)
+        skipped_existing = len(skipped)
+        logger.info(
+            "skip-existing: %d of %d discovered programmes already stored for %s/%d; %d left to crawl",
+            skipped_existing, len(selected_urls), univ_slug, year, len(fresh))
+        if progress_callback:
+            progress_callback("skip_existing", {"skipped": skipped_existing, "remaining": len(fresh)})
+        selected_urls = fresh
+        if selected_link_texts:
+            selected_link_texts = {u: t for u, t in selected_link_texts.items() if u in set(fresh)}
+        if not fresh:
+            return CrawlResult(
+                imported_count=0, univ_slug=univ_slug, year=year,
+                resolved_browser_provider=resolved_browser_provider,
+                client_id_used=client_id_used, skipped_existing=skipped_existing,
+            )
+
     pipeline = IngestionPipeline()
     result = await pipeline.run_new_job(
         url=url,
@@ -658,6 +720,7 @@ async def crawl_url(
         review_token=review_token,
         review_items=review_items,
         unresolved_urls=unresolved_urls,
+        skipped_existing=skipped_existing,
     )
 
 
