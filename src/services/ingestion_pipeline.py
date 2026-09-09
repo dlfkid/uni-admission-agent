@@ -23,6 +23,7 @@ from src.models.ingestion import (
     IngestionTaskState,
 )
 from src.models.scraper_models import CrawlPageResult
+from src.scrapers.errors import HostRefusedError
 from src.scrapers.helpers import build_url_name_signal, extract_program_name, is_noise_program_name
 from src.scrapers.engine import AdmissionScraper
 from src.scrapers.link_parser import (
@@ -623,6 +624,18 @@ class IngestionPipeline:
                 self._mark_task_success(task.id, stage_output)
                 self._append_stage_trace(context, stage, "SUCCEEDED", attempt_no)
                 return _json_safe(stage_output)
+            except HostRefusedError as exc:
+                # The host is refusing connections. Retrying the stage would
+                # knock again and lengthen the block, so the task and the job
+                # fail now; _run_job writes the message on the job row.
+                self._mark_task_terminal_failure(task.id, str(exc))
+                self._append_stage_trace(context, stage, "FAILED", attempt_no, str(exc))
+                self._emit_event(
+                    event_callback,
+                    "host_refused",
+                    {"job_uid": job_uid, "stage": stage.value, "host": exc.host, "url": exc.url},
+                )
+                raise
             except Exception as exc:
                 failure = self._mark_task_failure(task.id, str(exc))
                 self._append_stage_trace(
@@ -2799,6 +2812,22 @@ class IngestionPipeline:
             task.error_message = None
             task.backoff_seconds = 0
             task.next_retry_at = None
+            task.finished_at = now
+            task.updated_at = now
+            session.add(task)
+            session.commit()
+
+    def _mark_task_terminal_failure(self, task_id: Optional[int], error_message: str) -> None:
+        """Fail a task with no retry scheduled (a refused host must not be knocked again)."""
+        if task_id is None:
+            return
+        now = _utc_now()
+        with self.db_manager.get_session() as session:
+            task = session.get(IngestionTask, task_id)
+            if not task:
+                return
+            task.state = IngestionTaskState.FAILED
+            task.error_message = error_message
             task.finished_at = now
             task.updated_at = now
             session.add(task)

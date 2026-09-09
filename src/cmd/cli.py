@@ -75,6 +75,7 @@ from src.services.migrations import (
 )
 from src.services.repair import RepairError, run_auto_repair
 from src.services.job_reaper import reap_stale_jobs
+from src.scrapers.errors import HostRefusedError
 from src.services.subject_taxonomy import (
     bootstrap_subject_taxonomy,
     get_subject_taxonomy_service,
@@ -653,6 +654,9 @@ def crawl(
                 "were skipped (--skip-existing); run without the flag to refresh them."
             )
         tracker.log_summary()
+    except HostRefusedError as e:
+        typer.echo(f"⛔ {e}", err=True)
+        raise typer.Exit(code=1)
     except Exception as e:
         logger.exception("Crawl failed: %s", e)
         raise typer.Exit(code=1)
@@ -824,6 +828,9 @@ def ingestion_resume_cmd(
             f"✅ Resume complete: {result.imported_count} programs imported "
             f"(job={result.ingestion_job_id})"
         )
+    except HostRefusedError as e:
+        typer.echo(f"⛔ {e}", err=True)
+        raise typer.Exit(code=1)
     except Exception as e:
         logger.exception("Resume failed: %s", e)
         raise typer.Exit(code=1)

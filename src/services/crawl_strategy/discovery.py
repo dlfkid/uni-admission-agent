@@ -12,6 +12,7 @@ import logging
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
+from src.scrapers.errors import HostRefusedError
 from src.services.crawl_strategy.orchestrator import crawl_index
 from src.services.crawl_strategy.registry import lookup
 from src.services.crawl_strategy.types import CrawlRange
@@ -76,6 +77,8 @@ def discover_candidates(
             index_url, crawl_range=crawl_range,
             server_fetch=server_fetch, client_fetch=client_fetch,
             api_fetch=api_fetch, report_out=report_out, timestamp=timestamp)
+    except HostRefusedError:
+        raise  # the host is refusing us; the scout fallback would only fetch again
     except Exception:  # pylint: disable=broad-except
         logger.exception("strategy discovery failed for %s — falling back to scout",
                          index_url)

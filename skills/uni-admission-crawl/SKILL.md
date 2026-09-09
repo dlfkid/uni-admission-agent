@@ -243,6 +243,13 @@ programmes — run without the flag when the point is to re-read pages that
 may have changed. When every discovered programme is already stored the
 command reports that and starts no job.
 
+If the host **refuses connections** (`ERR_CONNECTION_REFUSED`), the run stops
+at once — no retry, no escalation to another fetch mode, no moving on to the
+next page — and the job is `FAILED` with a message naming the host. Every
+further request lengthens such a block. Relay the message and tell the user
+to wait (an hour at least; a day after a repeat) before trying again, then
+use `--skip-existing --page-delay N`.
+
 If a full run is interrupted (Ctrl-C, `kill`, a crash), its job is marked
 `CANCELLED` or, once its heartbeat is ten minutes old, `FAILED`, and the
 message names the stage. `adm-agent ingestion-resume <job_uid>` continues
