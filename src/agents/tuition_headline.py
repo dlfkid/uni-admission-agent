@@ -38,6 +38,19 @@ _FUNDING_NATURE_RE = re.compile(
     r"|publicly[-\s]?fund|自資|自资|資助|资助",
     re.I,
 )
+_ALL_RE = re.compile(r"\ball\b", re.I)
+
+# First match wins, so the sequence IS the priority rule — see the docstring
+# below for why each step sits where it does. Kept as data rather than a chain
+# of ifs so adding a vocabulary never silently reorders the existing ones.
+_SCOPE_RULES: tuple[tuple[re.Pattern[str], TuitionScope], ...] = (
+    (_BOTH_RE, TuitionScope.ALL),
+    (_ALL_RE, TuitionScope.ALL),
+    (_UK_EU_RE, TuitionScope.LOCAL),
+    (_NON_LOCAL_RE, TuitionScope.NON_LOCAL),
+    (_LOCAL_RE, TuitionScope.LOCAL),
+    (_FUNDING_NATURE_RE, TuitionScope.ALL),
+)
 
 
 def normalize_applicant_scope(label: Optional[str]) -> TuitionScope:
@@ -54,16 +67,9 @@ def normalize_applicant_scope(label: Optional[str]) -> TuitionScope:
     text = " ".join(str(label or "").split())
     if not text:
         return TuitionScope.ALL
-    if _BOTH_RE.search(text) or re.search(r"\ball\b", text, re.I):
-        return TuitionScope.ALL
-    if _UK_EU_RE.search(text):
-        return TuitionScope.LOCAL
-    if _NON_LOCAL_RE.search(text):
-        return TuitionScope.NON_LOCAL
-    if _LOCAL_RE.search(text):
-        return TuitionScope.LOCAL
-    if _FUNDING_NATURE_RE.search(text):
-        return TuitionScope.ALL
+    for pattern, scope in _SCOPE_RULES:
+        if pattern.search(text):
+            return scope
     logger.warning("Unrecognised tuition applicant wording %r — stored as scope=all", text)
     return TuitionScope.ALL
 
