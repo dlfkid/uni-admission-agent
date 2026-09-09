@@ -23,9 +23,30 @@ export default defineConfig({
                 background: resolve(__dirname, "src/extension/background.ts"),
             },
             output: {
-                entryFileNames: "assets/[name].js",
-                chunkFileNames: "assets/[name].js",
-                assetFileNames: "assets/[name].[ext]",
+                // Content-hashed filenames. Without them the bundle emits
+                // stable names (assets/popup.js), and a browser holding a
+                // cached copy of one will happily pair it with a freshly
+                // fetched popup.html — the two are cached independently and
+                // neither carries a Cache-Control header, so heuristic
+                // freshness alone decides. That pairing is not a cosmetic
+                // problem: JS from before a markup change calls
+                // addEventListener on an element the new HTML no longer has,
+                // throws on the null, and takes the whole module down with
+                // it — no autocomplete, no search, no tab switching, every
+                // pane visible at once.
+                //
+                // A hash makes the mismatch unrepresentable: popup.html only
+                // ever names the assets it was built with.
+                //
+                // background.js is the one exception and must keep its name:
+                // public/manifest.json hardcodes "assets/background.js" as
+                // the service worker, and Chrome reads that literally.
+                entryFileNames: (chunk) =>
+                    chunk.name === "background"
+                        ? "assets/[name].js"
+                        : "assets/[name]-[hash].js",
+                chunkFileNames: "assets/[name]-[hash].js",
+                assetFileNames: "assets/[name]-[hash].[ext]",
             },
         },
     },

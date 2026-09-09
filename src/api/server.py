@@ -372,9 +372,22 @@ if _web_ui_dir is not None:
 
     # Vite outputs popup.html (not index.html), so /ui/ and /ui need an
     # explicit handler before the StaticFiles mount picks them up.
+    #
+    # The asset filenames under assets/ are content-hashed, so they are safe
+    # to cache forever — a new build produces new names. This HTML is the one
+    # file that cannot be hashed (it is the entry URL) and it is what names
+    # those assets, so it must never be served from cache without asking:
+    # a stale copy would point a browser at assets that no longer exist, or
+    # worse, at ones it still has cached from an older build. Neither
+    # Last-Modified nor ETag is enough on its own — with no Cache-Control at
+    # all, a browser is free to reuse a response on heuristic freshness
+    # without contacting us.
     @app.get("/ui/", include_in_schema=False)
     async def _web_ui_root() -> FileResponse:
-        return FileResponse(_web_ui_dir / "popup.html")
+        return FileResponse(
+            _web_ui_dir / "popup.html",
+            headers={"Cache-Control": "no-cache"},
+        )
 
     @app.get("/ui", include_in_schema=False)
     async def _web_ui_root_no_slash() -> RedirectResponse:
