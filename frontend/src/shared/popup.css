@@ -806,8 +806,6 @@ button:active { transform: scale(0.97); }
 }
 
 .program-card-meta { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 6px; }
-.program-fees { margin-top: 6px; font-size: 12px; }
-.program-fees ul { margin: 4px 0 0 14px; padding: 0; }
 .program-card-actions { display: flex; gap: 8px; margin-bottom: 6px; }
 
 .program-card-action-btn {
@@ -842,6 +840,25 @@ button:active { transform: scale(0.97); }
 .deadline-item { font-size: 11px; color: var(--text-muted); display: flex; gap: 6px; }
 .deadline-item .dl-round { color: var(--accent); font-weight: 600; flex-shrink: 0; }
 .deadline-item .dl-date { color: var(--text); }
+
+/* Fee lines reuse .program-card-deadlines / .deadline-item wholesale; only the
+   two spans that have no deadline or requirement counterpart are styled here. */
+.program-fees .deadline-item .dl-round { text-transform: capitalize; }
+.program-fees .fee-derived {
+  font-size: 10px;
+  padding: 0 4px;
+  border-radius: 4px;
+  background: var(--control-bg);
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+.program-fees .fee-source {
+  color: var(--text-muted);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 
 .program-card-url {
   display: block;
