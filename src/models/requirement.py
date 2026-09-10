@@ -7,6 +7,7 @@ from sqlalchemy import JSON, UniqueConstraint, Column, Enum as SqlEnum, Index, N
 from sqlmodel import SQLModel, Field, Relationship
 
 from src.models.admission import StudyMode, TuitionBasis, TuitionScope, CurrencyCode
+from src.models._timestamps import UTC_DATETIME
 
 
 def _utc_now() -> datetime:
@@ -57,7 +58,7 @@ class SubjectDim(SQLModel, table=True):
     normalized_name: str = Field(index=True)
     canonical_name: str = Field(index=True)
     aliases: List[str] = Field(default_factory=list, sa_column=Column(JSON))
-    updated_at: datetime = Field(default_factory=_utc_now)
+    updated_at: datetime = Field(default_factory=_utc_now, sa_type=UTC_DATETIME)
 
     requirement_records: List["ProgramRequirement"] = Relationship(back_populates="subject_dim")
 
@@ -72,7 +73,7 @@ class ExamDim(SQLModel, table=True):
     code: str = Field(index=True)
     display_name: str = Field(index=True)
     family: Optional[str] = Field(default=None, index=True)
-    updated_at: datetime = Field(default_factory=_utc_now)
+    updated_at: datetime = Field(default_factory=_utc_now, sa_type=UTC_DATETIME)
 
     requirement_records: List["ProgramRequirement"] = Relationship(back_populates="exam_dim")
 
@@ -87,7 +88,7 @@ class FrameworkDim(SQLModel, table=True):
     code: str = Field(index=True)
     display_name: str = Field(index=True)
     region: Optional[str] = Field(default=None, index=True)
-    updated_at: datetime = Field(default_factory=_utc_now)
+    updated_at: datetime = Field(default_factory=_utc_now, sa_type=UTC_DATETIME)
 
     requirement_records: List["ProgramRequirement"] = Relationship(back_populates="framework_dim")
 
@@ -101,8 +102,8 @@ class RequirementEvidence(SQLModel, table=True):
     page_snippet: Optional[str] = Field(default=None)
     locator_type: Optional[str] = Field(default=None, index=True)
     locator_value: Optional[str] = Field(default=None)
-    captured_at: Optional[datetime] = Field(default=None, index=True)
-    crawled_at: datetime = Field(default_factory=_utc_now, index=True)
+    captured_at: Optional[datetime] = Field(default=None, index=True, sa_type=UTC_DATETIME)
+    crawled_at: datetime = Field(default_factory=_utc_now, index=True, sa_type=UTC_DATETIME)
     content_hash: Optional[str] = Field(default=None, index=True)
 
     requirement_records: List["ProgramRequirement"] = Relationship(back_populates="evidence")
@@ -116,12 +117,12 @@ class RequirementVersion(SQLModel, table=True):
 
     id: Optional[int] = Field(default=None, primary_key=True)
     version_no: int = Field(default=1, index=True)
-    effective_at: datetime = Field(default_factory=_utc_now, index=True)
-    valid_from: datetime = Field(default_factory=_utc_now, index=True)
-    valid_to: Optional[datetime] = Field(default=None, index=True)
+    effective_at: datetime = Field(default_factory=_utc_now, index=True, sa_type=UTC_DATETIME)
+    valid_from: datetime = Field(default_factory=_utc_now, index=True, sa_type=UTC_DATETIME)
+    valid_to: Optional[datetime] = Field(default=None, index=True, sa_type=UTC_DATETIME)
     change_summary: Optional[str] = Field(default=None)
     diff_payload: Dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
-    created_at: datetime = Field(default_factory=_utc_now)
+    created_at: datetime = Field(default_factory=_utc_now, sa_type=UTC_DATETIME)
 
     program_id: int = Field(foreign_key="program.id", index=True)
     program: "Program" = Relationship(back_populates="requirement_versions")
@@ -146,7 +147,7 @@ class ProgramStudyOption(SQLModel, table=True):
     )
     duration_months: Optional[int] = Field(default=None)
     notes: Optional[str] = Field(default=None)
-    updated_at: datetime = Field(default_factory=_utc_now)
+    updated_at: datetime = Field(default_factory=_utc_now, sa_type=UTC_DATETIME)
 
     program_id: int = Field(foreign_key="program.id", index=True)
     program: "Program" = Relationship(back_populates="study_option_records")
@@ -167,8 +168,8 @@ class ProgramDeadline(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     round: Optional[int] = Field(default=None, index=True)
     description: Optional[str] = Field(default=None)
-    cutoff_date: Optional[datetime] = Field(default=None, index=True)
-    updated_at: datetime = Field(default_factory=_utc_now)
+    cutoff_date: Optional[datetime] = Field(default=None, index=True, sa_type=UTC_DATETIME)
+    updated_at: datetime = Field(default_factory=_utc_now, sa_type=UTC_DATETIME)
 
     program_id: int = Field(foreign_key="program.id", index=True)
     program: "Program" = Relationship(back_populates="deadline_records")
@@ -213,7 +214,7 @@ class ProgramTuitionFee(SQLModel, table=True):
     credits: Optional[int] = Field(default=None)
     is_derived: bool = Field(default=False)
     source_text: Optional[str] = Field(default=None, max_length=300)
-    updated_at: datetime = Field(default_factory=_utc_now)
+    updated_at: datetime = Field(default_factory=_utc_now, sa_type=UTC_DATETIME)
 
     program_id: int = Field(foreign_key="program.id", index=True)
     program: "Program" = Relationship(back_populates="tuition_fee_records")
@@ -248,7 +249,7 @@ class ProgramRequirement(SQLModel, table=True):
     requirement_text: str = Field(default="")
     evidence_url: Optional[str] = Field(default=None)
     sort_order: int = Field(default=0)
-    updated_at: datetime = Field(default_factory=_utc_now)
+    updated_at: datetime = Field(default_factory=_utc_now, sa_type=UTC_DATETIME)
 
     program_id: int = Field(foreign_key="program.id", index=True)
     version_id: Optional[int] = Field(default=None, foreign_key="requirement_version.id", index=True)
