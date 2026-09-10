@@ -4,6 +4,7 @@ from typing import Any, Dict, List, Optional
 
 from sqlalchemy import JSON, Column, Enum as SqlEnum, UniqueConstraint
 from sqlmodel import Field, Relationship, SQLModel
+from src.models._timestamps import UTC_DATETIME
 
 
 def _utc_now() -> datetime:
@@ -76,10 +77,10 @@ class IngestionJob(SQLModel, table=True):
 
     error_message: Optional[str] = Field(default=None)
 
-    created_at: datetime = Field(default_factory=_utc_now, index=True)
-    updated_at: datetime = Field(default_factory=_utc_now, index=True)
-    started_at: Optional[datetime] = Field(default=None, index=True)
-    finished_at: Optional[datetime] = Field(default=None, index=True)
+    created_at: datetime = Field(default_factory=_utc_now, index=True, sa_type=UTC_DATETIME)
+    updated_at: datetime = Field(default_factory=_utc_now, index=True, sa_type=UTC_DATETIME)
+    started_at: Optional[datetime] = Field(default=None, index=True, sa_type=UTC_DATETIME)
+    finished_at: Optional[datetime] = Field(default=None, index=True, sa_type=UTC_DATETIME)
 
     tasks: List["IngestionTask"] = Relationship(back_populates="job")
 
@@ -106,11 +107,11 @@ class IngestionTask(SQLModel, table=True):
     attempt_count: int = Field(default=0)
     max_retries: int = Field(default=2)
     backoff_seconds: int = Field(default=0)
-    next_retry_at: Optional[datetime] = Field(default=None, index=True)
+    next_retry_at: Optional[datetime] = Field(default=None, index=True, sa_type=UTC_DATETIME)
 
-    created_at: datetime = Field(default_factory=_utc_now, index=True)
-    updated_at: datetime = Field(default_factory=_utc_now, index=True)
-    started_at: Optional[datetime] = Field(default=None, index=True)
-    finished_at: Optional[datetime] = Field(default=None, index=True)
+    created_at: datetime = Field(default_factory=_utc_now, index=True, sa_type=UTC_DATETIME)
+    updated_at: datetime = Field(default_factory=_utc_now, index=True, sa_type=UTC_DATETIME)
+    started_at: Optional[datetime] = Field(default=None, index=True, sa_type=UTC_DATETIME)
+    finished_at: Optional[datetime] = Field(default=None, index=True, sa_type=UTC_DATETIME)
 
     job: IngestionJob = Relationship(back_populates="tasks")
