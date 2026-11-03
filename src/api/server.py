@@ -308,7 +308,7 @@ app = FastAPI(
         "REST + MCP interface for crawling university admission pages, "
         "importing data, and querying program information."
     ),
-    version="0.11.0",
+    version="0.12.0",
     lifespan=lifespan,
 )
 
