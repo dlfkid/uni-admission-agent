@@ -4,6 +4,7 @@ from decimal import Decimal
 from enum import Enum
 from sqlmodel import SQLModel, Field, Relationship, Column
 from sqlalchemy import JSON, Numeric, UniqueConstraint
+from src.models._timestamps import UTC_DATETIME
 
 # --- Enums ---
 class CurrencyCode(str, Enum):
@@ -44,7 +45,7 @@ class University(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     name: str = Field(index=True, unique=True)
     slug: str = Field(index=True, unique=True)
-    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc), sa_type=UTC_DATETIME)
 
     # Relationships
     programs: List["Program"] = Relationship(back_populates="university")
@@ -65,7 +66,7 @@ class ProgramCatalog(SQLModel, table=True):
     canonical_name_en: Optional[str] = Field(default=None, index=True)
     canonical_name_zh: Optional[str] = Field(default=None, index=True)
     faculty: Optional[str] = Field(default=None, index=True)
-    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc), sa_type=UTC_DATETIME)
 
     # Foreign Keys
     university_id: Optional[int] = Field(default=None, foreign_key="university.id")
@@ -114,7 +115,7 @@ class Program(SQLModel, table=True):
 
     source_url: Optional[str] = Field(default=None)
 
-    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc), sa_type=UTC_DATETIME)
 
     # Foreign Keys
     university_id: Optional[int] = Field(default=None, foreign_key="university.id")

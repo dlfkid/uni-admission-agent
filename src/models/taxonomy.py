@@ -3,6 +3,7 @@ from typing import Optional, List
 
 from sqlalchemy import JSON, Column, UniqueConstraint
 from sqlmodel import SQLModel, Field
+from src.models._timestamps import UTC_DATETIME
 
 
 def _utc_now() -> datetime:
@@ -26,4 +27,4 @@ class SubjectTaxonomy(SQLModel, table=True):
     first_seen_url: Optional[str] = Field(default=None)
     confidence: Optional[float] = Field(default=None)
     status: str = Field(default="active", index=True)
-    updated_at: datetime = Field(default_factory=_utc_now)
+    updated_at: datetime = Field(default_factory=_utc_now, sa_type=UTC_DATETIME)

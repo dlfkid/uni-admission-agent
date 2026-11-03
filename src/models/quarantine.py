@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from sqlmodel import Field, SQLModel
+from src.models._timestamps import UTC_DATETIME
 
 
 class ProgramQuarantine(SQLModel, table=True):
@@ -26,4 +27,4 @@ class ProgramQuarantine(SQLModel, table=True):
     payload: str = Field(description="Full extracted program_data JSON")
     quarantine_reason: str = Field(index=True, max_length=64)
     quarantine_signals: str = Field(default="{}", description="JSON diagnostics")
-    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc), sa_type=UTC_DATETIME)
